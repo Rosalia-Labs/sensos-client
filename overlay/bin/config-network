@@ -12,14 +12,10 @@ import psutil
 
 SCRIPT_FILE = os.path.realpath(__file__)
 SCRIPT_DIR = os.path.dirname(SCRIPT_FILE)
-CLIENT_ROOT = os.environ.get(
-    "SENSOS_CLIENT_ROOT",
-    os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..")),
-)
-
-OVERLAY_LIB_DIR = os.path.realpath(os.path.join(SCRIPT_DIR, "..", "lib"))
-if OVERLAY_LIB_DIR not in sys.path:
-    sys.path.insert(0, OVERLAY_LIB_DIR)
+OVERLAY_ROOT = os.path.dirname(SCRIPT_DIR)
+CLIENT_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", os.path.dirname(OVERLAY_ROOT))
+OVERLAY_LIB_DIR = os.path.join(OVERLAY_ROOT, "lib")
+sys.path.insert(0, OVERLAY_LIB_DIR)
 from utils import *
 
 WG_DIR = "/etc/wireguard"
