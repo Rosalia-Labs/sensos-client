@@ -1,0 +1,174 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${REPO_ROOT}}"
+PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
+ADMIN_AUTHORIZED_KEYS_SOURCE="${CLIENT_ROOT}/keys/sensos_admin_authorized_keys"
+
+SENSOS_GROUPS=(
+    sudo
+    dialout
+    plugdev
+    netdev
+    audio
+    gpio
+    i2c
+    spi
+)
+
+SENSOS_MANAGED_GROUPS=(
+    sensos-data
+)
+
+log() {
+    printf '[setup/02-users] %s\n' "$*"
+}
+
+die() {
+    printf '[setup/02-users] ERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+require_root() {
+    [[ "${EUID}" -eq 0 ]] || die "run as root"
+}
+
+require_inputs() {
+    [[ -x "${PRECHECK_SCRIPT}" ]] || die "missing or non-executable preflight script: ${PRECHECK_SCRIPT}"
+}
+
+run_preflight() {
+    log "running preflight"
+    "${PRECHECK_SCRIPT}"
+}
+
+detect_bootstrap_user() {
+    BOOTSTRAP_USER="${SENSOS_BOOTSTRAP_USER:-${SUDO_USER:-}}"
+    if [[ -n "${BOOTSTRAP_USER}" && "${BOOTSTRAP_USER}" != "root" ]]; then
+        log "detected bootstrap sudo user: ${BOOTSTRAP_USER}"
+    else
+        BOOTSTRAP_USER=""
+        log "bootstrap sudo user not detected; leaving first-boot user unchanged"
+    fi
+}
+
+ensure_group_exists() {
+    local group_name="$1"
+    if ! getent group "${group_name}" >/dev/null 2>&1; then
+        log "creating group ${group_name}"
+        groupadd --system "${group_name}"
+    fi
+}
+
+require_group_exists() {
+    local group_name="$1"
+    getent group "${group_name}" >/dev/null 2>&1 || \
+        die "required system group is missing: ${group_name}"
+}
+
+ensure_user_exists() {
+    local user_name="$1"
+    local gecos="$2"
+
+    if ! id -u "${user_name}" >/dev/null 2>&1; then
+        log "creating user ${user_name}"
+        adduser --disabled-password --gecos "${gecos}" --shell /bin/bash "${user_name}"
+    fi
+}
+
+ensure_system_user_exists() {
+    local user_name="$1"
+    local gecos="$2"
+
+    if ! id -u "${user_name}" >/dev/null 2>&1; then
+        log "creating system user ${user_name}"
+        adduser --system --shell /bin/bash --gecos "${gecos}" "${user_name}"
+    fi
+}
+
+ensure_membership() {
+    local user_name="$1"
+    local group_name="$2"
+
+    if ! id -nG "${user_name}" | tr ' ' '\n' | grep -Fxq "${group_name}"; then
+        log "adding ${user_name} to ${group_name}"
+        usermod -a -G "${group_name}" "${user_name}"
+    fi
+}
+
+install_sudoers_rule() {
+    local user_name="$1"
+    local sudoers_file="/etc/sudoers.d/${user_name}"
+
+    printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${user_name}" >"${sudoers_file}"
+    chmod 0440 "${sudoers_file}"
+}
+
+lock_user_password() {
+    local user_name="$1"
+    passwd -l "${user_name}" >/dev/null 2>&1 || true
+}
+
+install_admin_authorized_keys() {
+    local admin_home
+    admin_home="$(getent passwd sensos-admin | cut -d: -f6)"
+    [[ -n "${admin_home}" ]] || die "unable to resolve home for sensos-admin"
+
+    install -d -m 700 -o sensos-admin -g sensos-admin "${admin_home}/.ssh"
+
+    if [[ -f "${ADMIN_AUTHORIZED_KEYS_SOURCE}" ]]; then
+        log "installing sensos-admin authorized_keys"
+        install -m 600 -o sensos-admin -g sensos-admin \
+            "${ADMIN_AUTHORIZED_KEYS_SOURCE}" \
+            "${admin_home}/.ssh/authorized_keys"
+    else
+        log "no sensos-admin authorized_keys file found at ${ADMIN_AUTHORIZED_KEYS_SOURCE}"
+    fi
+}
+
+main() {
+    local group_name
+
+    require_root
+    require_inputs
+    run_preflight
+    detect_bootstrap_user
+
+    for group_name in "${SENSOS_MANAGED_GROUPS[@]}"; do
+        ensure_group_exists "${group_name}"
+    done
+
+    for group_name in "${SENSOS_GROUPS[@]}"; do
+        require_group_exists "${group_name}"
+    done
+
+    ensure_user_exists sensos-admin "SensOS Admin"
+    ensure_system_user_exists sensos-runner "SensOS Runner"
+
+    for group_name in "${SENSOS_MANAGED_GROUPS[@]}"; do
+        ensure_membership sensos-admin "${group_name}"
+        ensure_membership sensos-runner "${group_name}"
+    done
+
+    for group_name in "${SENSOS_GROUPS[@]}"; do
+        ensure_membership sensos-admin "${group_name}"
+        ensure_membership sensos-runner "${group_name}"
+    done
+
+    install_sudoers_rule sensos-admin
+    install_sudoers_rule sensos-runner
+
+    lock_user_password sensos-admin
+    lock_user_password sensos-runner
+
+    install_admin_authorized_keys
+
+    log "left bootstrap user unchanged${BOOTSTRAP_USER:+: ${BOOTSTRAP_USER}}"
+}
+
+main "$@"
