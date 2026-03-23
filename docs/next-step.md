@@ -84,7 +84,7 @@ Once overlay assets exist in the new repo, the next setup scripts should be:
 - `setup/06-system-config`
   - hardware enablement for I2C, 1-wire, SPI
   - persistent journald
-  - baseline system symlinks such as chrony and nftables config
+  - baseline system config such as chrony
 - `setup/07-services`
   - enable the baseline units that should survive reboot
   - leave optional feature services off until explicitly configured

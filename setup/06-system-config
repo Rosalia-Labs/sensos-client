@@ -1,0 +1,121 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${REPO_ROOT}}"
+PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
+OVERLAY_CHRONY_CONF="${CLIENT_ROOT}/overlay/etc/chrony.conf"
+
+BOOT_CONFIG_FILE="/boot/firmware/config.txt"
+MODULES_FILE="/etc/modules"
+JOURNALD_CONF_FILE="/etc/systemd/journald.conf"
+CHRONY_CONF_FILE="/etc/chrony/chrony.conf"
+
+log() {
+    printf '[setup/06-system-config] %s\n' "$*"
+}
+
+die() {
+    printf '[setup/06-system-config] ERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+require_root() {
+    [[ "${EUID}" -eq 0 ]] || die "run as root"
+}
+
+require_inputs() {
+    [[ -x "${PRECHECK_SCRIPT}" ]] || die "missing or non-executable preflight script: ${PRECHECK_SCRIPT}"
+}
+
+run_preflight() {
+    log "running preflight"
+    "${PRECHECK_SCRIPT}"
+}
+
+file_contains_line() {
+    local file_path="$1"
+    local wanted_line="$2"
+
+    [[ -f "${file_path}" ]] || return 1
+    grep -Fxq "${wanted_line}" "${file_path}"
+}
+
+ensure_line_present() {
+    local file_path="$1"
+    local wanted_line="$2"
+
+    install -D -m 0644 /dev/null "${file_path}"
+    if ! file_contains_line "${file_path}" "${wanted_line}"; then
+        printf '%s\n' "${wanted_line}" >>"${file_path}"
+        log "added '${wanted_line}' to ${file_path}"
+    fi
+}
+
+is_raspberry_pi_host() {
+    local model_file="/proc/device-tree/model"
+
+    if [[ -r "${model_file}" ]] && tr -d '\0' <"${model_file}" | grep -qi 'raspberry pi'; then
+        return 0
+    fi
+
+    return 1
+}
+
+configure_pi_hardware() {
+    if ! is_raspberry_pi_host; then
+        log "host does not appear to be Raspberry Pi hardware; skipping I2C/1-wire/SPI boot configuration"
+        return
+    fi
+
+    log "configuring Raspberry Pi hardware interfaces"
+
+    ensure_line_present "${MODULES_FILE}" "i2c_bcm2835"
+    ensure_line_present "${BOOT_CONFIG_FILE}" "dtparam=i2c_arm=on"
+    ensure_line_present "${MODULES_FILE}" "i2c-dev"
+
+    ensure_line_present "${BOOT_CONFIG_FILE}" "dtoverlay=w1-gpio"
+    ensure_line_present "${MODULES_FILE}" "w1-gpio"
+    ensure_line_present "${MODULES_FILE}" "w1-therm"
+
+    ensure_line_present "${BOOT_CONFIG_FILE}" "dtparam=spi=on"
+    ensure_line_present "${MODULES_FILE}" "spi-dev"
+}
+
+configure_journald() {
+    install -D -m 0644 /dev/null "${JOURNALD_CONF_FILE}"
+    printf 'Storage=persistent\n' >"${JOURNALD_CONF_FILE}"
+    log "configured persistent journald storage"
+}
+
+configure_chrony() {
+    if [[ -f "${OVERLAY_CHRONY_CONF}" ]]; then
+        ln -sfn "${OVERLAY_CHRONY_CONF}" "${CHRONY_CONF_FILE}"
+        log "linked chrony config to ${OVERLAY_CHRONY_CONF}"
+    else
+        log "no overlay chrony config found; keeping host chrony configuration"
+    fi
+
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl enable chrony
+        systemctl disable systemd-timesyncd >/dev/null 2>&1 || true
+        log "enabled chrony and disabled systemd-timesyncd when present"
+    else
+        log "systemctl not found; skipped chrony/timesyncd service changes"
+    fi
+}
+
+main() {
+    require_root
+    require_inputs
+    run_preflight
+    configure_pi_hardware
+    configure_journald
+    configure_chrony
+}
+
+main "$@"
