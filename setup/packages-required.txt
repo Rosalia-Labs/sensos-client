@@ -25,6 +25,7 @@ python3-psutil
 python3-wheel
 sox
 sqlite3
+sudo
 swig
 tcpdump
 vnstat
