@@ -1,0 +1,72 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${REPO_ROOT}}"
+PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
+OVERLAY_SYSTEMD_DIR="${CLIENT_ROOT}/overlay/systemd"
+
+HOST_BASELINE_UNITS=(
+    ssh.service
+    vnstat.service
+)
+
+log() {
+    printf '[setup/07-services] %s\n' "$*"
+}
+
+die() {
+    printf '[setup/07-services] ERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+require_root() {
+    [[ "${EUID}" -eq 0 ]] || die "run as root"
+}
+
+require_inputs() {
+    [[ -x "${PRECHECK_SCRIPT}" ]] || die "missing or non-executable preflight script: ${PRECHECK_SCRIPT}"
+    [[ -d "${OVERLAY_SYSTEMD_DIR}" ]] || die "missing overlay systemd directory: ${OVERLAY_SYSTEMD_DIR}"
+}
+
+run_preflight() {
+    log "running preflight"
+    "${PRECHECK_SCRIPT}"
+}
+
+require_systemctl() {
+    command -v systemctl >/dev/null 2>&1 || die "systemctl not found"
+}
+
+enable_host_unit_if_present() {
+    local unit_name="$1"
+
+    if systemctl list-unit-files --type=service --type=timer 2>/dev/null | awk '{print $1}' | grep -Fxq "${unit_name}"; then
+        systemctl enable "${unit_name}"
+        log "enabled host unit ${unit_name}"
+    else
+        log "host unit not present; skipped ${unit_name}"
+    fi
+}
+
+main() {
+    local unit_name
+
+    require_root
+    require_inputs
+    run_preflight
+    require_systemctl
+
+    systemctl daemon-reload
+    log "reloaded systemd unit files"
+
+    for unit_name in "${HOST_BASELINE_UNITS[@]}"; do
+        enable_host_unit_if_present "${unit_name}"
+    done
+}
+
+main "$@"
