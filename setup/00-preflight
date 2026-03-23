@@ -1,0 +1,134 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${REPO_ROOT}}"
+VERSION_FILE="${CLIENT_ROOT}/VERSION"
+INSTALL_STATE_FILE="${CLIENT_ROOT}/etc/install-state.env"
+OS_RELEASE_FILE="/etc/os-release"
+
+log() {
+    printf '[setup/00-preflight] %s\n' "$*"
+}
+
+die() {
+    printf '[setup/00-preflight] ERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+require_repo_layout() {
+    [[ -d "${CLIENT_ROOT}" ]] || die "client root not found: ${CLIENT_ROOT}"
+    [[ -d "${CLIENT_ROOT}/setup" ]] || die "expected setup directory under ${CLIENT_ROOT}"
+}
+
+read_client_version() {
+    local version
+
+    [[ -f "${VERSION_FILE}" ]] || die "missing VERSION file at ${VERSION_FILE}"
+
+    version="$(head -n 1 "${VERSION_FILE}" | tr -d '[:space:]')"
+    [[ -n "${version}" ]] || die "VERSION file is empty"
+    [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || \
+        die "VERSION must look like semantic version text, got '${version}'"
+
+    printf '%s\n' "${version}"
+}
+
+read_repo_revision() {
+    local revision="unknown"
+
+    if command -v git >/dev/null 2>&1 && git -C "${CLIENT_ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        revision="$(git -C "${CLIENT_ROOT}" rev-parse --short HEAD)"
+    fi
+
+    printf '%s\n' "${revision}"
+}
+
+read_install_state() {
+    INSTALL_STATUS="not-installed"
+    PREVIOUS_VERSION=""
+    PREVIOUS_REVISION=""
+    PREVIOUS_INSTALL_STATUS=""
+
+    if [[ -f "${INSTALL_STATE_FILE}" ]]; then
+        # shellcheck disable=SC1090
+        source "${INSTALL_STATE_FILE}"
+        INSTALL_STATUS="installed"
+        PREVIOUS_VERSION="${INSTALLED_VERSION:-}"
+        PREVIOUS_REVISION="${INSTALL_REVISION:-}"
+        PREVIOUS_INSTALL_STATUS="${INSTALL_STATUS:-}"
+    fi
+}
+
+read_os_release() {
+    [[ -f "${OS_RELEASE_FILE}" ]] || die "missing ${OS_RELEASE_FILE}"
+
+    OS_ID=""
+    OS_VERSION_ID=""
+    OS_VERSION_CODENAME=""
+    OS_PRETTY_NAME=""
+
+    # shellcheck disable=SC1090
+    source "${OS_RELEASE_FILE}"
+
+    OS_ID="${ID:-}"
+    OS_VERSION_ID="${VERSION_ID:-}"
+    OS_VERSION_CODENAME="${VERSION_CODENAME:-}"
+    OS_PRETTY_NAME="${PRETTY_NAME:-}"
+
+    [[ -n "${OS_ID}" ]] || die "unable to determine OS ID from ${OS_RELEASE_FILE}"
+    [[ -n "${OS_PRETTY_NAME}" ]] || die "unable to determine OS name from ${OS_RELEASE_FILE}"
+}
+
+assert_os_compatibility() {
+    if [[ "${OS_ID}" != "raspbian" && "${OS_ID}" != "debian" ]]; then
+        die "unsupported OS ID '${OS_ID}'"
+    fi
+
+    # Development placeholder. Replace with real compatibility rules later.
+    log "compatibility check: PASS (development placeholder) for ${OS_PRETTY_NAME}"
+}
+
+resolve_operation_mode() {
+    if [[ "${INSTALL_STATUS}" != "installed" ]]; then
+        OPERATION_MODE="fresh-install"
+    elif [[ -z "${PREVIOUS_VERSION}" ]]; then
+        OPERATION_MODE="repair-install"
+    elif [[ "${PREVIOUS_VERSION}" == "${CLIENT_VERSION}" ]]; then
+        OPERATION_MODE="reconfigure"
+    else
+        OPERATION_MODE="upgrade"
+    fi
+}
+
+print_summary() {
+    log "client_root=${CLIENT_ROOT}"
+    log "client_version=${CLIENT_VERSION}"
+    log "client_revision=${CLIENT_REVISION}"
+    log "install_state=${INSTALL_STATUS}"
+    log "previous_version=${PREVIOUS_VERSION:-<none>}"
+    log "previous_revision=${PREVIOUS_REVISION:-<none>}"
+    log "previous_install_status=${PREVIOUS_INSTALL_STATUS:-<none>}"
+    log "operation_mode=${OPERATION_MODE}"
+    log "os_id=${OS_ID}"
+    log "os_version_id=${OS_VERSION_ID:-<unknown>}"
+    log "os_codename=${OS_VERSION_CODENAME:-<unknown>}"
+    log "os_pretty_name=${OS_PRETTY_NAME}"
+}
+
+main() {
+    require_repo_layout
+    CLIENT_VERSION="$(read_client_version)"
+    CLIENT_REVISION="$(read_repo_revision)"
+    read_install_state
+    read_os_release
+    assert_os_compatibility
+    resolve_operation_mode
+    print_summary
+}
+
+main "$@"
