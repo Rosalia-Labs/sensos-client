@@ -10,6 +10,8 @@ CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${REPO_ROOT}}"
 VERSION_FILE="${CLIENT_ROOT}/VERSION"
 INSTALL_STATE_FILE="${CLIENT_ROOT}/etc/install-state.env"
 OS_RELEASE_FILE="/etc/os-release"
+SUPPORTED_OS_ID_REGEX='^(raspbian|debian)$'
+SUPPORTED_OS_CODENAME="trixie"
 
 log() {
     printf '[setup/00-preflight] %s\n' "$*"
@@ -85,12 +87,15 @@ read_os_release() {
 }
 
 assert_os_compatibility() {
-    if [[ "${OS_ID}" != "raspbian" && "${OS_ID}" != "debian" ]]; then
-        die "unsupported OS ID '${OS_ID}'"
+    if [[ ! "${OS_ID}" =~ ${SUPPORTED_OS_ID_REGEX} ]]; then
+        die "unsupported OS ID '${OS_ID}'; expected Raspberry Pi OS family"
     fi
 
-    # Development placeholder. Replace with real compatibility rules later.
-    log "compatibility check: PASS (development placeholder) for ${OS_PRETTY_NAME}"
+    if [[ "${OS_VERSION_CODENAME}" != "${SUPPORTED_OS_CODENAME}" ]]; then
+        die "unsupported OS codename '${OS_VERSION_CODENAME:-<missing>}'; expected '${SUPPORTED_OS_CODENAME}'"
+    fi
+
+    log "compatibility check: PASS for ${OS_PRETTY_NAME}"
 }
 
 resolve_operation_mode() {

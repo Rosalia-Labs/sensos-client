@@ -1,0 +1,4 @@
+avahi-daemon
+pi-bluetooth
+triggerhappy
+bluez
