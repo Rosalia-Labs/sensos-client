@@ -5,6 +5,7 @@
 import os
 import sys
 import pwd
+import importlib.util
 import requests
 import datetime
 import shutil
@@ -14,9 +15,19 @@ SCRIPT_FILE = os.path.realpath(__file__)
 SCRIPT_DIR = os.path.dirname(SCRIPT_FILE)
 OVERLAY_ROOT = os.path.dirname(SCRIPT_DIR)
 CLIENT_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", os.path.dirname(OVERLAY_ROOT))
-OVERLAY_LIB_DIR = os.path.join(OVERLAY_ROOT, "lib")
-sys.path.insert(0, OVERLAY_LIB_DIR)
-from utils import *
+UTILS_FILE = os.path.join(OVERLAY_ROOT, "lib", "utils.py")
+
+if not os.path.isfile(UTILS_FILE):
+    raise RuntimeError(f"Missing utils.py at {UTILS_FILE}")
+
+UTILS_SPEC = importlib.util.spec_from_file_location("sensos_overlay_utils", UTILS_FILE)
+UTILS_MODULE = importlib.util.module_from_spec(UTILS_SPEC)
+assert UTILS_SPEC.loader is not None
+UTILS_SPEC.loader.exec_module(UTILS_MODULE)
+
+for name in dir(UTILS_MODULE):
+    if not name.startswith("_"):
+        globals()[name] = getattr(UTILS_MODULE, name)
 
 WG_DIR = "/etc/wireguard"
 SENSOS_ADMIN_HOME = "/home/sensos-admin"
