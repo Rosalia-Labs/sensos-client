@@ -16,6 +16,9 @@ SENSOS_GROUPS=(
     plugdev
     netdev
     audio
+)
+
+SENSOS_PLATFORM_GROUPS=(
     gpio
     i2c
     spi
@@ -147,6 +150,10 @@ main() {
         require_group_exists "${group_name}"
     done
 
+    for group_name in "${SENSOS_PLATFORM_GROUPS[@]}"; do
+        ensure_group_exists "${group_name}"
+    done
+
     ensure_user_exists sensos-admin "SensOS Admin"
     ensure_system_user_exists sensos-runner "SensOS Runner"
 
@@ -156,6 +163,11 @@ main() {
     done
 
     for group_name in "${SENSOS_GROUPS[@]}"; do
+        ensure_membership sensos-admin "${group_name}"
+        ensure_membership sensos-runner "${group_name}"
+    done
+
+    for group_name in "${SENSOS_PLATFORM_GROUPS[@]}"; do
         ensure_membership sensos-admin "${group_name}"
         ensure_membership sensos-runner "${group_name}"
     done

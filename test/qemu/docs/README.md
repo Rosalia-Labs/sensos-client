@@ -1,0 +1,67 @@
+# QEMU Testing
+
+This directory contains the local helper for running a Debian Trixie ARM64 VM on Apple Silicon with MacPorts QEMU:
+
+- [run-debian-trixie-arm64](/Users/tkeitt/Projects/sensos-client/test/qemu/run-debian-trixie-arm64)
+
+## Artifacts
+
+VM artifacts live under:
+
+`test/qemu/artifacts/`
+
+That path is gitignored.
+
+Layout:
+
+- `test/qemu/artifacts/images/debian-trixie-arm64-base.qcow2`
+- `test/qemu/artifacts/images/edk2-arm64-vars.fd`
+- `test/qemu/artifacts/iso/debian-trixie-arm64-netinst.iso`
+
+## Workflow
+
+1. Put a Debian ARM64 installer ISO at:
+
+```bash
+test/qemu/artifacts/iso/debian-trixie-arm64-netinst.iso
+```
+
+2. Create and install the base VM once:
+
+```bash
+test/qemu/run-debian-trixie-arm64 install
+```
+
+3. Boot that installed image in disposable mode:
+
+```bash
+test/qemu/run-debian-trixie-arm64 run
+```
+
+The `run` command uses `-snapshot`, so guest disk changes are discarded when QEMU exits.
+
+## Connectivity
+
+The script forwards host port `2222` to guest SSH:
+
+```bash
+ssh -p 2222 <user>@127.0.0.1
+```
+
+With QEMU user networking, the guest can usually reach macOS-hosted services at:
+
+```text
+10.0.2.2
+```
+
+That is the address to use from the guest when testing a config server running on the host.
+
+## Installer display
+
+The launcher attaches a virtio GPU plus USB keyboard and tablet so the Debian installer appears in the QEMU window on macOS. If you ever land in the QEMU monitor instead of the guest display, try:
+
+```text
+Ctrl-Alt-1
+```
+
+to switch back to the guest console.
