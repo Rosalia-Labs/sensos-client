@@ -24,14 +24,6 @@ MUTABLE_DIRS=(
     "${CLIENT_ROOT}/log"
 )
 
-EXECUTABLE_DIRS=(
-    "${CLIENT_ROOT}/setup"
-    "${CLIENT_ROOT}/bin"
-    "${CLIENT_ROOT}/libexec"
-    "${CLIENT_ROOT}/overlay/bin"
-    "${CLIENT_ROOT}/overlay/libexec"
-)
-
 log() {
     printf '[setup/03-filesystem] %s\n' "$*"
 }
@@ -105,12 +97,25 @@ ensure_mutable_layout() {
 }
 
 ensure_executable_scripts() {
-    local dir_path
+    if [[ -d "${CLIENT_ROOT}/setup" ]]; then
+        find "${CLIENT_ROOT}/setup" -maxdepth 1 -type f -name '[0-9][0-9]-*' -exec chmod 0755 '{}' +
+    fi
 
-    for dir_path in "${EXECUTABLE_DIRS[@]}"; do
-        [[ -d "${dir_path}" ]] || continue
-        find "${dir_path}" -maxdepth 1 -type f -exec chmod 0755 '{}' +
-    done
+    if [[ -d "${CLIENT_ROOT}/bin" ]]; then
+        find "${CLIENT_ROOT}/bin" -maxdepth 1 -type f ! -name '.*' -exec chmod 0755 '{}' +
+    fi
+
+    if [[ -d "${CLIENT_ROOT}/libexec" ]]; then
+        find "${CLIENT_ROOT}/libexec" -maxdepth 1 -type f ! -name '.*' -exec chmod 0755 '{}' +
+    fi
+
+    if [[ -d "${CLIENT_ROOT}/overlay/bin" ]]; then
+        find "${CLIENT_ROOT}/overlay/bin" -maxdepth 1 -type f ! -name '.*' -exec chmod 0755 '{}' +
+    fi
+
+    if [[ -d "${CLIENT_ROOT}/overlay/libexec" ]]; then
+        find "${CLIENT_ROOT}/overlay/libexec" -maxdepth 1 -type f ! -name '.*' -exec chmod 0755 '{}' +
+    fi
 }
 
 ensure_key_permissions() {
