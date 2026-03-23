@@ -1,0 +1,93 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${REPO_ROOT}}"
+PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
+OVERLAY_ROOT="${CLIENT_ROOT}/overlay"
+
+OVERLAY_BIN_DIR="${OVERLAY_ROOT}/bin"
+OVERLAY_LIBEXEC_DIR="${OVERLAY_ROOT}/libexec"
+OVERLAY_SYSTEMD_DIR="${OVERLAY_ROOT}/systemd"
+
+HOST_BIN_DIR="/usr/local/bin"
+HOST_SYSTEMD_DIR="/etc/systemd/system"
+
+log() {
+    printf '[setup/05-overlay] %s\n' "$*"
+}
+
+die() {
+    printf '[setup/05-overlay] ERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+require_root() {
+    [[ "${EUID}" -eq 0 ]] || die "run as root"
+}
+
+require_inputs() {
+    [[ -x "${PRECHECK_SCRIPT}" ]] || die "missing or non-executable preflight script: ${PRECHECK_SCRIPT}"
+    [[ -d "${OVERLAY_ROOT}" ]] || die "missing overlay directory: ${OVERLAY_ROOT}"
+    [[ -d "${OVERLAY_BIN_DIR}" ]] || die "missing overlay bin directory: ${OVERLAY_BIN_DIR}"
+    [[ -d "${OVERLAY_LIBEXEC_DIR}" ]] || die "missing overlay libexec directory: ${OVERLAY_LIBEXEC_DIR}"
+    [[ -d "${OVERLAY_SYSTEMD_DIR}" ]] || die "missing overlay systemd directory: ${OVERLAY_SYSTEMD_DIR}"
+}
+
+run_preflight() {
+    log "running preflight"
+    "${PRECHECK_SCRIPT}"
+}
+
+ensure_host_dirs() {
+    install -d -m 0755 "${HOST_BIN_DIR}"
+    install -d -m 0755 "${HOST_SYSTEMD_DIR}"
+}
+
+ensure_executable_files() {
+    local dir_path="$1"
+
+    [[ -d "${dir_path}" ]] || return
+    find "${dir_path}" -maxdepth 1 -type f ! -name '.gitkeep' -exec chmod 0755 '{}' +
+}
+
+symlink_dir_entries() {
+    local source_dir="$1"
+    local target_dir="$2"
+    local source_path
+
+    [[ -d "${source_dir}" ]] || return
+
+    while IFS= read -r source_path; do
+        ln -sfn "${source_path}" "${target_dir}/$(basename "${source_path}")"
+        log "linked ${target_dir}/$(basename "${source_path}") -> ${source_path}"
+    done < <(find "${source_dir}" -maxdepth 1 -type f ! -name '.gitkeep' | sort)
+}
+
+reload_systemd() {
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload
+        log "reloaded systemd unit files"
+    else
+        log "systemctl not found; skipped daemon-reload"
+    fi
+}
+
+main() {
+    require_root
+    require_inputs
+    run_preflight
+    ensure_host_dirs
+    ensure_executable_files "${OVERLAY_BIN_DIR}"
+    ensure_executable_files "${OVERLAY_LIBEXEC_DIR}"
+    symlink_dir_entries "${OVERLAY_BIN_DIR}" "${HOST_BIN_DIR}"
+    symlink_dir_entries "${OVERLAY_LIBEXEC_DIR}" "${HOST_BIN_DIR}"
+    symlink_dir_entries "${OVERLAY_SYSTEMD_DIR}" "${HOST_SYSTEMD_DIR}"
+    reload_systemd
+}
+
+main "$@"

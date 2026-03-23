@@ -28,6 +28,8 @@ EXECUTABLE_DIRS=(
     "${CLIENT_ROOT}/setup"
     "${CLIENT_ROOT}/bin"
     "${CLIENT_ROOT}/libexec"
+    "${CLIENT_ROOT}/overlay/bin"
+    "${CLIENT_ROOT}/overlay/libexec"
 )
 
 log() {

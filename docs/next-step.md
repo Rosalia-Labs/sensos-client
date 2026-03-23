@@ -25,25 +25,24 @@ The rewrite currently has no equivalent runtime asset tree and no setup step tha
 
 ## Recommended next deliverable
 
-Create a new setup step whose only job is to install the runtime payload from this repo onto the target system.
+Create a new setup step whose only job is to register repo-owned overlay assets with the target system.
 
 Suggested shape:
 
 1. Add a repo-owned runtime tree, for example:
-   - `files/etc`
-   - `files/lib`
-   - `files/scripts`
-   - `files/service_scripts`
-   - `files/services`
-2. Add `setup/05-runtime-assets`.
-3. Make `setup/05-runtime-assets` do the following:
-   - ensure the runtime tree exists in the repo
-   - copy it into `${CLIENT_ROOT}` or the final install root
-   - mark scripts executable
+   - `overlay/etc`
+   - `overlay/lib`
+   - `overlay/bin`
+   - `overlay/libexec`
+   - `overlay/systemd`
+2. Add `setup/05-overlay`.
+3. Make `setup/05-overlay` do the following:
+   - ensure the overlay tree exists in the repo
+   - mark executable files in place
    - install or symlink command entrypoints into `/usr/local/bin`
    - install or symlink unit files into `/etc/systemd/system`
    - run `systemctl daemon-reload`
-4. Keep service enabling separate from asset installation where possible, but allow a small default set of always-on units if they are clearly baseline.
+4. Keep service enabling separate from overlay registration where possible, but allow a small default set of always-on units if they are clearly baseline.
 
 ## First assets to migrate
 
@@ -58,16 +57,21 @@ Priority 1:
 - `config-hotspot`
 - `config-time`
 - `sensos-config`
-- shared helpers in `files/lib`
+- shared helpers in `overlay/lib`
 
 Priority 2:
 
 - `ensure-sensos-dir.service`
 - `sensos-init.service`
 - `run-sensos-init.sh`
+- `etc/chrony.conf`
+
+Deferred for the first `config-network` migration pass:
+
 - `etc/nftables.conf`
 - `etc/sensos-ports.nft`
-- `etc/chrony.conf`
+
+For now, treat firewall integration as a follow-up task. The first migrated `config-network` flow can register the node, write host/network state, manage SSH policy, and write WireGuard configuration without requiring nftables integration on day one.
 
 Priority 3:
 
@@ -75,7 +79,7 @@ Priority 3:
 
 ## After `05-runtime-assets`
 
-Once runtime assets exist in the new repo, the next setup scripts should be:
+Once overlay assets exist in the new repo, the next setup scripts should be:
 
 - `setup/06-system-config`
   - hardware enablement for I2C, 1-wire, SPI
@@ -93,4 +97,4 @@ References from the old client:
 
 ## Practical conclusion
 
-The next step is not more package/user/bootstrap work. The next step is to recreate the old `/sensos/files` payload in the new repo and add a setup script that installs it in a controlled, idempotent way.
+The next step is not more package/user/bootstrap work. The next step is to recreate the old `/sensos/files` payload as repo-owned overlay assets and add a setup script that registers them with the host OS in a controlled, idempotent way.
