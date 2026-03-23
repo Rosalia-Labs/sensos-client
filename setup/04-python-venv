@@ -1,0 +1,88 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${REPO_ROOT}}"
+PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
+REQUIREMENTS_FILE="${CLIENT_ROOT}/python/requirements.txt"
+VENV_DIR="${CLIENT_ROOT}/python/venv"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+
+SENSOS_ADMIN_USER="sensos-admin"
+SENSOS_DATA_GROUP="sensos-data"
+
+log() {
+    printf '[setup/04-python-venv] %s\n' "$*"
+}
+
+die() {
+    printf '[setup/04-python-venv] ERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+require_root() {
+    [[ "${EUID}" -eq 0 ]] || die "run as root"
+}
+
+require_inputs() {
+    [[ -x "${PRECHECK_SCRIPT}" ]] || die "missing or non-executable preflight script: ${PRECHECK_SCRIPT}"
+    [[ -f "${REQUIREMENTS_FILE}" ]] || die "missing ${REQUIREMENTS_FILE}"
+}
+
+run_preflight() {
+    log "running preflight"
+    "${PRECHECK_SCRIPT}"
+}
+
+require_identity() {
+    id -u "${SENSOS_ADMIN_USER}" >/dev/null 2>&1 || die "missing user ${SENSOS_ADMIN_USER}; run setup/02-users first"
+    getent group "${SENSOS_DATA_GROUP}" >/dev/null 2>&1 || die "missing group ${SENSOS_DATA_GROUP}; run setup/02-users first"
+}
+
+require_python() {
+    command -v "${PYTHON_BIN}" >/dev/null 2>&1 || die "missing ${PYTHON_BIN}; run setup/01-packages first"
+}
+
+ensure_python_layout() {
+    install -d "${CLIENT_ROOT}/python"
+}
+
+ensure_venv() {
+    if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
+        log "creating virtual environment at ${VENV_DIR}"
+        "${PYTHON_BIN}" -m venv "${VENV_DIR}"
+    else
+        log "reusing existing virtual environment at ${VENV_DIR}"
+    fi
+}
+
+install_requirements() {
+    log "installing Python dependencies from ${REQUIREMENTS_FILE}"
+    "${VENV_DIR}/bin/pip" install --upgrade pip
+    "${VENV_DIR}/bin/pip" install -r "${REQUIREMENTS_FILE}"
+}
+
+set_venv_permissions() {
+    chown -R "${SENSOS_ADMIN_USER}:${SENSOS_DATA_GROUP}" "${VENV_DIR}"
+    find "${VENV_DIR}" -type d -exec chmod 0755 '{}' +
+    find "${VENV_DIR}" -type f -exec chmod 0644 '{}' +
+    find "${VENV_DIR}/bin" -type f -exec chmod 0755 '{}' +
+}
+
+main() {
+    require_root
+    require_inputs
+    run_preflight
+    require_identity
+    require_python
+    ensure_python_layout
+    ensure_venv
+    install_requirements
+    set_venv_permissions
+}
+
+main "$@"
