@@ -17,7 +17,9 @@ CLIENT_ROOT = os.environ.get(
     os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..")),
 )
 
-sys.path.insert(0, os.path.join(CLIENT_ROOT, "overlay", "lib"))
+OVERLAY_LIB_DIR = os.path.realpath(os.path.join(SCRIPT_DIR, "..", "lib"))
+if OVERLAY_LIB_DIR not in sys.path:
+    sys.path.insert(0, OVERLAY_LIB_DIR)
 from utils import *
 
 WG_DIR = "/etc/wireguard"
