@@ -1,0 +1,134 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${REPO_ROOT}}"
+PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
+
+SENSOS_ADMIN_USER="sensos-admin"
+SENSOS_RUNNER_USER="sensos-runner"
+SENSOS_DATA_GROUP="sensos-data"
+
+MUTABLE_DIRS=(
+    "${CLIENT_ROOT}/data"
+    "${CLIENT_ROOT}/data/audio_recordings"
+    "${CLIENT_ROOT}/data/birdnet"
+    "${CLIENT_ROOT}/data/microenv"
+    "${CLIENT_ROOT}/etc"
+    "${CLIENT_ROOT}/init.d"
+    "${CLIENT_ROOT}/keys"
+    "${CLIENT_ROOT}/log"
+)
+
+EXECUTABLE_DIRS=(
+    "${CLIENT_ROOT}/setup"
+    "${CLIENT_ROOT}/bin"
+    "${CLIENT_ROOT}/libexec"
+)
+
+log() {
+    printf '[setup/03-filesystem] %s\n' "$*"
+}
+
+die() {
+    printf '[setup/03-filesystem] ERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+require_root() {
+    [[ "${EUID}" -eq 0 ]] || die "run as root"
+}
+
+require_inputs() {
+    [[ -x "${PRECHECK_SCRIPT}" ]] || die "missing or non-executable preflight script: ${PRECHECK_SCRIPT}"
+}
+
+run_preflight() {
+    log "running preflight"
+    "${PRECHECK_SCRIPT}"
+}
+
+require_identity() {
+    id -u "${SENSOS_ADMIN_USER}" >/dev/null 2>&1 || die "missing user ${SENSOS_ADMIN_USER}; run setup/02-users first"
+    id -u "${SENSOS_RUNNER_USER}" >/dev/null 2>&1 || die "missing user ${SENSOS_RUNNER_USER}; run setup/02-users first"
+    getent group "${SENSOS_DATA_GROUP}" >/dev/null 2>&1 || die "missing group ${SENSOS_DATA_GROUP}; run setup/02-users first"
+}
+
+ensure_dir() {
+    local dir_path="$1"
+    if [[ ! -d "${dir_path}" ]]; then
+        log "creating directory ${dir_path}"
+        install -d "${dir_path}"
+    fi
+}
+
+set_shared_dir_policy() {
+    local dir_path="$1"
+    chown "${SENSOS_ADMIN_USER}:${SENSOS_DATA_GROUP}" "${dir_path}"
+    chmod 2775 "${dir_path}"
+}
+
+set_private_dir_policy() {
+    local dir_path="$1"
+    chown "${SENSOS_ADMIN_USER}:${SENSOS_ADMIN_USER}" "${dir_path}"
+    chmod 0700 "${dir_path}"
+}
+
+set_key_file_policy() {
+    local file_path="$1"
+    chown "${SENSOS_ADMIN_USER}:${SENSOS_ADMIN_USER}" "${file_path}"
+    chmod 0600 "${file_path}"
+}
+
+ensure_mutable_layout() {
+    local dir_path
+
+    for dir_path in "${MUTABLE_DIRS[@]}"; do
+        ensure_dir "${dir_path}"
+    done
+
+    set_shared_dir_policy "${CLIENT_ROOT}/data"
+    set_shared_dir_policy "${CLIENT_ROOT}/data/audio_recordings"
+    set_shared_dir_policy "${CLIENT_ROOT}/data/birdnet"
+    set_shared_dir_policy "${CLIENT_ROOT}/data/microenv"
+    set_shared_dir_policy "${CLIENT_ROOT}/etc"
+    set_shared_dir_policy "${CLIENT_ROOT}/init.d"
+    set_shared_dir_policy "${CLIENT_ROOT}/log"
+
+    set_private_dir_policy "${CLIENT_ROOT}/keys"
+}
+
+ensure_executable_scripts() {
+    local dir_path
+
+    for dir_path in "${EXECUTABLE_DIRS[@]}"; do
+        [[ -d "${dir_path}" ]] || continue
+        find "${dir_path}" -maxdepth 1 -type f -exec chmod 0755 '{}' +
+    done
+}
+
+ensure_key_permissions() {
+    local key_file
+
+    [[ -d "${CLIENT_ROOT}/keys" ]] || return
+
+    while IFS= read -r key_file; do
+        set_key_file_policy "${key_file}"
+    done < <(find "${CLIENT_ROOT}/keys" -maxdepth 1 -type f)
+}
+
+main() {
+    require_root
+    require_inputs
+    run_preflight
+    require_identity
+    ensure_mutable_layout
+    ensure_executable_scripts
+    ensure_key_permissions
+}
+
+main "$@"
