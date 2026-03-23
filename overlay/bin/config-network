@@ -1,0 +1,575 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+import os
+import sys
+import pwd
+import requests
+import datetime
+import shutil
+import psutil
+
+SCRIPT_FILE = os.path.realpath(__file__)
+SCRIPT_DIR = os.path.dirname(SCRIPT_FILE)
+CLIENT_ROOT = os.environ.get(
+    "SENSOS_CLIENT_ROOT",
+    os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..")),
+)
+
+sys.path.insert(0, os.path.join(CLIENT_ROOT, "overlay", "lib"))
+from utils import *
+
+WG_DIR = "/etc/wireguard"
+SENSOS_ADMIN_HOME = "/home/sensos-admin"
+SENSOS_ETC_DIR = os.path.join(CLIENT_ROOT, "etc")
+SENSOS_KEYS_DIR = os.path.join(CLIENT_ROOT, "keys")
+SENSOS_NET_CONF = os.path.join(SENSOS_ETC_DIR, "network.conf")
+NFT_INCLUDE_PATH = os.path.join(SENSOS_ETC_DIR, "sensos-ports.nft")
+OVERLAY_SYSTEMD_DIR = os.path.join(CLIENT_ROOT, "overlay", "systemd")
+OVERLAY_ETC_DIR = os.path.join(CLIENT_ROOT, "overlay", "etc")
+
+
+def parse_args():
+    script_name = os.path.basename(sys.argv[0])
+    if script_name.endswith(".py"):
+        script_name = script_name[:-3]
+    elif "." in script_name:
+        script_name = script_name.split(".")[0]
+    script_name = script_name.replace("-", "_")
+
+    arg_defs = [
+        (["--config-server"], {"help": "Configuration server hostname or IP (required)", "dest": "config_server"}),
+        (["--port"], {"help": "Server port (default: 8765)", "dest": "port", "type": int, "default": 8765}),
+        (["--network"], {"help": "Network name (default: sensos)", "dest": "network", "default": "sensos"}),
+        (["--subnet"], {"help": "Subnet offset for WireGuard IP assignment (default: 1, i.e., x.x.1.1)", "dest": "subnet", "type": int, "default": 1}),
+        (["--wg-endpoint"], {"help": "WireGuard endpoint as IP[:port] (required for nft rule)", "dest": "wg_endpoint"}),
+        (["--wg-keepalive"], {"help": "WireGuard persistent keepalive interval (default: disabled=0)", "dest": "wg_keepalive", "type": int, "default": 0}),
+        (["--disable-ssh-passwords"], {"action": "store_true", "help": "Disable SSH password authentication (default: enabled)", "dest": "disable_ssh_passwords"}),
+        (["--ssh-tunnel-port"], {"help": "SSH port for clients to use when connecting to the server (default: 2345)", "dest": "ssh_tunnel_port", "type": int, "default": 2345}),
+        (["--ssh-tunnel-ip"], {"help": "Server hostname or IP for SSH access (default: same as WireGuard endpoint/server)", "dest": "ssh_tunnel_ip"}),
+        (["--connectivity-mode"], {"help": "Network interface behavior: always, ondemand, offline", "choices": ["always", "ondemand", "offline"], "dest": "connectivity_mode", "default": "always"}),
+        (["--bandwidth-policy"], {"help": "Bandwidth policy: unrestricted, restricted", "choices": ["unrestricted", "restricted"], "dest": "bandwidth_policy", "default": "unrestricted"}),
+        (["--no-connectivity-checks"], {"action": "store_true", "help": "Skip connectivity check service", "dest": "no_connectivity_checks"}),
+        (["--note"], {"help": "Optional note or description to register with the device (default: empty)", "dest": "note"}),
+        (["--force"], {"action": "store_true", "help": "Force overwrite of existing files and settings", "dest": "force"}),
+    ]
+    return parse_args_with_defaults(arg_defs, ["global", script_name])
+
+
+def enable_ssh(disable_passwords: bool = False, allowed_password_subnets=None):
+    if allowed_password_subnets is None:
+        allowed_password_subnets = []
+
+    sshd_dir = "/etc/ssh/sshd_config.d"
+    require_dir(sshd_dir, "sshd drop-in directory")
+    custom_conf = os.path.join(sshd_dir, "sensos.conf")
+
+    base = [
+        "# Set by SensOS",
+        "PubkeyAuthentication yes",
+        "PasswordAuthentication no",
+        "PermitRootLogin no",
+        "MaxAuthTries 3",
+        "LoginGraceTime 30s",
+    ]
+
+    match_block = []
+    if not disable_passwords and allowed_password_subnets:
+        cidrs = ",".join(allowed_password_subnets)
+        match_block = ["", f"Match Address {cidrs}", "    PasswordAuthentication yes"]
+
+    config = "\n".join(base + match_block) + "\n"
+    write_file(custom_conf, config, mode=0o644, user="root")
+
+    print(f"✅ sshd policy written to {custom_conf}")
+    if disable_passwords:
+        print("🔒 SSH passwords disabled globally.")
+    else:
+        print(f"🔓 SSH passwords allowed only from: {', '.join(allowed_password_subnets) or '(none)'}")
+
+    privileged_shell("systemctl enable ssh")
+    privileged_shell("systemctl reload ssh || systemctl restart ssh")
+
+
+def generate_wireguard_keys(network_name, force):
+    require_dir(WG_DIR, "WireGuard directory")
+
+    private_key_file = os.path.join(WG_DIR, f"{network_name}-private.key")
+    public_key_file = os.path.join(WG_DIR, f"{network_name}-public.key")
+
+    print("🔑 Generating new WireGuard key pair...")
+    require_cmd("wg")
+    private_key, rc = privileged_shell("wg genkey")
+    public_key, rc2 = privileged_shell(f"echo {private_key} | wg pubkey")
+
+    if not private_key or not public_key:
+        sys.exit("Error: failed to generate WireGuard keys (wg genkey/pubkey).")
+
+    write_file(private_key_file, private_key, mode=0o600, user="root")
+    write_file(public_key_file, public_key, mode=0o644, user="root")
+
+    print("✅ WireGuard keys generated:")
+    print(f"  - Private Key stored in: {private_key_file} (600)")
+    print(f"  - Public Key stored in : {public_key_file}")
+    return public_key
+
+
+def register_peer(config_server, port, network_name, wg_public_key, api_password, subnet, note=""):
+    require_nonempty(wg_public_key, "wg_public_key")
+    require_nonempty(config_server, "--config-server")
+    require_nonempty(port, "--port")
+    server_url = f"http://{config_server}:{port}/register-peer"
+    print(f"📡 Registering device on network '{network_name}' with {server_url}...")
+
+    headers = {"Authorization": f"Basic {get_basic_auth(api_password)}"}
+    response = requests.post(
+        server_url,
+        json={"network_name": network_name, "subnet_offset": subnet, "note": note if note else None},
+        headers=headers,
+    )
+
+    print(f"Status Code: {response.status_code}")
+    print(f"Response Text: {response.text}")
+
+    if response.status_code != 200:
+        sys.exit(f"Error: register-peer failed: {response.text}")
+
+    data = response.json()
+    wg_ip = data.get("wg_ip")
+    server_pubkey = data.get("wg_public_key")
+    wg_public_ip = data.get("wg_public_ip")
+    wg_port = data.get("wg_port")
+
+    if not all([wg_ip, server_pubkey, wg_public_ip, wg_port]):
+        sys.exit("Error: incomplete register-peer response (wg_ip/server_pubkey/wg_public_ip/wg_port).")
+
+    ip_parts = wg_ip.split(".")
+    hostname = f"{network_name}-{ip_parts[2]}-{ip_parts[3]}"
+
+    register_wireguard_key(config_server, port, wg_ip, wg_public_key, api_password)
+    return wg_ip, hostname, server_pubkey, wg_public_ip, wg_port
+
+
+def register_wireguard_key(config_server, port, wg_ip, wg_public_key, api_password):
+    require_nonempty(wg_ip, "wg_ip")
+    require_nonempty(wg_public_key, "wg_public_key")
+    server_url = f"http://{config_server}:{port}/register-wireguard-key"
+    print(f"🔑 Registering WireGuard public key with {server_url}...")
+
+    headers = {"Authorization": f"Basic {get_basic_auth(api_password)}"}
+    response = requests.post(
+        server_url,
+        json={"wg_ip": wg_ip, "wg_public_key": wg_public_key},
+        headers=headers,
+    )
+
+    if response.status_code != 200:
+        sys.exit(f"Error: register-wireguard-key failed: {response.text}")
+    print(f"✅ WireGuard key registered for {wg_ip}.")
+
+
+def change_hostname(new_hostname):
+    require_nonempty(new_hostname, "new hostname")
+    current_hostname, rc = privileged_shell("hostname")
+    if current_hostname != new_hostname:
+        print(f"🔄 Changing hostname from {current_hostname} to {new_hostname}...")
+        write_file("/etc/hostname", new_hostname + "\n", mode=0o644, user="root")
+
+        privileged_shell("cp /etc/hosts /etc/hosts.bak")
+        hosts_content = read_file("/etc/hosts").splitlines()
+        updated_hosts = [f"127.0.1.1 {new_hostname}" if "127.0.1.1" in line else line for line in hosts_content]
+        new_hosts_content = "\n".join(updated_hosts) + "\n"
+        write_file("/etc/hosts", new_hosts_content, mode=0o644, user="root")
+        print(f"✅ Hostname changed to {new_hostname} (applies after restart)")
+    else:
+        print(f"✅ Hostname already set to {new_hostname}")
+
+
+def write_wireguard_config(wg_ip, server_pubkey, wg_public_ip, wg_port, network_name, wg_keepalive):
+    if not all([wg_ip, server_pubkey, wg_public_ip, wg_port]):
+        sys.exit("Error: incomplete WireGuard data (wg_ip/server_pubkey/wg_public_ip/wg_port).")
+
+    private_key_file = os.path.join(WG_DIR, f"{network_name}-private.key")
+    wg_config_file = os.path.join(WG_DIR, f"{network_name}.conf")
+    private_key = read_file(private_key_file).strip()
+    if not private_key:
+        sys.exit("Error: private key is empty; cannot write WireGuard config.")
+
+    ip_parts = wg_ip.split(".")
+    if len(ip_parts) != 4:
+        sys.exit(f"Error: invalid wg_ip format: {wg_ip}")
+    base_ip = f"{ip_parts[0]}.{ip_parts[1]}"
+    allowed_ips = f"{base_ip}.0.0/16"
+
+    config = f"""
+[Interface]
+PrivateKey = {private_key}
+Address = {wg_ip}/32
+
+[Peer]
+PublicKey = {server_pubkey}
+Endpoint = {wg_public_ip}:{wg_port}
+AllowedIPs = {allowed_ips}
+PersistentKeepalive = {wg_keepalive}
+"""
+    write_file(wg_config_file, config, 0o600, "root", "root")
+    print(f"✅ WireGuard config written to {wg_config_file} (600)")
+    print(f"🔧 Allowed IPs set to {allowed_ips}")
+
+
+def generate_ssh_keys(force):
+    ssh_dir = os.path.join(SENSOS_ADMIN_HOME, ".ssh")
+    require_dir(SENSOS_ADMIN_HOME, "sensos-admin home")
+    require_dir(ssh_dir, "sensos-admin .ssh directory")
+    require_cmd("ssh-keygen")
+
+    private_key_file = os.path.join(ssh_dir, "id_ed25519")
+    public_key_file = f"{private_key_file}.pub"
+
+    print("🔑 Generating new SSH key pair...")
+    privileged_shell(f"ssh-keygen -t ed25519 -f {private_key_file} -q -N ''")
+
+    set_permissions_and_owner(private_key_file, 0o600, user="sensos-admin")
+    set_permissions_and_owner(public_key_file, 0o644, user="sensos-admin")
+    print(f"✅ SSH key generated at {private_key_file} and {public_key_file}.")
+
+
+def extract_ssh_key_params(public_key_file):
+    if not os.path.exists(public_key_file):
+        print(f"❌ Error: SSH public key file '{public_key_file}' not found.", file=sys.stderr)
+        return None, None, None, None, None
+    try:
+        with open(public_key_file, "r") as f:
+            key_parts = f.read().strip().split()
+        if len(key_parts) < 2:
+            print(f"❌ Error: Invalid SSH key format in '{public_key_file}'.", file=sys.stderr)
+            return None, None, None, None, None
+        key_type = key_parts[0]
+        key_comment = key_parts[-1] if len(key_parts) > 2 else None
+        key_info, _ = privileged_shell(f"ssh-keygen -lf {public_key_file}")
+        if not key_info:
+            print(f"❌ Error: Failed to extract key details from '{public_key_file}'.", file=sys.stderr)
+            return key_type, None, key_comment, None, None
+        key_info_parts = key_info.split()
+        if len(key_info_parts) < 2:
+            return key_type, None, key_comment, None, None
+        fingerprint = key_info_parts[1]
+        try:
+            key_size = int(key_info_parts[0])
+        except ValueError:
+            print(f"⚠️ Warning: Failed to parse key size '{key_info_parts[0]}'.", file=sys.stderr)
+            key_size = None
+        expires_at = None
+        if key_comment:
+            try:
+                if "expires:" in key_comment:
+                    expires_str = key_comment.split("expires:")[-1].strip()
+                    expires_at = datetime.datetime.strptime(expires_str, "%Y-%m-%d").isoformat()
+            except ValueError:
+                print(f"⚠️ Warning: Could not parse expiration date from comment '{key_comment}'.", file=sys.stderr)
+                expires_at = None
+        return key_type, key_size, key_comment, fingerprint, expires_at
+    except Exception as e:
+        print(f"❌ Exception while processing '{public_key_file}': {e}", file=sys.stderr)
+        return None, None, None, None, None
+
+
+def exchange_ssh_keys(config_server, port, wg_ip, api_password):
+    ssh_dir = os.path.join(SENSOS_ADMIN_HOME, ".ssh")
+    public_key_file = os.path.join(ssh_dir, "id_ed25519.pub")
+    authorized_keys_file = os.path.join(ssh_dir, "authorized_keys")
+    username = "sensos-admin"
+    uid = pwd.getpwnam(username).pw_uid
+    key_type, key_size, key_comment, fingerprint, expires_at = extract_ssh_key_params(public_key_file)
+    if not key_type or not fingerprint:
+        sys.exit(f"Error: failed to extract SSH key details from {public_key_file}")
+
+    payload = {
+        "wg_ip": wg_ip,
+        "username": username,
+        "uid": uid,
+        "ssh_public_key": open(public_key_file).read().strip(),
+        "key_type": key_type,
+        "key_size": key_size if key_size else None,
+        "key_comment": key_comment,
+        "fingerprint": fingerprint,
+        "expires_at": expires_at if expires_at else None,
+    }
+    if not all([wg_ip, payload["ssh_public_key"], key_type, fingerprint]):
+        sys.exit("Error: incomplete SSH key data; aborting exchange.")
+    server_url = f"http://{config_server}:{port}/exchange-ssh-keys"
+    print(f"🔑 Registering SSH public key with {server_url}...")
+    headers = {"Authorization": f"Basic {get_basic_auth(api_password)}"}
+    response = requests.post(server_url, json=payload, headers=headers)
+    if response.status_code != 200:
+        sys.exit(f"Error: exchange-ssh-keys failed: {response.text}")
+    print(f"✅ SSH key registered for peer {wg_ip}.")
+    server_public_key = response.json().get("ssh_public_key")
+    if not server_public_key:
+        sys.exit("Error: server did not return its SSH public key.")
+    with open(authorized_keys_file, "a") as auth_keys:
+        auth_keys.write(server_public_key + "\n")
+    print(f"✅ Server public key added to {authorized_keys_file}.")
+
+
+def configure_wireguard(args, api_password):
+    print("Reconfiguring WireGuard...")
+
+    wg_public_key = generate_wireguard_keys(args.network, args.force)
+    if wg_public_key is None:
+        sys.exit("Error: WireGuard key generation failed.")
+
+    wg_ip, hostname, server_pubkey, wg_public_ip, wg_port = register_peer(
+        args.config_server,
+        args.port,
+        args.network,
+        wg_public_key,
+        api_password,
+        args.subnet,
+        note=args.note,
+    )
+
+    if args.wg_endpoint:
+        override = args.wg_endpoint
+        ip_only = override
+        if ":" in override:
+            ip_only, port_str = override.split(":", 1)
+            if port_str.isdigit():
+                print(f"⚠️ Overriding WireGuard port: {wg_port} → {port_str}")
+                wg_port = int(port_str)
+        print(f"⚠️ Overriding WireGuard endpoint IP: {wg_public_ip} → {ip_only}")
+        wg_public_ip = ip_only
+
+    write_wireguard_config(wg_ip, server_pubkey, wg_public_ip, wg_port, args.network, args.wg_keepalive)
+    change_hostname(hostname)
+    return wg_ip, wg_public_ip, wg_port
+
+
+def configure_ssh(args, api_password, wg_ip):
+    generate_ssh_keys(args.force)
+    if wg_ip:
+        exchange_ssh_keys(args.config_server, args.port, wg_ip, api_password)
+    else:
+        sys.exit("Error: no WG IP available; cannot exchange SSH keys.")
+
+
+def write_nftables_include(wg_iface: str, server_wg_ip: str, api_port: int, wg_endpoint: str, wg_listen_port: int, bandwidth_policy: str):
+    include_dir = os.path.dirname(NFT_INCLUDE_PATH)
+    require_dir(include_dir, "nftables include directory")
+
+    header = [
+        "# SPDX-License-Identifier: MIT",
+        "# Auto-generated by config-network. Do not edit by hand.",
+        f"# WG iface: {wg_iface}",
+        f"# Bandwidth policy: {bandwidth_policy}",
+        "",
+    ]
+
+    rules = []
+    rules.append(f"add rule inet filter input udp dport {wg_listen_port} accept")
+    rules.append(f"add rule inet filter output ip daddr {wg_endpoint} udp dport {wg_listen_port} accept")
+    rules.append(f'add rule inet filter output oifname "{wg_iface}" ip daddr {server_wg_ip} tcp dport {api_port} accept')
+    rules.extend(
+        [
+            "add rule inet filter output udp dport 53  ct state new,established counter accept",
+            "add rule inet filter output tcp dport 53  ct state new,established counter accept",
+        ]
+    )
+
+    if bandwidth_policy == "unrestricted":
+        rules.extend(
+            [
+                "add rule inet filter output tcp dport 443 ct state new,established counter accept",
+            ]
+        )
+
+    content = "\n".join(header + rules) + ("\n" if rules else "")
+    write_file(NFT_INCLUDE_PATH, content, mode=0o644, user="sensos-admin")
+    print(f"✅ nft include written to: {NFT_INCLUDE_PATH}")
+
+
+def write_client_settings(args, server_wg_ip, client_wg_ip, endpoint_ip, wg_port):
+    settings_file = os.path.join(SENSOS_ETC_DIR, "network.conf")
+    require_dir(SENSOS_ETC_DIR, "SensOS etc directory")
+    require_nonempty(server_wg_ip, "SERVER_WG_IP")
+    require_nonempty(client_wg_ip, "CLIENT_WG_IP")
+    require_nonempty(endpoint_ip, "WG_ENDPOINT_IP")
+    if not isinstance(wg_port, int) or wg_port <= 0:
+        sys.exit("Error: invalid WG_ENDPOINT_PORT; expected positive integer.")
+
+    ssh_tunnel_ip = args.ssh_tunnel_ip or endpoint_ip
+
+    content = (
+        f"SERVER_WG_IP={server_wg_ip}\n"
+        f"CLIENT_WG_IP={client_wg_ip}\n"
+        f"SERVER_PORT={args.port}\n"
+        f"NETWORK_NAME={args.network}\n"
+        f"WG_ENDPOINT_IP={endpoint_ip}\n"
+        f"WG_ENDPOINT_PORT={wg_port}\n"
+        f"SSH_TUNNEL_IP={ssh_tunnel_ip}\n"
+        f"SSH_TUNNEL_PORT={args.ssh_tunnel_port}\n"
+        f"CONNECTIVITY_MODE={args.connectivity_mode}\n"
+        f"BANDWIDTH_POLICY={args.bandwidth_policy}\n"
+    )
+    write_file(settings_file, content, mode=0o644, user="sensos-admin")
+    print(f"✅ Client network settings written to {settings_file}")
+
+
+def sensos_config_files_exist(args):
+    files_to_check = [
+        os.path.join(WG_DIR, f"{args.network}-private.key"),
+        os.path.join(WG_DIR, f"{args.network}-public.key"),
+        os.path.join(WG_DIR, f"{args.network}.conf"),
+        os.path.join(SENSOS_ADMIN_HOME, ".ssh", "id_ed25519"),
+        os.path.join(SENSOS_ADMIN_HOME, ".ssh", "id_ed25519.pub"),
+        SENSOS_NET_CONF,
+    ]
+    return [f for f in files_to_check if os.path.exists(f)]
+
+
+def remove_sensos_config_files(network_name):
+    files_to_remove = [
+        os.path.join(WG_DIR, f"{network_name}-private.key"),
+        os.path.join(WG_DIR, f"{network_name}-public.key"),
+        os.path.join(WG_DIR, f"{network_name}.conf"),
+        os.path.join(SENSOS_ADMIN_HOME, ".ssh", "id_ed25519"),
+        os.path.join(SENSOS_ADMIN_HOME, ".ssh", "id_ed25519.pub"),
+        SENSOS_NET_CONF,
+    ]
+    for file_path in files_to_remove:
+        remove_file(file_path)
+
+
+def vnstat_register_interface(iface: str):
+    if shutil.which("vnstat") is None:
+        print("⚠️ vnstat not installed; skipping vnStat registration.")
+        return
+    if not iface:
+        print("⚠️ vnStat: iface empty; skipping registration.")
+        return
+    privileged_shell(f"vnstat --add -i {iface} || true")
+    print(f"✅ vnStat: registered interface '{iface}'.")
+
+
+def service_unit_exists(unit_name: str):
+    if os.path.exists(os.path.join(OVERLAY_SYSTEMD_DIR, unit_name)):
+        return True
+    output, rc = privileged_shell(f"systemctl cat {unit_name}", silent=True)
+    return rc == 0
+
+
+def main():
+    username = pwd.getpwuid(os.geteuid()).pw_name
+    if username not in ("sensos-admin", "root"):
+        print(f"\n❌ This script must be run as 'sensos-admin' or 'root', not '{username}'.", file=sys.stderr)
+        print("   Please switch users: sudo -u sensos-admin ... or run as root\n", file=sys.stderr)
+        sys.exit(1)
+
+    require_dir(WG_DIR, "WireGuard directory")
+    require_dir(SENSOS_ETC_DIR, "SensOS etc directory")
+    require_dir(SENSOS_KEYS_DIR, "SensOS keys directory")
+    require_dir(SENSOS_ADMIN_HOME, "sensos-admin home")
+    require_dir(os.path.join(SENSOS_ADMIN_HOME, ".ssh"), "sensos-admin .ssh directory")
+    require_cmd("systemctl")
+
+    setup_logging()
+    args = parse_args()
+
+    require_nonempty(args.config_server, "--config-server")
+
+    existing_files = sensos_config_files_exist(args)
+    if not args.force and existing_files:
+        print("\n❌ Existing SensOS config files detected:\n  " + "\n  ".join(existing_files))
+        print("Aborting. Use --force to remove all configs and proceed.\n")
+        sys.exit(1)
+
+    if args.force:
+        remove_sensos_config_files(args.network)
+
+    print("🚀 Starting device configuration...")
+
+    api_password = get_api_password(args.config_server, args.port)
+    if not api_password:
+        sys.exit("Error: API password not obtained (get_api_password).")
+
+    client_wg_ip, wg_public_ip, wg_port = configure_wireguard(args, api_password)
+    if not client_wg_ip:
+        sys.exit("Error: WireGuard configuration failed.")
+
+    server_wg_ip = compute_api_server_wg_ip(client_wg_ip)
+    if not server_wg_ip:
+        sys.exit("Error: failed to compute API server WireGuard IP from client_wg_ip.")
+
+    endpoint_ip = args.wg_endpoint or wg_public_ip
+    if ":" in endpoint_ip:
+        endpoint_ip = endpoint_ip.split(":", 1)[0]
+
+    write_client_settings(args, server_wg_ip, client_wg_ip, endpoint_ip, wg_port)
+
+    if os.path.exists(os.path.join(OVERLAY_ETC_DIR, "nftables.conf")):
+        require_nonempty(args.wg_endpoint or wg_public_ip, "--wg-endpoint or discovered wg_public_ip")
+        write_nftables_include(
+            args.network,
+            server_wg_ip,
+            args.port,
+            args.wg_endpoint or wg_public_ip,
+            wg_port,
+            args.bandwidth_policy,
+        )
+        print("✅ nftables integration data written.")
+    else:
+        print("ℹ️ nftables integration deferred; skipping firewall include generation.")
+
+    configure_ssh(args, api_password, client_wg_ip)
+
+    try:
+        a, b, _, _ = map(int, client_wg_ip.split("."))
+        wg_subnet = f"{a}.{b}.0.0/16"
+    except Exception:
+        wg_subnet = None
+
+    allowed_pw_subnets = []
+    if not args.disable_ssh_passwords:
+        allowed_pw_subnets = [
+            "127.0.0.0/8",
+            "::1",
+            "10.0.0.0/8",
+            "172.16.0.0/12",
+            "192.168.0.0/16",
+            "fc00::/7",
+            "fe80::/10",
+        ]
+        if wg_subnet:
+            allowed_pw_subnets.append(wg_subnet)
+
+    enable_ssh(disable_passwords=args.disable_ssh_passwords, allowed_password_subnets=allowed_pw_subnets)
+    vnstat_register_interface(args.network)
+
+    if args.connectivity_mode == "always":
+        privileged_shell(f"systemctl enable wg-quick@{args.network}")
+        privileged_shell(f"systemctl start wg-quick@{args.network}")
+        if not args.no_connectivity_checks:
+            if service_unit_exists("monitor-connectivity.service"):
+                privileged_shell("systemctl enable monitor-connectivity.service")
+            else:
+                print("ℹ️ monitor-connectivity.service not installed; skipping enable.")
+    else:
+        privileged_shell(f"systemctl stop wg-quick@{args.network}")
+        privileged_shell(f"systemctl disable wg-quick@{args.network}")
+        if service_unit_exists("set-network-config.service"):
+            privileged_shell("systemctl enable set-network-config.service")
+        else:
+            print("ℹ️ set-network-config.service not installed; skipping enable.")
+
+    if os.path.exists(os.path.join(OVERLAY_ETC_DIR, "nftables.conf")):
+        print("✅ Enabling firewall service to activate on next boot.")
+        privileged_shell("systemctl enable nftables.service")
+    else:
+        print("ℹ️ Firewall service enablement deferred with nftables integration.")
+
+    print("✅ Configuration complete. Reboot now and check connectivity.")
+
+
+if __name__ == "__main__":
+    main()
