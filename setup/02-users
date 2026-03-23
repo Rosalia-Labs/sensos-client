@@ -106,8 +106,10 @@ ensure_membership() {
 
 install_sudoers_rule() {
     local user_name="$1"
+    local sudoers_dir="/etc/sudoers.d"
     local sudoers_file="/etc/sudoers.d/${user_name}"
 
+    install -d -m 0750 "${sudoers_dir}"
     printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${user_name}" >"${sudoers_file}"
     chmod 0440 "${sudoers_file}"
 }
