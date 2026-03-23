@@ -14,6 +14,8 @@ BOOT_CONFIG_FILE="/boot/firmware/config.txt"
 MODULES_FILE="/etc/modules"
 JOURNALD_CONF_FILE="/etc/systemd/journald.conf"
 CHRONY_CONF_FILE="/etc/chrony/chrony.conf"
+TIMEZONE_NAME="Etc/UTC"
+TIMEZONE_FILE="/usr/share/zoneinfo/${TIMEZONE_NAME}"
 
 log() {
     printf '[setup/06-system-config] %s\n' "$*"
@@ -109,6 +111,20 @@ configure_chrony() {
     fi
 }
 
+configure_timezone() {
+    [[ -f "${TIMEZONE_FILE}" ]] || die "timezone data not found at ${TIMEZONE_FILE}"
+
+    if command -v timedatectl >/dev/null 2>&1; then
+        timedatectl set-timezone "${TIMEZONE_NAME}"
+        log "set system timezone to ${TIMEZONE_NAME} with timedatectl"
+        return
+    fi
+
+    ln -sfn "${TIMEZONE_FILE}" /etc/localtime
+    printf '%s\n' "${TIMEZONE_NAME}" >/etc/timezone
+    log "set system timezone to ${TIMEZONE_NAME} with /etc/localtime fallback"
+}
+
 main() {
     require_root
     require_inputs
@@ -116,6 +132,7 @@ main() {
     configure_pi_hardware
     configure_journald
     configure_chrony
+    configure_timezone
 }
 
 main "$@"
