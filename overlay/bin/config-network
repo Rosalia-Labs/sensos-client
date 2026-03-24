@@ -187,7 +187,13 @@ def change_hostname(new_hostname):
 
         privileged_shell("cp /etc/hosts /etc/hosts.bak")
         hosts_content = read_file("/etc/hosts").splitlines()
-        updated_hosts = [f"127.0.1.1 {new_hostname}" if "127.0.1.1" in line else line for line in hosts_content]
+        host_aliases = [new_hostname]
+        if current_hostname and current_hostname != new_hostname:
+            host_aliases.append(current_hostname)
+        updated_hosts = [
+            f"127.0.1.1 {' '.join(host_aliases)}" if "127.0.1.1" in line else line
+            for line in hosts_content
+        ]
         new_hosts_content = "\n".join(updated_hosts) + "\n"
         write_file("/etc/hosts", new_hosts_content, mode=0o644, user="root")
         print(f"✅ Hostname changed to {new_hostname} (applies after restart)")
