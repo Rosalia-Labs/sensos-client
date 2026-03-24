@@ -80,7 +80,7 @@ install_required_packages() {
     apt-get update
 
     log "installing required packages"
-    apt-get install -y "${packages[@]}"
+    apt-get install -y --no-install-recommends "${packages[@]}"
 }
 
 main() {

@@ -1,0 +1,330 @@
+#!/bin/bash -e
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+SCRIPT_FILE="$(realpath "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_FILE}")" && pwd)"
+OVERLAY_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-$(cd "${OVERLAY_ROOT}/.." && pwd)}"
+
+script_name=$(basename "$0")
+DATA_MOUNT="${CLIENT_ROOT}/data"
+LOCATION_FILE="${CLIENT_ROOT}/etc/location.conf"
+PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
+CACHE_SYS_INFO_SCRIPT="${OVERLAY_ROOT}/libexec/cache-sys-info.sh"
+
+[[ -f "${PARSE_SWITCHES_LIB}" ]] || {
+    echo "❌ Missing parse-switches library at ${PARSE_SWITCHES_LIB}"
+    exit 1
+}
+source "${PARSE_SWITCHES_LIB}"
+
+register_option --device device "Block device to format/mount" ""
+register_option --no-fstab no_fstab "Skip adding fstab entry (non-persistent mount)" "false"
+
+parse_switches "$script_name" "$@"
+
+if [[ -z "${device}" ]]; then
+    echo "❌ --device must be specified (e.g., /dev/sda, /dev/nvme0n1, etc.)."
+    echo
+    echo "Hint: Run 'lsblk -o NAME,SIZE,TYPE,MOUNTPOINT' to list available devices."
+    lsblk -o NAME,SIZE,TYPE,MOUNTPOINT
+    exit 1
+fi
+
+has_partition_table() {
+    local device="$1"
+    if [[ -z "$device" || ! -b "$device" ]]; then
+        echo "❌ $device is not a block device." >&2
+        return 1
+    fi
+
+    if sudo parted -s "$device" print &>/dev/null; then
+        echo "true"
+    else
+        echo "false"
+    fi
+}
+
+is_device_mounted() {
+    local device="$1"
+    if mount | grep -q "^$device "; then
+        echo "true"
+    else
+        echo "false"
+    fi
+}
+
+get_first_partition() {
+    local device="$1"
+    sudo lsblk -nrpo NAME "$device" | grep -v "^$device\$" | head -n 1
+}
+
+get_filesystem_type() {
+    local part="$1"
+
+    if [[ -z "$part" || ! -b "$part" ]]; then
+        echo ""
+        return
+    fi
+
+    sudo blkid -s TYPE -o value "$part"
+}
+
+wait_for_partition() {
+    local device="$1"
+    for i in {1..10}; do
+        local part
+        part=$(get_first_partition "$device")
+        if [[ -n "$part" && -b "$part" ]]; then
+            echo "$part"
+            return
+        fi
+        sleep 0.5
+    done
+    echo ""
+}
+
+prompt_for_filesystem_type() {
+    FS_TYPE_ARG="ext4"
+    MAKE_FS=true
+}
+
+if ! [[ -b "$device" ]]; then
+    echo "❌ $device is not a block device."
+    exit 1
+fi
+
+if [[ "$(is_device_mounted "$device")" == "true" ]]; then
+    echo "⚠️  Device $device is currently mounted."
+    read -p "❓ Unmount $device before proceeding? [y/N] " confirm
+    if [[ "$confirm" == [yY] ]]; then
+        echo "🔧 Unmounting $device..."
+        if sudo umount "$device"; then
+            echo "✅ Unmounted"
+        else
+            echo "❌ Failed to unmount $device — it may be busy."
+            echo "   Tip: Run \`lsof +f -- $device\` or \`mount | grep $device\` to investigate."
+            exit 1
+        fi
+    else
+        echo "❌ Aborting. Cannot proceed with mounted device."
+        exit 1
+    fi
+fi
+
+if has_partition_table "$device"; then
+    echo "✅ Partition table found on $device"
+    echo "📄 Current partition table:"
+    sudo lsblk -o NAME,SIZE,FSTYPE,LABEL,UUID,MOUNTPOINT "$device"
+
+    read -p "❓ Overwrite existing partition table on $device with a new GPT table? This will erase all data. [y/N] " confirm
+    if [[ "$confirm" == [yY] ]]; then
+        create_table=true
+    else
+        echo "➡️  Keeping existing partition table."
+        create_table=false
+    fi
+else
+    echo "⚠️  No partition table found on $device"
+    read -p "❓ Create a new GPT partition table on $device? This will erase all data. [Y/n] " confirm
+    if [[ "$confirm" == [nN] ]]; then
+        echo "❌ Aborting. No changes made."
+        exit 1
+    fi
+    create_table=true
+fi
+
+if [[ "${create_table}" == true ]]; then
+    echo "🛠️  Creating GPT partition table and a single primary partition..."
+    sudo parted -s "$device" mklabel gpt
+    sudo parted -s -a optimal "$device" mkpart primary 0% 100%
+    sync
+    echo "✅ Partition table is ready"
+    echo "🌀 Informing kernel of partition changes..."
+    sudo partprobe "$device" || sudo udevadm settle
+    sleep 1
+fi
+
+PARTITION=$(wait_for_partition "$device")
+if [[ -z "${PARTITION}" ]]; then
+    echo "❌ Could not find partition on $device"
+    exit 1
+fi
+
+fstype=$(get_filesystem_type "$PARTITION")
+MAKE_FS=false
+FS_TYPE_ARG=""
+if [[ -n "$fstype" ]]; then
+    echo "✅ Detected existing filesystem: $fstype"
+    read -p "❓ Do you want to overwrite it with a new filesystem? This will erase all data. [y/N] " confirm
+    if [[ "$confirm" == [yY] ]]; then
+        prompt_for_filesystem_type
+    else
+        echo "➡️  Keeping existing filesystem. Continuing without changes."
+        FS_TYPE_ARG="$fstype"
+        MAKE_FS=false
+    fi
+else
+    echo "ℹ️  No filesystem detected on $PARTITION."
+    read -p "❓ Create new filesystem? [Y/n] " confirm
+    if [[ "$confirm" == [nN] ]]; then
+        echo "❌ Aborting. No filesystem will be created."
+        exit 1
+    fi
+    prompt_for_filesystem_type
+fi
+
+if [[ "${MAKE_FS}" == true ]]; then
+    echo "🧼 Creating $FS_TYPE_ARG filesystem on $PARTITION..."
+    case "$FS_TYPE_ARG" in
+        ext4)
+            sudo mkfs.ext4 -F "$PARTITION"
+            ;;
+        *)
+            echo "❌ Unsupported filesystem type: $FS_TYPE_ARG"
+            exit 1
+            ;;
+    esac
+    echo "✅ Filesystem created on $PARTITION"
+fi
+
+if [[ -n "$(sudo ls -A "$DATA_MOUNT")" ]]; then
+    echo "⚠️  $DATA_MOUNT is not empty."
+    read -p "❓ Remove all contents of $DATA_MOUNT before mounting? [y/N] " confirm
+    if [[ "$confirm" == [yY] ]]; then
+        echo "🧹 Removing existing contents..."
+        sudo rm -rf "${DATA_MOUNT:?}/"*
+        echo "✅ Directory cleaned"
+    else
+        read -p "❓ Mount device over existing contents anyway? [y/N] " confirm_mount
+        if [[ "$confirm_mount" == [yY] ]]; then
+            echo "➡️  Will mount over existing contents at $DATA_MOUNT"
+        else
+            echo "❌ Aborting. Mount point must be clean or explicitly allowed."
+            exit 1
+        fi
+    fi
+else
+    echo "✅ $DATA_MOUNT is empty and ready."
+fi
+
+read -p "❓ Proceed with mounting the device? [Y/n] " confirm_mount
+if [[ "$confirm_mount" == [nN] ]]; then
+    echo "❌ Aborting before mount."
+    exit 1
+fi
+
+sudo mount "$PARTITION" "$DATA_MOUNT"
+echo "✅ Mount complete: $PARTITION → $DATA_MOUNT"
+
+if [[ -n "$(sudo ls -A "$DATA_MOUNT")" ]]; then
+    echo "⚠️  Files exist on $DATA_MOUNT after mounting."
+    echo "❓ Choose what to remove:"
+    echo "   [a] All contents of $DATA_MOUNT"
+    echo "   [d] Only $DATA_MOUNT/database"
+    echo "   [s] Skip (do not delete anything)"
+    read -p "Your choice [a/d/s]? " cleanup_choice
+
+    if [[ "$cleanup_choice" =~ [aAdD] ]]; then
+        if ! mountpoint -q "$DATA_MOUNT"; then
+            echo "❌ $DATA_MOUNT is not a mountpoint! Aborting cleanup to avoid deleting files from the root filesystem."
+            exit 1
+        fi
+    fi
+
+    case "$cleanup_choice" in
+        a|A)
+            read -p "❗ Are you sure you want to permanently delete ALL contents of $DATA_MOUNT? [y/N] " confirm_all
+            if [[ "$confirm_all" == [yY] ]]; then
+                echo "🧹 Removing ALL contents of $DATA_MOUNT..."
+                sudo rm -rf "${DATA_MOUNT:?}/"*
+                echo "✅ All contents removed."
+            else
+                echo "❌ Skipped deletion of all contents."
+            fi
+            ;;
+        d|D)
+            if [[ -d "$DATA_MOUNT/database" ]]; then
+                read -p "❗ Are you sure you want to delete $DATA_MOUNT/database? [y/N] " confirm_db
+                if [[ "$confirm_db" == [yY] ]]; then
+                    echo "🧹 Removing $DATA_MOUNT/database..."
+                    sudo rm -rf "$DATA_MOUNT/database"
+                    echo "✅ database directory removed."
+                else
+                    echo "❌ Skipped deletion of database."
+                fi
+            else
+                echo "ℹ️  $DATA_MOUNT/database does not exist — nothing to remove."
+            fi
+            ;;
+        *)
+            echo "➡️  Skipping deletion."
+            ;;
+    esac
+fi
+
+if [[ "$no_fstab" == "true" ]]; then
+    echo "⏭️  Skipping fstab update (flag --no-fstab was set)."
+else
+    echo "📄 Checking for existing /etc/fstab entry for $PARTITION or $DATA_MOUNT..."
+    uuid=$(sudo blkid -s UUID -o value "$PARTITION")
+    label=$(sudo blkid -s LABEL -o value "$PARTITION")
+    if [[ -z "$uuid" && -z "$label" ]]; then
+        echo "⚠️  No UUID or LABEL found for $PARTITION — falling back to using device path in /etc/fstab."
+        device_ref="$PARTITION"
+    else
+        if [[ -n "$uuid" ]]; then
+            device_ref="UUID=$uuid"
+        else
+            device_ref="LABEL=$label"
+        fi
+    fi
+
+    if grep -Eq "^\s*(${device_ref}|${PARTITION})\s+${DATA_MOUNT}\s" /etc/fstab; then
+        echo "✅ Found existing fstab entry:"
+        grep -n -E "^\s*(${device_ref}|${PARTITION})\s+${DATA_MOUNT}\s" /etc/fstab
+        read -p "❓ Keep this fstab entry? [Y/n] " keep
+        if [[ "$keep" == [nN] ]]; then
+            echo "❌ Please edit /etc/fstab manually to remove or update the entry (see above for line number)."
+            exit 1
+        else
+            echo "✅ Keeping existing fstab entry."
+        fi
+    else
+        echo "ℹ️  No valid fstab entry found for $PARTITION at $DATA_MOUNT."
+        read -p "❓ Add new fstab entry to make mount persistent? [Y/n] " add
+        if [[ "$add" != [nN] ]]; then
+            echo "🧹 Removing any existing /etc/fstab entry for $DATA_MOUNT..."
+            sudo sed -i.bak -r "\|^[^#].+\s+$DATA_MOUNT\s+|d" /etc/fstab
+            echo "🔧 Adding fstab entry:"
+            fstab_line="$device_ref $DATA_MOUNT ext4 defaults,nofail,noatime 0 2"
+            echo "$fstab_line"
+            echo "$fstab_line" | sudo tee -a /etc/fstab >/dev/null
+            echo "✅ fstab updated"
+        else
+            echo "➡️  Skipping fstab update. Mount will not persist after reboot."
+        fi
+    fi
+fi
+
+echo "Creating device info on the mounted storage..."
+if [[ -x "${CACHE_SYS_INFO_SCRIPT}" ]]; then
+    sudo "${CACHE_SYS_INFO_SCRIPT}" \
+        --include "${CLIENT_ROOT}/etc/network.conf ${CLIENT_ROOT}/etc/location.conf ${CLIENT_ROOT}/etc/arecord.conf ${CLIENT_ROOT}/etc/i2c-sensors.conf"
+else
+    echo "ℹ️  cache-sys-info.sh not migrated yet; skipping storage metadata write."
+fi
+
+if [[ ! -f "$LOCATION_FILE" ]] ||
+    ! grep -q '^LATITUDE=' "$LOCATION_FILE" ||
+    ! grep -q '^LONGITUDE=' "$LOCATION_FILE"; then
+    echo
+    echo "WARNING: device location is not configured."
+    echo "The storage metadata was written, but it does not include a valid location."
+    echo "Run: set-location --latitude <lat> --longitude <lon>"
+    echo
+fi
+
+sudo chown -R sensos-admin:sensos-data "$DATA_MOUNT"
+sudo chmod -R 2775 "$DATA_MOUNT"
