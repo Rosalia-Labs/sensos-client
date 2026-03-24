@@ -9,11 +9,13 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${REPO_ROOT}}"
 PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
 OVERLAY_CHRONY_CONF="${CLIENT_ROOT}/overlay/etc/chrony.conf"
+OVERLAY_NFTABLES_CONF="${CLIENT_ROOT}/overlay/etc/nftables.conf"
 
 BOOT_CONFIG_FILE="/boot/firmware/config.txt"
 MODULES_FILE="/etc/modules"
 JOURNALD_CONF_FILE="/etc/systemd/journald.conf"
 CHRONY_CONF_FILE="/etc/chrony/chrony.conf"
+NFTABLES_CONF_FILE="/etc/nftables.conf"
 TIMEZONE_NAME="Etc/UTC"
 TIMEZONE_FILE="/usr/share/zoneinfo/${TIMEZONE_NAME}"
 
@@ -111,6 +113,15 @@ configure_chrony() {
     fi
 }
 
+configure_nftables() {
+    if [[ -f "${OVERLAY_NFTABLES_CONF}" ]]; then
+        ln -sfn "${OVERLAY_NFTABLES_CONF}" "${NFTABLES_CONF_FILE}"
+        log "linked nftables config to ${OVERLAY_NFTABLES_CONF}"
+    else
+        log "no overlay nftables config found; keeping host nftables configuration"
+    fi
+}
+
 configure_timezone() {
     [[ -f "${TIMEZONE_FILE}" ]] || die "timezone data not found at ${TIMEZONE_FILE}"
 
@@ -132,6 +143,7 @@ main() {
     configure_pi_hardware
     configure_journald
     configure_chrony
+    configure_nftables
     configure_timezone
 }
 

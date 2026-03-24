@@ -11,6 +11,7 @@ PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
 OVERLAY_SYSTEMD_DIR="${CLIENT_ROOT}/overlay/systemd"
 
 HOST_BASELINE_UNITS=(
+    nftables.service
     ssh.service
     vnstat.service
 )
@@ -44,6 +45,11 @@ require_systemctl() {
 
 enable_host_unit_if_present() {
     local unit_name="$1"
+
+    if [[ "${unit_name}" == "nftables.service" && ! -f /etc/nftables.conf ]]; then
+        log "nftables config not present; skipped ${unit_name}"
+        return
+    fi
 
     if systemctl list-unit-files --type=service --type=timer 2>/dev/null | awk '{print $1}' | grep -Fxq "${unit_name}"; then
         systemctl enable "${unit_name}"
