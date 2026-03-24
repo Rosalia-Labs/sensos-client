@@ -38,6 +38,17 @@ def current_time_display() -> str:
     return proc.stdout.strip()
 
 
+def current_timezone_name() -> str:
+    return timedatectl_value("Timezone", "UTC")
+
+
+def current_local_time_display() -> str:
+    proc = run(["date", "+%A, %B %d, %Y at %I:%M:%S %p %Z"])
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or "failed to format local time")
+    return proc.stdout.strip()
+
+
 def chrony_status() -> list[str]:
     issues = []
 
@@ -155,9 +166,12 @@ def restart_chrony() -> None:
 
 
 def main() -> int:
+    timezone_name = current_timezone_name()
+
     print("Current device time:")
-    print(f"  {current_time_display()}")
-    print("  Device timezone: UTC")
+    print(f"  Local time: {current_local_time_display()}")
+    print(f"  System timezone: {timezone_name}")
+    print(f"  UTC time: {current_time_display()}")
     print("Time sync status:")
     for line in sync_status_lines():
         print(line)
@@ -184,7 +198,7 @@ def main() -> int:
     print("Leave any field blank to keep the current value.")
     print()
 
-    entry_tz = choose_timezone("UTC")
+    entry_tz = choose_timezone(timezone_name)
     entry_now = utc_now.replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo(entry_tz))
 
     try:
@@ -224,8 +238,9 @@ def main() -> int:
 
     print()
     print("Updated device time:")
-    print(f"  {current_time_display()}")
-    print("  Device timezone: UTC")
+    print(f"  Local time: {current_local_time_display()}")
+    print(f"  System timezone: {current_timezone_name()}")
+    print(f"  UTC time: {current_time_display()}")
     print("Time sync status:")
     for line in sync_status_lines():
         print(line)
