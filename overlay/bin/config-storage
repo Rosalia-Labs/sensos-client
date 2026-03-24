@@ -24,6 +24,30 @@ register_option --no-fstab no_fstab "Skip adding fstab entry (non-persistent mou
 
 parse_switches "$script_name" "$@"
 
+ensure_data_layout() {
+    local dir_path
+    local -a required_dirs=(
+        "${CLIENT_ROOT}/data"
+        "${CLIENT_ROOT}/data/audio_recordings"
+        "${CLIENT_ROOT}/data/audio_recordings/queued"
+        "${CLIENT_ROOT}/data/audio_recordings/processed"
+        "${CLIENT_ROOT}/data/birdnet"
+        "${CLIENT_ROOT}/data/microenv"
+        "${CLIENT_ROOT}/etc"
+        "${CLIENT_ROOT}/log"
+    )
+
+    echo "🔧 Ensuring SensOS data layout and permissions..."
+
+    for dir_path in "${required_dirs[@]}"; do
+        sudo mkdir -p "${dir_path}"
+    done
+
+    sudo chown -R sensos-admin:sensos-data "${CLIENT_ROOT}/data" "${CLIENT_ROOT}/etc" "${CLIENT_ROOT}/log"
+    sudo chmod -R g+ws "${CLIENT_ROOT}/data" "${CLIENT_ROOT}/etc" "${CLIENT_ROOT}/log"
+    sudo chmod -R +rX "${CLIENT_ROOT}/data" "${CLIENT_ROOT}/etc" "${CLIENT_ROOT}/log"
+}
+
 if [[ -z "${device}" ]]; then
     echo "❌ --device must be specified (e.g., /dev/sda, /dev/nvme0n1, etc.)."
     echo
@@ -328,3 +352,4 @@ fi
 
 sudo chown -R sensos-admin:sensos-data "$DATA_MOUNT"
 sudo chmod -R 2775 "$DATA_MOUNT"
+ensure_data_layout
