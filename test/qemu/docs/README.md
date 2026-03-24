@@ -91,7 +91,24 @@ With QEMU user networking, the guest can usually reach macOS-hosted services at:
 10.0.2.2
 ```
 
-That is the address to use from the guest when testing a config server running on the host.
+That is the address to use from the guest when testing a config server running
+on the host.
+
+If the real SensOS server is remote, you can forward its config port to your
+local machine first, then let the guest reach that forwarded port through
+`10.0.2.2`.
+
+Example from the macOS host:
+
+```bash
+ssh -L 8765:localhost:8765 <server>
+```
+
+Then inside the guest:
+
+```bash
+config-network --config-server 10.0.2.2 --network testing
+```
 
 ## Installer display
 
