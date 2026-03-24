@@ -15,6 +15,7 @@ libftdi1-2
 lsof
 libsndfile1
 nethogs
+network-manager
 nftables
 openresolv
 parted

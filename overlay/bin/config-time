@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+import os
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+CHRONY_CONF = Path("/etc/chrony/chrony.conf")
+SENSOS_CHRONY_CONF = Path(os.environ.get("SENSOS_CLIENT_ROOT", "/sensos")) / "etc" / "chrony.conf"
+
+
+def run(cmd):
+    return subprocess.run(cmd, text=True, capture_output=True)
+
+
+def timedatectl_value(key: str, default: str = "") -> str:
+    proc = run(["timedatectl", "show", "-p", key, "--value"])
+    if proc.returncode != 0:
+        return default
+    return proc.stdout.strip() or default
+
+
+def current_utc_time() -> datetime:
+    proc = run(["date", "-u", "+%Y-%m-%d %H:%M:%S"])
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or "failed to read current time")
+    return datetime.strptime(proc.stdout.strip(), "%Y-%m-%d %H:%M:%S")
+
+
+def current_time_display() -> str:
+    proc = run(["date", "-u", "+%A, %B %d, %Y at %I:%M:%S %p UTC"])
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or "failed to format current time")
+    return proc.stdout.strip()
+
+
+def chrony_status() -> list[str]:
+    issues = []
+
+    if run(["systemctl", "list-unit-files", "chrony.service"]).returncode != 0:
+        issues.append("chrony service is not installed.")
+        return issues
+
+    if not SENSOS_CHRONY_CONF.exists():
+        issues.append(f"missing expected SensOS chrony config at {SENSOS_CHRONY_CONF}.")
+
+    if not CHRONY_CONF.exists():
+        issues.append(f"missing active chrony config at {CHRONY_CONF}.")
+    elif CHRONY_CONF.is_symlink():
+        target = CHRONY_CONF.resolve(strict=False)
+        if target != SENSOS_CHRONY_CONF:
+            issues.append(f"{CHRONY_CONF} points to {target}, not {SENSOS_CHRONY_CONF}.")
+
+    enabled = run(["systemctl", "is-enabled", "chrony"])
+    if enabled.returncode != 0 or enabled.stdout.strip() not in {"enabled", "static"}:
+        issues.append("chrony service is not enabled.")
+
+    active = run(["systemctl", "is-active", "chrony"])
+    if active.returncode != 0 or active.stdout.strip() != "active":
+        issues.append("chrony service is not active.")
+
+    return issues
+
+
+def sync_status_lines() -> list[str]:
+    return [
+        f"  System clock synchronized: {timedatectl_value('SystemClockSynchronized', 'unknown')}",
+        f"  NTP synchronized: {timedatectl_value('NTPSynchronized', 'unknown')}",
+    ]
+
+
+def ask(prompt: str, default: str) -> str:
+    raw = input(f"{prompt} [{default}]: ").strip()
+    return raw or default
+
+
+def ask_yes_no(prompt: str, default_yes: bool = True) -> bool:
+    suffix = "Y/n" if default_yes else "y/N"
+    raw = input(f"{prompt} [{suffix}]: ").strip().lower()
+    if not raw:
+        return default_yes
+    return raw in {"y", "yes"}
+
+
+def choose_timezone(default_tz: str) -> str:
+    common = [
+        "America/New_York",
+        "America/Chicago",
+        "America/Denver",
+        "America/Los_Angeles",
+        "America/Anchorage",
+        "Pacific/Honolulu",
+        "UTC",
+    ]
+    print("Choose a timezone:")
+    for idx, tz in enumerate(common, start=1):
+        marker = " (current)" if tz == default_tz else ""
+        print(f"  {idx}. {tz}{marker}")
+    print(f"  {len(common) + 1}. Search full timezone list")
+
+    default_choice = "1" if default_tz not in common else str(common.index(default_tz) + 1)
+    choice = ask("Timezone choice", default_choice)
+    if choice.isdigit():
+        num = int(choice)
+        if 1 <= num <= len(common):
+            return common[num - 1]
+        if num != len(common) + 1:
+            print("Invalid choice, keeping current timezone.")
+            return default_tz
+    else:
+        return choice
+
+    proc = run(["timedatectl", "list-timezones"])
+    if proc.returncode != 0:
+        print("Could not list timezones; keeping current timezone.")
+        return default_tz
+
+    all_timezones = proc.stdout.splitlines()
+    while True:
+        search = ask("Enter part of timezone name to search", default_tz.split("/")[0])
+        matches = [tz for tz in all_timezones if search.lower() in tz.lower()]
+        if not matches:
+            print("No matches found. Try again.")
+            continue
+        matches = matches[:20]
+        print("Matches:")
+        for idx, tz in enumerate(matches, start=1):
+            print(f"  {idx}. {tz}")
+        selected = ask("Pick timezone number", "1")
+        if selected.isdigit():
+            num = int(selected)
+            if 1 <= num <= len(matches):
+                return matches[num - 1]
+        print("Invalid selection. Try again.")
+
+
+def set_local_time(dt: datetime) -> None:
+    proc = run(["sudo", "timedatectl", "set-time", dt.strftime("%Y-%m-%d %H:%M:%S")])
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or "failed to set time")
+
+
+def ensure_utc_timezone() -> None:
+    proc = run(["sudo", "timedatectl", "set-timezone", "UTC"])
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or "failed to set timezone to UTC")
+
+
+def restart_chrony() -> None:
+    run(["sudo", "systemctl", "restart", "chrony"])
+
+
+def main() -> int:
+    print("Current device time:")
+    print(f"  {current_time_display()}")
+    print("  Device timezone: UTC")
+    print("Time sync status:")
+    for line in sync_status_lines():
+        print(line)
+    issues = chrony_status()
+    if issues:
+        print("Chrony configuration issues:")
+        for issue in issues:
+            print(f"  - {issue}")
+    print()
+
+    if ask_yes_no("Does this look correct?", default_yes=True):
+        print("No changes made.")
+        return 0
+
+    try:
+        utc_now = current_utc_time()
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print()
+    print("Enter the corrected date/time in the timezone where you are standing.")
+    print("The device itself will remain configured for UTC.")
+    print("Leave any field blank to keep the current value.")
+    print()
+
+    entry_tz = choose_timezone("UTC")
+    entry_now = utc_now.replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo(entry_tz))
+
+    try:
+        entered_dt = datetime(
+            int(ask("Year", str(entry_now.year))),
+            int(ask("Month", str(entry_now.month))),
+            int(ask("Day", str(entry_now.day))),
+            int(ask("Hour (24-hour)", str(entry_now.hour))),
+            int(ask("Minute", str(entry_now.minute))),
+            int(ask("Second", str(entry_now.second))),
+            tzinfo=ZoneInfo(entry_tz),
+        )
+    except ValueError as exc:
+        print(f"Invalid date/time: {exc}", file=sys.stderr)
+        return 1
+
+    new_dt = entered_dt.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+
+    print()
+    print("New settings:")
+    print(f"  Entered timezone: {entry_tz}")
+    print(f"  Entered local time: {entered_dt.strftime('%A, %B %d, %Y at %I:%M:%S %p %Z')}")
+    print(f"  Device UTC time to set: {new_dt.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    print()
+
+    if not ask_yes_no("Apply these settings?", default_yes=True):
+        print("No changes made.")
+        return 0
+
+    try:
+        ensure_utc_timezone()
+        set_local_time(new_dt)
+        restart_chrony()
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print()
+    print("Updated device time:")
+    print(f"  {current_time_display()}")
+    print("  Device timezone: UTC")
+    print("Time sync status:")
+    for line in sync_status_lines():
+        print(line)
+    issues = chrony_status()
+    if issues:
+        print("Chrony configuration issues:")
+        for issue in issues:
+            print(f"  - {issue}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -52,8 +52,6 @@ def parse_args():
         (["--wg-endpoint"], {"help": "WireGuard endpoint as IP[:port] (optional override)", "dest": "wg_endpoint"}),
         (["--wg-keepalive"], {"help": "WireGuard persistent keepalive interval (default: disabled=0)", "dest": "wg_keepalive", "type": int, "default": 0}),
         (["--disable-ssh-passwords"], {"action": "store_true", "help": "Disable SSH password authentication (default: enabled)", "dest": "disable_ssh_passwords"}),
-        (["--ssh-tunnel-port"], {"help": "SSH port for clients to use when connecting to the server (default: 2345)", "dest": "ssh_tunnel_port", "type": int, "default": 2345}),
-        (["--ssh-tunnel-ip"], {"help": "Server hostname or IP for SSH access (default: same as WireGuard endpoint/server)", "dest": "ssh_tunnel_ip"}),
         (["--note"], {"help": "Optional note or description to register with the device (default: empty)", "dest": "note"}),
         (["--force"], {"action": "store_true", "help": "Force overwrite of existing files and settings", "dest": "force"}),
     ]
@@ -372,8 +370,6 @@ def write_client_settings(args, server_wg_ip, client_wg_ip, endpoint_ip, wg_port
     if not isinstance(wg_port, int) or wg_port <= 0:
         sys.exit("Error: invalid WG_ENDPOINT_PORT; expected positive integer.")
 
-    ssh_tunnel_ip = args.ssh_tunnel_ip or endpoint_ip
-
     content = (
         f"SERVER_WG_IP={server_wg_ip}\n"
         f"CLIENT_WG_IP={client_wg_ip}\n"
@@ -381,8 +377,6 @@ def write_client_settings(args, server_wg_ip, client_wg_ip, endpoint_ip, wg_port
         f"NETWORK_NAME={args.network}\n"
         f"WG_ENDPOINT_IP={endpoint_ip}\n"
         f"WG_ENDPOINT_PORT={wg_port}\n"
-        f"SSH_TUNNEL_IP={ssh_tunnel_ip}\n"
-        f"SSH_TUNNEL_PORT={args.ssh_tunnel_port}\n"
     )
     write_file(settings_file, content, mode=0o644, user="sensos-admin")
     print(f"✅ Client network settings written to {settings_file}")

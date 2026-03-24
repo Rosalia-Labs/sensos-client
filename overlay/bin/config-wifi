@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+set -euo pipefail
+
+SCRIPT_FILE="$(realpath "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_FILE}")" && pwd)"
+OVERLAY_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${OVERLAY_ROOT}}"
+
+SCRIPT_NAME="$(basename "$0")"
+NETWORK_CONF="${CLIENT_ROOT}/etc/network.conf"
+PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
+
+[[ -f "${PARSE_SWITCHES_LIB}" ]] || {
+    echo "❌ Missing parse-switches library at ${PARSE_SWITCHES_LIB}" >&2
+    exit 1
+}
+source "${PARSE_SWITCHES_LIB}"
+
+if [[ "$(id -un)" != "sensos-admin" ]]; then
+    echo "ERROR: this script must be run as sensos-admin." >&2
+    exit 1
+fi
+
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || {
+        echo "ERROR: missing required command: $1" >&2
+        exit 1
+    }
+}
+
+read_network_value() {
+    local wanted_key="$1"
+    local key value
+
+    [[ -f "${NETWORK_CONF}" ]] || return 0
+
+    while IFS='=' read -r key value; do
+        [[ -n "${key}" ]] || continue
+        if [[ "${key}" == "${wanted_key}" ]]; then
+            printf '%s\n' "${value}"
+            return 0
+        fi
+    done < <(grep -Ev '^\s*(#|$)' "${NETWORK_CONF}" || true)
+}
+
+clear_tc_limits() {
+    local dev="$1"
+    sudo tc qdisc del dev "${dev}" root 2>/dev/null || true
+    sudo tc qdisc del dev "${dev}" ingress 2>/dev/null || true
+}
+
+apply_tc_limits() {
+    local dev="$1"
+    local up_kbit="${2:-}"
+    local down_kbit="${3:-}"
+
+    if [[ -n "${up_kbit}" ]]; then
+        echo "Applying egress cap ${up_kbit} kbit on ${dev}..."
+        sudo tc qdisc del dev "${dev}" root 2>/dev/null || true
+        sudo tc qdisc add dev "${dev}" root tbf rate "${up_kbit}kbit" burst 32kbit latency 400ms
+    fi
+
+    if [[ -n "${down_kbit}" ]]; then
+        echo "Applying ingress cap ${down_kbit} kbit on ${dev}..."
+        sudo tc qdisc del dev "${dev}" handle ffff: ingress 2>/dev/null || true
+        sudo tc qdisc add dev "${dev}" handle ffff: ingress
+        sudo tc filter add dev "${dev}" parent ffff: protocol all u32 \
+            match u32 0 0 police rate "${down_kbit}kbit" burst 32k drop flowid :1
+    fi
+}
+
+register_option --ssid ssid "Wi-Fi SSID (required)" ""
+register_option --password password "Wi-Fi password for WPA-PSK networks" ""
+register_option --iface iface "Wi-Fi interface name" "wlan0"
+register_option --start start_now "Immediately bring Wi-Fi online after config" "false"
+register_option --hidden hidden "Mark SSID as hidden" "false"
+register_option --limit-up-kbit limit_up_kbit "Optional egress cap in kbit" ""
+register_option --limit-down-kbit limit_down_kbit "Optional ingress cap in kbit" ""
+
+parse_switches "${SCRIPT_NAME}" "$@"
+
+[[ -n "${ssid}" ]] || {
+    echo "ERROR: --ssid must be specified." >&2
+    exit 1
+}
+
+require_command nmcli
+
+CONNECTIVITY_MODE="$(read_network_value CONNECTIVITY_MODE)"
+BANDWIDTH_POLICY="$(read_network_value BANDWIDTH_POLICY)"
+CONNECTIVITY_MODE="${CONNECTIVITY_MODE:-manual}"
+BANDWIDTH_POLICY="${BANDWIDTH_POLICY:-open}"
+
+NM_CON_NAME="sensos-wifi-${ssid}"
+
+if nmcli -t -f NAME con show | grep -Fxq "${NM_CON_NAME}"; then
+    echo "Updating Wi-Fi connection '${NM_CON_NAME}' on iface '${iface}'..."
+else
+    echo "Creating Wi-Fi connection '${NM_CON_NAME}' on iface '${iface}'..."
+    sudo nmcli con add type wifi ifname "${iface}" con-name "${NM_CON_NAME}" ssid "${ssid}"
+fi
+
+sudo nmcli con mod "${NM_CON_NAME}" connection.id "${NM_CON_NAME}" || true
+sudo nmcli con mod "${NM_CON_NAME}" connection.interface-name "${iface}" || true
+sudo nmcli con mod "${NM_CON_NAME}" 802-11-wireless.ssid "${ssid}" || true
+sudo nmcli con mod "${NM_CON_NAME}" 802-11-wireless.mode infrastructure || true
+sudo nmcli con mod "${NM_CON_NAME}" 802-11-wireless.hidden "$( [[ "${hidden,,}" == "true" ]] && echo yes || echo no )" || true
+
+if [[ -n "${password}" ]]; then
+    sudo nmcli con mod "${NM_CON_NAME}" 802-11-wireless-security.key-mgmt wpa-psk || true
+    sudo nmcli con mod "${NM_CON_NAME}" 802-11-wireless-security.psk "${password}" || true
+else
+    sudo nmcli con mod "${NM_CON_NAME}" 802-11-wireless-security.key-mgmt none || true
+fi
+
+sudo nmcli con mod "${NM_CON_NAME}" ipv4.method auto || true
+sudo nmcli con mod "${NM_CON_NAME}" ipv6.method ignore || true
+
+if [[ "${CONNECTIVITY_MODE}" == "always" ]]; then
+    sudo nmcli con mod "${NM_CON_NAME}" connection.autoconnect yes
+    echo "Autoconnect enabled (CONNECTIVITY_MODE=always)."
+else
+    sudo nmcli con mod "${NM_CON_NAME}" connection.autoconnect no
+    echo "Autoconnect disabled (CONNECTIVITY_MODE=${CONNECTIVITY_MODE})."
+fi
+
+if [[ -z "${limit_up_kbit}" && -z "${limit_down_kbit}" ]]; then
+    if [[ "${BANDWIDTH_POLICY}" == "restricted" ]]; then
+        limit_up_kbit="32"
+        limit_down_kbit="256"
+        echo "BANDWIDTH_POLICY=restricted -> applying defaults: up=${limit_up_kbit} kbit, down=${limit_down_kbit} kbit"
+    else
+        echo "BANDWIDTH_POLICY=${BANDWIDTH_POLICY} -> clearing any existing traffic caps on ${iface}"
+        clear_tc_limits "${iface}"
+    fi
+else
+    echo "CLI limits provided -> overriding policy (up='${limit_up_kbit}', down='${limit_down_kbit}')."
+fi
+
+if [[ -n "${limit_up_kbit}" || -n "${limit_down_kbit}" ]]; then
+    require_command tc
+    apply_tc_limits "${iface}" "${limit_up_kbit}" "${limit_down_kbit}"
+fi
+
+if command -v vnstat >/dev/null 2>&1; then
+    if ip link show "${iface}" >/dev/null 2>&1; then
+        if ! vnstat -i "${iface}" --oneline >/dev/null 2>&1; then
+            if vnstat --help 2>/dev/null | grep -q -- '--create'; then
+                echo "Creating vnStat database for ${iface}..."
+                sudo vnstat --create -i "${iface}"
+            else
+                echo "Adding vnStat interface ${iface}..."
+                sudo vnstat --add -i "${iface}"
+            fi
+        fi
+        if command -v systemctl >/dev/null 2>&1; then
+            sudo systemctl enable --now vnstat >/dev/null 2>&1 || true
+        fi
+    else
+        echo "WARNING: interface ${iface} not present yet; skipping vnStat registration." >&2
+    fi
+else
+    echo "WARNING: vnstat not installed; cannot track usage on ${iface}." >&2
+fi
+
+if [[ "${start_now}" == "true" ]]; then
+    echo "Bringing up Wi-Fi connection '${NM_CON_NAME}' on '${iface}'..."
+    if ! sudo nmcli -w 45 con up "${NM_CON_NAME}" ifname "${iface}"; then
+        echo "WARNING: failed to start Wi-Fi connection '${NM_CON_NAME}' (ifname=${iface})." >&2
+    fi
+fi
+
+echo "Done."
+echo "Manage Wi-Fi with:"
+echo "  sudo nmcli con up   \"${NM_CON_NAME}\""
+echo "  sudo nmcli con down \"${NM_CON_NAME}\""

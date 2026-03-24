@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+import importlib.util
+import os
+import sys
+
+import requests
+
+SCRIPT_FILE = os.path.realpath(__file__)
+SCRIPT_DIR = os.path.dirname(SCRIPT_FILE)
+OVERLAY_ROOT = os.path.dirname(SCRIPT_DIR)
+CLIENT_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", OVERLAY_ROOT)
+UTILS_FILE = os.path.join(OVERLAY_ROOT, "libexec", "utils.py")
+
+if not os.path.isfile(UTILS_FILE):
+    raise RuntimeError(f"Missing utils.py at {UTILS_FILE}")
+
+UTILS_SPEC = importlib.util.spec_from_file_location("sensos_overlay_utils", UTILS_FILE)
+UTILS_MODULE = importlib.util.module_from_spec(UTILS_SPEC)
+assert UTILS_SPEC.loader is not None
+UTILS_SPEC.loader.exec_module(UTILS_MODULE)
+
+for name in dir(UTILS_MODULE):
+    if not name.startswith("_"):
+        globals()[name] = getattr(UTILS_MODULE, name)
+
+LOCATION_CONF = os.path.join(CLIENT_ROOT, "etc", "location.conf")
+
+
+def send_location(server_ip, port, wg_ip, api_password, latitude, longitude):
+    payload = {
+        "wg_ip": wg_ip,
+        "latitude": latitude,
+        "longitude": longitude,
+    }
+    url = f"http://{server_ip}:{port}/set-peer-location"
+    headers = {
+        "Authorization": f"Basic {get_basic_auth(api_password)}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=5)
+    except Exception as exc:
+        print(f"❌ Request failed: {exc}", file=sys.stderr)
+        return
+
+    if response.status_code == 200:
+        print(f"✅ Location updated to ({latitude}, {longitude}) for {wg_ip}.")
+        return
+
+    print(f"❌ Server responded with {response.status_code}: {response.text}", file=sys.stderr)
+
+
+def write_local_location_conf(latitude, longitude):
+    create_dir(os.path.dirname(LOCATION_CONF), owner="sensos-admin", group="sensos-data", mode=0o2775)
+    content = f"LATITUDE={latitude}\nLONGITUDE={longitude}\n"
+    write_file(LOCATION_CONF, content, mode=0o664, user="sensos-admin", group="sensos-data")
+    print(f"✅ Location written to {LOCATION_CONF}")
+
+
+def main():
+    arg_defs = [
+        (["--latitude"], {"type": float, "help": "Latitude"}),
+        (["--longitude"], {"type": float, "help": "Longitude"}),
+        (["--config-server"], {"help": "Override config server hostname or IP"}),
+        (["--port"], {"help": "Override server port"}),
+    ]
+    args = parse_args_with_defaults(arg_defs, ["global", "set_location"])
+
+    if args.latitude is None or args.longitude is None:
+        print("❌ Both --latitude and --longitude must be provided.", file=sys.stderr)
+        return 1
+
+    write_local_location_conf(args.latitude, args.longitude)
+
+    conf = read_network_conf()
+    server_ip = args.config_server or conf.get("SERVER_WG_IP")
+    port = args.port or conf.get("SERVER_PORT") or DEFAULT_PORT
+    wg_ip = conf.get("CLIENT_WG_IP")
+
+    if not server_ip:
+        print("ℹ️ No config server configured; saved location locally only.")
+        return 0
+
+    if not wg_ip:
+        print(f"❌ Missing CLIENT_WG_IP in {NETWORK_CONF}.", file=sys.stderr)
+        return 1
+
+    api_password = read_api_password()
+    if not api_password:
+        print("❌ API password required to sync location to the server.", file=sys.stderr)
+        return 1
+
+    send_location(server_ip, port, wg_ip, api_password, args.latitude, args.longitude)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

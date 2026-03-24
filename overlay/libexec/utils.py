@@ -71,6 +71,13 @@ def remove_file(path):
     privileged_shell(f"rm -f {shlex.quote(str(path))}", silent=True)
 
 
+def create_dir(path, owner="root", group=None, mode=0o755):
+    group = group or owner
+    privileged_shell(f"mkdir -p {shlex.quote(str(path))}", silent=True)
+    privileged_shell(f"chmod {oct(mode)[2:]} {shlex.quote(str(path))}", silent=True)
+    privileged_shell(f"chown {owner}:{group} {shlex.quote(str(path))}", silent=True)
+
+
 def read_file(filepath):
     output, rc = privileged_shell(f"cat {shlex.quote(str(filepath))}", silent=True)
     return output.strip() if output else None
@@ -123,6 +130,34 @@ def parse_args_with_defaults(arg_defs, default_sections):
             kwargs["default"] = defaults[default_key]
         parser.add_argument(*args, **kwargs)
     return parser.parse_args()
+
+
+def read_kv_config(path):
+    config = {}
+    if not os.path.exists(path):
+        return config
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            config[key.strip()] = val.strip()
+    return config
+
+
+def read_network_conf():
+    if not os.path.exists(NETWORK_CONF):
+        print(f"❌ {NETWORK_CONF} not found", file=sys.stderr)
+        return {}
+    return read_kv_config(NETWORK_CONF)
+
+
+def read_api_password():
+    if not os.path.exists(API_PASSWORD_FILE):
+        print("❌ API password file missing", file=sys.stderr)
+        return None
+    return read_file(API_PASSWORD_FILE)
 
 
 def validate_api_password(config_server, port, api_password):
