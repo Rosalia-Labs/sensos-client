@@ -11,7 +11,6 @@ PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
 OVERLAY_ROOT="${CLIENT_ROOT}/overlay"
 
 OVERLAY_BIN_DIR="${OVERLAY_ROOT}/bin"
-OVERLAY_LIBEXEC_DIR="${OVERLAY_ROOT}/libexec"
 OVERLAY_SYSTEMD_DIR="${OVERLAY_ROOT}/systemd"
 
 HOST_BIN_DIR="/usr/local/bin"
@@ -34,7 +33,6 @@ require_inputs() {
     [[ -x "${PRECHECK_SCRIPT}" ]] || die "missing or non-executable preflight script: ${PRECHECK_SCRIPT}"
     [[ -d "${OVERLAY_ROOT}" ]] || die "missing overlay directory: ${OVERLAY_ROOT}"
     [[ -d "${OVERLAY_BIN_DIR}" ]] || die "missing overlay bin directory: ${OVERLAY_BIN_DIR}"
-    [[ -d "${OVERLAY_LIBEXEC_DIR}" ]] || die "missing overlay libexec directory: ${OVERLAY_LIBEXEC_DIR}"
     [[ -d "${OVERLAY_SYSTEMD_DIR}" ]] || die "missing overlay systemd directory: ${OVERLAY_SYSTEMD_DIR}"
 }
 
@@ -83,9 +81,7 @@ main() {
     run_preflight
     ensure_host_dirs
     ensure_executable_files "${OVERLAY_BIN_DIR}"
-    ensure_executable_files "${OVERLAY_LIBEXEC_DIR}"
     symlink_dir_entries "${OVERLAY_BIN_DIR}" "${HOST_BIN_DIR}"
-    symlink_dir_entries "${OVERLAY_LIBEXEC_DIR}" "${HOST_BIN_DIR}"
     symlink_dir_entries "${OVERLAY_SYSTEMD_DIR}" "${HOST_SYSTEMD_DIR}"
     reload_systemd
 }
