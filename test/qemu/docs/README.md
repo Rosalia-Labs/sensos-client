@@ -110,6 +110,18 @@ Then inside the guest:
 config-network --config-server 10.0.2.2 --network testing
 ```
 
+After install, run the deployed config commands as `sensos-admin`, for example:
+
+```bash
+sudo -i -u sensos-admin
+```
+
+or:
+
+```bash
+sudo -u sensos-admin config-<script>
+```
+
 ## Installer display
 
 The launcher attaches a virtio GPU plus USB keyboard and tablet so the Debian installer appears in the QEMU window on macOS. If you ever land in the QEMU monitor instead of the guest display, try:
