@@ -122,7 +122,7 @@ show_usage() {
     for opt in "${keys[@]}"; do
         varname="${opt#--}"
         safe_varname="${varname//-/_}"
-        default="${__cli_options_defaults[$safe_varname]}"
+        default="${__cli_options_defaults[$safe_varname]-}"
         help="${__cli_options_help[$opt]}"
 
         hint=""
