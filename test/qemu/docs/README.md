@@ -40,6 +40,33 @@ test/qemu/run-debian-trixie-arm64 run
 
 The `run` command uses `-snapshot`, so guest disk changes are discarded when QEMU exits.
 
+## Guest bootstrap
+
+The stock Debian guest does not include `git` or `sudo`, so there is a small
+one-time bootstrap step inside the VM before cloning this repo and running
+`./install`.
+
+As `root` in the guest:
+
+```bash
+apt-get update
+apt-get install -y git sudo
+usermod -aG sudo <bootstrap-user>
+```
+
+Then log in again as that bootstrap user and continue with the normal client
+flow:
+
+```bash
+git clone <repo-url>
+cd sensos-client
+./install
+```
+
+Because the QEMU helper runs the guest with `-snapshot`, you need to repeat
+this bootstrap on each disposable `run` boot unless you bake it into the base
+image during the `install` phase.
+
 ## Data disk
 
 The helper always attaches a second virtual disk for testing `config-storage`.
