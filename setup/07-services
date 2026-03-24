@@ -53,6 +53,13 @@ enable_host_unit_if_present() {
 
     if systemctl list-unit-files --type=service --type=timer 2>/dev/null | awk '{print $1}' | grep -Fxq "${unit_name}"; then
         systemctl enable "${unit_name}"
+        if systemctl is-active --quiet "${unit_name}"; then
+            systemctl restart "${unit_name}"
+            log "restarted host unit ${unit_name}"
+        else
+            systemctl start "${unit_name}"
+            log "started host unit ${unit_name}"
+        fi
         log "enabled host unit ${unit_name}"
     else
         log "host unit not present; skipped ${unit_name}"
