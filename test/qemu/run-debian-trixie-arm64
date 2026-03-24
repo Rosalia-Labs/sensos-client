@@ -15,11 +15,13 @@ BASE_IMAGE="${SENSOS_QEMU_BASE_IMAGE:-${IMAGE_DIR}/debian-trixie-arm64-base.qcow
 INSTALLER_ISO="${SENSOS_QEMU_INSTALLER_ISO:-${ISO_DIR}/debian-trixie-arm64-netinst.iso}"
 FIRMWARE_CODE="${SENSOS_QEMU_FIRMWARE_CODE:-/opt/local/share/qemu/edk2-aarch64-code.fd}"
 FIRMWARE_VARS="${SENSOS_QEMU_FIRMWARE_VARS:-${IMAGE_DIR}/edk2-arm64-vars.fd}"
+DATA_IMAGE="${SENSOS_QEMU_DATA_IMAGE:-${IMAGE_DIR}/debian-trixie-arm64-data.qcow2}"
 
 SSH_FORWARD_PORT="${SENSOS_QEMU_SSH_PORT:-2222}"
 MEMORY_MB="${SENSOS_QEMU_MEMORY_MB:-4096}"
 CPU_COUNT="${SENSOS_QEMU_CPU_COUNT:-4}"
 DISK_SIZE="${SENSOS_QEMU_DISK_SIZE:-20G}"
+DATA_DISK_SIZE="${SENSOS_QEMU_DATA_DISK_SIZE:-10G}"
 
 log() {
     printf '[test/qemu/run-debian-trixie-arm64] %s\n' "$*"
@@ -49,10 +51,12 @@ Environment overrides:
   SENSOS_QEMU_INSTALLER_ISO
   SENSOS_QEMU_FIRMWARE_CODE
   SENSOS_QEMU_FIRMWARE_VARS
+  SENSOS_QEMU_DATA_IMAGE
   SENSOS_QEMU_SSH_PORT
   SENSOS_QEMU_MEMORY_MB
   SENSOS_QEMU_CPU_COUNT
   SENSOS_QEMU_DISK_SIZE
+  SENSOS_QEMU_DATA_DISK_SIZE
 EOF
 }
 
@@ -95,6 +99,13 @@ ensure_base_image() {
     fi
 }
 
+ensure_data_image() {
+    if [[ ! -f "${DATA_IMAGE}" ]]; then
+        log "creating data image ${DATA_IMAGE} (${DATA_DISK_SIZE})"
+        qemu-img create -f qcow2 "${DATA_IMAGE}" "${DATA_DISK_SIZE}" >/dev/null
+    fi
+}
+
 require_base_image() {
     [[ -f "${BASE_IMAGE}" ]] || die "base image not found at ${BASE_IMAGE}; run '$(basename "$0") install' first"
 }
@@ -108,6 +119,7 @@ print_connection_hints() {
 
 Artifact root: ${ARTIFACT_ROOT}
 Base image:    ${BASE_IMAGE}
+Data image:    ${DATA_IMAGE}
 SSH forward:   ssh -p ${SSH_FORWARD_PORT} <user>@127.0.0.1
 Host access:   guest can reach macOS services at 10.0.2.2
 Repo path:     ${REPO_ROOT}
@@ -118,9 +130,13 @@ EOF
 run_qemu() {
     local mode="$1"
     shift
+    local -a extra_drives=()
 
     log "launching QEMU in ${mode} mode"
     print_connection_hints
+
+    ensure_data_image
+    extra_drives+=(-drive "if=virtio,file=${DATA_IMAGE},format=qcow2")
 
     qemu-system-aarch64 \
         -machine virt,accel=hvf \
@@ -137,6 +153,7 @@ run_qemu() {
         -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${SSH_FORWARD_PORT}-:22" \
         -drive "if=pflash,format=raw,readonly=on,file=${FIRMWARE_CODE}" \
         -drive "if=pflash,format=raw,file=${FIRMWARE_VARS}" \
+        "${extra_drives[@]}" \
         "$@"
 }
 

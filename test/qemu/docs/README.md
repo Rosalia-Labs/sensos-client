@@ -40,6 +40,16 @@ test/qemu/run-debian-trixie-arm64 run
 
 The `run` command uses `-snapshot`, so guest disk changes are discarded when QEMU exits.
 
+## Data disk
+
+The helper always attaches a second virtual disk for testing `config-storage`.
+
+It creates this image on demand if it does not exist:
+
+`test/qemu/artifacts/images/debian-trixie-arm64-data.qcow2`
+
+Inside the guest, it will typically appear as another block device such as `/dev/vdb`.
+
 ## Connectivity
 
 The script forwards host port `2222` to guest SSH:
