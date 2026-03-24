@@ -42,8 +42,17 @@ def current_timezone_name() -> str:
     return timedatectl_value("Timezone", "UTC")
 
 
-def current_local_time_display() -> str:
-    proc = run(["date", "+%A, %B %d, %Y at %I:%M:%S %p %Z"])
+def display_timezone_name() -> str:
+    return os.environ.get("TZ", "").strip() or current_timezone_name()
+
+
+def current_local_time_display(timezone_name: str) -> str:
+    proc = subprocess.run(
+        ["date", "+%A, %B %d, %Y at %I:%M:%S %p %Z"],
+        text=True,
+        capture_output=True,
+        env={**os.environ, "TZ": timezone_name},
+    )
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or "failed to format local time")
     return proc.stdout.strip()
@@ -166,11 +175,13 @@ def restart_chrony() -> None:
 
 
 def main() -> int:
-    timezone_name = current_timezone_name()
+    system_timezone_name = current_timezone_name()
+    timezone_name = display_timezone_name()
 
     print("Current device time:")
-    print(f"  Local time: {current_local_time_display()}")
-    print(f"  System timezone: {timezone_name}")
+    print(f"  Local time: {current_local_time_display(timezone_name)}")
+    print(f"  Display timezone: {timezone_name}")
+    print(f"  System timezone: {system_timezone_name}")
     print(f"  UTC time: {current_time_display()}")
     print("Time sync status:")
     for line in sync_status_lines():
@@ -238,7 +249,8 @@ def main() -> int:
 
     print()
     print("Updated device time:")
-    print(f"  Local time: {current_local_time_display()}")
+    print(f"  Local time: {current_local_time_display(timezone_name)}")
+    print(f"  Display timezone: {timezone_name}")
     print(f"  System timezone: {current_timezone_name()}")
     print(f"  UTC time: {current_time_display()}")
     print("Time sync status:")
