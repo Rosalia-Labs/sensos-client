@@ -22,8 +22,16 @@ ensure_not_root() {
     [[ "${EUID}" -ne 0 ]] || die "run ${SCRIPT_PATH} as the bootstrap user; it will use sudo for privileged steps"
 }
 
+confirm_install_target() {
+    local reply
+
+    printf 'WARNING: this will configure the current machine as a SensOS client and deploy into %s. Continue? [y/N] ' "${DEPLOY_ROOT}"
+    read -r reply
+    [[ "${reply}" =~ ^[Yy]$ ]] || die "installation cancelled"
+}
+
 sudo_run() {
-    sudo env "SENSOS_REPO_ROOT=${REPO_ROOT}" "SENSOS_DEPLOY_ROOT=${DEPLOY_ROOT}" "$@"
+    sudo env "SENSOS_REPO_ROOT=${REPO_ROOT}" "SENSOS_DEPLOY_ROOT=${DEPLOY_ROOT}" "SENSOS_ALLOW_FRESH_INSTALL=1" "$@"
 }
 
 main() {
@@ -31,9 +39,7 @@ main() {
     [[ -x "${SETUP_SCRIPT}" ]] || die "missing or non-executable setup script: ${SETUP_SCRIPT}"
     [[ -x "${PREFLIGHT_SCRIPT}" ]] || die "missing or non-executable preflight script: ${PREFLIGHT_SCRIPT}"
 
-    log "verifying client host guard before install"
-    env "SENSOS_REPO_ROOT=${REPO_ROOT}" "SENSOS_DEPLOY_ROOT=${DEPLOY_ROOT}" "${PREFLIGHT_SCRIPT}" >/dev/null
-
+    confirm_install_target
     log "running setup into ${DEPLOY_ROOT}"
     sudo_run "${SETUP_SCRIPT}"
     log "install complete"

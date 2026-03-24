@@ -10,7 +10,7 @@ CLIENT_ROOT="${SENSOS_REPO_ROOT:-${REPO_ROOT}}"
 DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
 VERSION_FILE="${CLIENT_ROOT}/VERSION"
 INSTALL_STATE_FILE="${DEPLOY_ROOT}/etc/install-state.env"
-HOST_ROLE_FILE="${SENSOS_HOST_ROLE_FILE:-/etc/sensos/host-role.env}"
+ALLOW_FRESH_INSTALL="${SENSOS_ALLOW_FRESH_INSTALL:-0}"
 OS_RELEASE_FILE="/etc/os-release"
 SUPPORTED_OS_ID_REGEX='^(raspbian|debian)$'
 SUPPORTED_OS_CODENAME="trixie"
@@ -30,17 +30,17 @@ require_repo_layout() {
     [[ -d "${CLIENT_ROOT}/overlay" ]] || die "expected overlay directory under ${CLIENT_ROOT}"
 }
 
-read_host_role() {
-    [[ -f "${HOST_ROLE_FILE}" ]] || die \
-        "missing client host marker at ${HOST_ROLE_FILE}; create it with: sudo install -d -m 0755 /etc/sensos && printf 'SENSOS_HOST_ROLE=client\n' | sudo tee ${HOST_ROLE_FILE} >/dev/null"
+require_install_context() {
+    if [[ -f "${INSTALL_STATE_FILE}" ]]; then
+        return
+    fi
 
-    SENSOS_HOST_ROLE=""
+    if [[ "${ALLOW_FRESH_INSTALL}" == "1" ]]; then
+        log "fresh install explicitly allowed"
+        return
+    fi
 
-    # shellcheck disable=SC1090
-    source "${HOST_ROLE_FILE}"
-
-    [[ "${SENSOS_HOST_ROLE:-}" == "client" ]] || die \
-        "host role must be 'client' in ${HOST_ROLE_FILE}; refusing to run setup on a non-client host"
+    die "no deployed client install-state found at ${INSTALL_STATE_FILE}; use ./install for first-time deployment"
 }
 
 read_client_version() {
@@ -131,8 +131,7 @@ print_summary() {
     log "deploy_root=${DEPLOY_ROOT}"
     log "client_version=${CLIENT_VERSION}"
     log "client_revision=${CLIENT_REVISION}"
-    log "host_role=${SENSOS_HOST_ROLE}"
-    log "host_role_file=${HOST_ROLE_FILE}"
+    log "allow_fresh_install=${ALLOW_FRESH_INSTALL}"
     log "install_state=${INSTALL_STATUS}"
     log "previous_version=${PREVIOUS_VERSION:-<none>}"
     log "previous_revision=${PREVIOUS_REVISION:-<none>}"
@@ -146,7 +145,7 @@ print_summary() {
 
 main() {
     require_repo_layout
-    read_host_role
+    require_install_context
     CLIENT_VERSION="$(read_client_version)"
     CLIENT_REVISION="$(read_repo_revision)"
     read_install_state

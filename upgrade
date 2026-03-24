@@ -84,7 +84,7 @@ main() {
     [[ -x "${MIGRATIONS_SCRIPT}" ]] || die "missing or non-executable migrations script: ${MIGRATIONS_SCRIPT}"
     [[ -x "${SETUP_SCRIPT}" ]] || die "missing or non-executable setup script: ${SETUP_SCRIPT}"
 
-    log "verifying client host guard before pulling"
+    log "verifying existing deployed client state before pulling"
     env "SENSOS_REPO_ROOT=${REPO_ROOT}" "SENSOS_DEPLOY_ROOT=${DEPLOY_ROOT}" "${PREFLIGHT_SCRIPT}" >/dev/null
 
     pre_pull_version="$(read_repo_version)"

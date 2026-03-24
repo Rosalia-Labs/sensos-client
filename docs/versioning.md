@@ -50,22 +50,6 @@ OS_VERSION_ID=12
 This file is machine-local state inside the deployed `/sensos` tree. It is not
 the repo's source of truth.
 
-## Client Host Guard
-
-Setup and upgrade must only run on approved client machines. The required host
-marker lives outside the repo at:
-
-[`/etc/sensos/host-role.env`](/etc/sensos/host-role.env)
-
-Required content:
-
-```sh
-SENSOS_HOST_ROLE=client
-```
-
-Without that file, preflight, migrations, setup, and `./upgrade` all refuse to
-run.
-
 ## What To Do
 
 Before a release:
@@ -99,8 +83,8 @@ script for this flow. It:
 - records install-state only after success
 
 The repo also includes a top-level [`install`](/Users/tkeitt/Projects/sensos-client/install)
-script for first-time deployment. It runs the repo's setup scripts and deploys
-the live overlay into `/sensos`.
+script for first-time deployment. It prompts with a `[y/N]` warning, then runs
+the repo's setup scripts and deploys the live overlay into `/sensos`.
 
 ## Reminder
 
