@@ -1,0 +1,103 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${REPO_ROOT}}"
+PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
+INSTALL_STATE_FILE="${CLIENT_ROOT}/etc/install-state.env"
+OS_RELEASE_FILE="/etc/os-release"
+SENSOS_ADMIN_USER="sensos-admin"
+SENSOS_DATA_GROUP="sensos-data"
+
+log() {
+    printf '[setup/99-install-state] %s\n' "$*"
+}
+
+die() {
+    printf '[setup/99-install-state] ERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+require_root() {
+    [[ "${EUID}" -eq 0 ]] || die "run as root"
+}
+
+require_inputs() {
+    [[ -x "${PRECHECK_SCRIPT}" ]] || die "missing or non-executable preflight script: ${PRECHECK_SCRIPT}"
+}
+
+run_preflight() {
+    log "running preflight"
+    "${PRECHECK_SCRIPT}"
+}
+
+read_client_version() {
+    local version_file="${CLIENT_ROOT}/VERSION"
+    local version
+
+    [[ -f "${version_file}" ]] || die "missing VERSION file at ${version_file}"
+    version="$(head -n 1 "${version_file}" | tr -d '[:space:]')"
+    [[ -n "${version}" ]] || die "VERSION file is empty"
+
+    printf '%s\n' "${version}"
+}
+
+read_repo_revision() {
+    git -C "${CLIENT_ROOT}" rev-parse --short HEAD 2>/dev/null || printf 'unknown\n'
+}
+
+read_os_release() {
+    [[ -f "${OS_RELEASE_FILE}" ]] || die "missing ${OS_RELEASE_FILE}"
+
+    OS_ID=""
+    OS_VERSION_ID=""
+
+    # shellcheck disable=SC1090
+    source "${OS_RELEASE_FILE}"
+
+    OS_ID="${ID:-unknown}"
+    OS_VERSION_ID="${VERSION_ID:-unknown}"
+}
+
+write_install_state() {
+    local target_dir
+    local temp_file
+
+    target_dir="$(dirname "${INSTALL_STATE_FILE}")"
+    install -d -m 2775 "${target_dir}"
+
+    temp_file="$(mktemp "${target_dir}/install-state.env.XXXXXX")"
+    cat >"${temp_file}" <<EOF
+INSTALLED_VERSION=${CLIENT_VERSION}
+INSTALLED_AT=${INSTALLED_AT}
+INSTALL_STATUS=complete
+INSTALL_REVISION=${CLIENT_REVISION}
+OS_ID=${OS_ID}
+OS_VERSION_ID=${OS_VERSION_ID}
+EOF
+
+    chmod 0664 "${temp_file}"
+    if id -u "${SENSOS_ADMIN_USER}" >/dev/null 2>&1 && getent group "${SENSOS_DATA_GROUP}" >/dev/null 2>&1; then
+        chown "${SENSOS_ADMIN_USER}:${SENSOS_DATA_GROUP}" "${temp_file}"
+    fi
+
+    mv "${temp_file}" "${INSTALL_STATE_FILE}"
+    log "recorded install state in ${INSTALL_STATE_FILE}"
+}
+
+main() {
+    require_root
+    require_inputs
+    run_preflight
+    CLIENT_VERSION="$(read_client_version)"
+    CLIENT_REVISION="$(read_repo_revision)"
+    INSTALLED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    read_os_release
+    write_install_state
+}
+
+main "$@"

@@ -9,6 +9,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${REPO_ROOT}}"
 VERSION_FILE="${CLIENT_ROOT}/VERSION"
 INSTALL_STATE_FILE="${CLIENT_ROOT}/etc/install-state.env"
+HOST_ROLE_FILE="${SENSOS_HOST_ROLE_FILE:-/etc/sensos/host-role.env}"
 OS_RELEASE_FILE="/etc/os-release"
 SUPPORTED_OS_ID_REGEX='^(raspbian|debian)$'
 SUPPORTED_OS_CODENAME="trixie"
@@ -25,6 +26,19 @@ die() {
 require_repo_layout() {
     [[ -d "${CLIENT_ROOT}" ]] || die "client root not found: ${CLIENT_ROOT}"
     [[ -d "${CLIENT_ROOT}/setup" ]] || die "expected setup directory under ${CLIENT_ROOT}"
+}
+
+read_host_role() {
+    [[ -f "${HOST_ROLE_FILE}" ]] || die \
+        "missing client host marker at ${HOST_ROLE_FILE}; create it with: sudo install -d -m 0755 /etc/sensos && printf 'SENSOS_HOST_ROLE=client\n' | sudo tee ${HOST_ROLE_FILE} >/dev/null"
+
+    SENSOS_HOST_ROLE=""
+
+    # shellcheck disable=SC1090
+    source "${HOST_ROLE_FILE}"
+
+    [[ "${SENSOS_HOST_ROLE:-}" == "client" ]] || die \
+        "host role must be 'client' in ${HOST_ROLE_FILE}; refusing to run setup on a non-client host"
 }
 
 read_client_version() {
@@ -114,6 +128,8 @@ print_summary() {
     log "client_root=${CLIENT_ROOT}"
     log "client_version=${CLIENT_VERSION}"
     log "client_revision=${CLIENT_REVISION}"
+    log "host_role=${SENSOS_HOST_ROLE}"
+    log "host_role_file=${HOST_ROLE_FILE}"
     log "install_state=${INSTALL_STATUS}"
     log "previous_version=${PREVIOUS_VERSION:-<none>}"
     log "previous_revision=${PREVIOUS_REVISION:-<none>}"
@@ -127,6 +143,7 @@ print_summary() {
 
 main() {
     require_repo_layout
+    read_host_role
     CLIENT_VERSION="$(read_client_version)"
     CLIENT_REVISION="$(read_repo_revision)"
     read_install_state

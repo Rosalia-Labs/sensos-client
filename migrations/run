@@ -1,0 +1,117 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${REPO_ROOT}}"
+PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
+MIGRATIONS_ROOT="${CLIENT_ROOT}/migrations/versions"
+
+log() {
+    printf '[migrations/run] %s\n' "$*"
+}
+
+die() {
+    printf '[migrations/run] ERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+require_root() {
+    [[ "${EUID}" -eq 0 ]] || die "run as root"
+}
+
+require_inputs() {
+    [[ -x "${PRECHECK_SCRIPT}" ]] || die "missing or non-executable preflight script: ${PRECHECK_SCRIPT}"
+}
+
+run_preflight() {
+    log "running preflight"
+    "${PRECHECK_SCRIPT}"
+}
+
+validate_version_text() {
+    local version="$1"
+    [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || \
+        die "invalid version '${version}'"
+}
+
+version_lt() {
+    [[ "$1" != "$2" ]] && [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n 1)" == "$1" ]]
+}
+
+version_lte() {
+    [[ "$1" == "$2" ]] || version_lt "$1" "$2"
+}
+
+run_step() {
+    local step_path="$1"
+
+    [[ -x "${step_path}" ]] || die "missing or non-executable migration step: ${step_path}"
+    log "running $(basename "${step_path}")"
+    "${step_path}"
+}
+
+run_version_migrations() {
+    local version_dir="$1"
+    local step_path
+    local version_name
+
+    version_name="$(basename "${version_dir}")"
+    log "applying migrations for ${version_name}"
+
+    while IFS= read -r step_path; do
+        run_step "${step_path}"
+    done < <(find "${version_dir}" -maxdepth 1 -type f -name '[0-9][0-9]-*' | sort)
+}
+
+main() {
+    local from_version
+    local to_version
+    local version_dir
+    local version_name
+    local ran_any=0
+
+    [[ "$#" -eq 2 ]] || die "usage: ${SCRIPT_PATH} FROM_VERSION TO_VERSION"
+
+    from_version="$1"
+    to_version="$2"
+
+    require_root
+    require_inputs
+    validate_version_text "${from_version}"
+    validate_version_text "${to_version}"
+    run_preflight
+
+    if version_lt "${to_version}" "${from_version}"; then
+        die "downgrades are not supported by migrations: ${from_version} -> ${to_version}"
+    fi
+
+    if [[ "${from_version}" == "${to_version}" ]]; then
+        log "repo version unchanged at ${to_version}; no migrations needed"
+        return 0
+    fi
+
+    if [[ ! -d "${MIGRATIONS_ROOT}" ]]; then
+        log "no migrations directory at ${MIGRATIONS_ROOT}; skipping"
+        return 0
+    fi
+
+    while IFS= read -r version_dir; do
+        version_name="$(basename "${version_dir}")"
+        validate_version_text "${version_name}"
+
+        if version_lt "${from_version}" "${version_name}" && version_lte "${version_name}" "${to_version}"; then
+            run_version_migrations "${version_dir}"
+            ran_any=1
+        fi
+    done < <(find "${MIGRATIONS_ROOT}" -mindepth 1 -maxdepth 1 -type d | sort -V)
+
+    if [[ "${ran_any}" -eq 0 ]]; then
+        log "no matching migrations for ${from_version} -> ${to_version}"
+    fi
+}
+
+main "$@"

@@ -49,6 +49,22 @@ OS_VERSION_ID=12
 
 This file is machine-local state. It is not the repo's source of truth.
 
+## Client Host Guard
+
+Setup and upgrade must only run on approved client machines. The required host
+marker lives outside the repo at:
+
+[`/etc/sensos/host-role.env`](/etc/sensos/host-role.env)
+
+Required content:
+
+```sh
+SENSOS_HOST_ROLE=client
+```
+
+Without that file, preflight, migrations, setup, and `./upgrade` all refuse to
+run.
+
 ## What To Do
 
 Before a release:
@@ -66,10 +82,22 @@ When running setup on a Pi:
 
 When updating with `git fetch` or `git pull`:
 
+- cache the pre-pull repo version and revision before updating the checkout
 - re-run setup
 - compare installed version to repo version
 - run any needed migrations in order
 - update install-state only after the update succeeds
+
+The repo includes a top-level [`upgrade`](/Users/tkeitt/Projects/sensos-client/upgrade)
+script for this flow. It:
+
+- requires a clean git worktree before pulling
+- uses `git pull --ff-only`
+- runs version-aware migrations from [`migrations/versions`](/Users/tkeitt/Projects/sensos-client/migrations/versions)
+- reruns setup
+- records install-state only after success
+- rolls the repo back to the previous git revision and reapplies setup if the
+  post-pull upgrade fails
 
 ## Reminder
 

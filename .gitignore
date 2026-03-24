@@ -210,3 +210,11 @@ __marimo__/
 
 SensOS
 test/qemu/artifacts/
+
+# Repo-local runtime state on deployed clients
+/data/
+/etc/
+/init.d/
+/keys/
+/log/
+/python/venv/
