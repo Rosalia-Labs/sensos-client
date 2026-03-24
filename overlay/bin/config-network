@@ -15,7 +15,7 @@ SCRIPT_FILE = os.path.realpath(__file__)
 SCRIPT_DIR = os.path.dirname(SCRIPT_FILE)
 OVERLAY_ROOT = os.path.dirname(SCRIPT_DIR)
 CLIENT_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", os.path.dirname(OVERLAY_ROOT))
-UTILS_FILE = os.path.join(OVERLAY_ROOT, "lib", "utils.py")
+UTILS_FILE = os.path.join(OVERLAY_ROOT, "libexec", "utils.py")
 
 if not os.path.isfile(UTILS_FILE):
     raise RuntimeError(f"Missing utils.py at {UTILS_FILE}")
