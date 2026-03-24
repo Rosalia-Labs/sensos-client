@@ -1,0 +1,42 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+REPO_ROOT="${SCRIPT_DIR}"
+DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
+SETUP_SCRIPT="${REPO_ROOT}/setup/install"
+PREFLIGHT_SCRIPT="${REPO_ROOT}/setup/00-preflight"
+
+log() {
+    printf '[install] %s\n' "$*"
+}
+
+die() {
+    printf '[install] ERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+ensure_not_root() {
+    [[ "${EUID}" -ne 0 ]] || die "run ${SCRIPT_PATH} as the bootstrap user; it will use sudo for privileged steps"
+}
+
+sudo_run() {
+    sudo env "SENSOS_REPO_ROOT=${REPO_ROOT}" "SENSOS_DEPLOY_ROOT=${DEPLOY_ROOT}" "$@"
+}
+
+main() {
+    ensure_not_root
+    [[ -x "${SETUP_SCRIPT}" ]] || die "missing or non-executable setup script: ${SETUP_SCRIPT}"
+    [[ -x "${PREFLIGHT_SCRIPT}" ]] || die "missing or non-executable preflight script: ${PREFLIGHT_SCRIPT}"
+
+    log "verifying client host guard before install"
+    env "SENSOS_REPO_ROOT=${REPO_ROOT}" "SENSOS_DEPLOY_ROOT=${DEPLOY_ROOT}" "${PREFLIGHT_SCRIPT}" >/dev/null
+
+    log "running setup into ${DEPLOY_ROOT}"
+    sudo_run "${SETUP_SCRIPT}"
+    log "install complete"
+}
+
+main "$@"

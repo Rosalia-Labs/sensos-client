@@ -6,9 +6,10 @@ SCRIPT_PATH="${BASH_SOURCE[0]}"
 SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${REPO_ROOT}}"
+CLIENT_ROOT="${SENSOS_REPO_ROOT:-${REPO_ROOT}}"
+DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
 VERSION_FILE="${CLIENT_ROOT}/VERSION"
-INSTALL_STATE_FILE="${CLIENT_ROOT}/etc/install-state.env"
+INSTALL_STATE_FILE="${DEPLOY_ROOT}/etc/install-state.env"
 HOST_ROLE_FILE="${SENSOS_HOST_ROLE_FILE:-/etc/sensos/host-role.env}"
 OS_RELEASE_FILE="/etc/os-release"
 SUPPORTED_OS_ID_REGEX='^(raspbian|debian)$'
@@ -26,6 +27,7 @@ die() {
 require_repo_layout() {
     [[ -d "${CLIENT_ROOT}" ]] || die "client root not found: ${CLIENT_ROOT}"
     [[ -d "${CLIENT_ROOT}/setup" ]] || die "expected setup directory under ${CLIENT_ROOT}"
+    [[ -d "${CLIENT_ROOT}/overlay" ]] || die "expected overlay directory under ${CLIENT_ROOT}"
 }
 
 read_host_role() {
@@ -125,7 +127,8 @@ resolve_operation_mode() {
 }
 
 print_summary() {
-    log "client_root=${CLIENT_ROOT}"
+    log "repo_root=${CLIENT_ROOT}"
+    log "deploy_root=${DEPLOY_ROOT}"
     log "client_version=${CLIENT_VERSION}"
     log "client_revision=${CLIENT_REVISION}"
     log "host_role=${SENSOS_HOST_ROLE}"

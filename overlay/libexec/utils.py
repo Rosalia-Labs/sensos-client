@@ -14,7 +14,7 @@ import argparse
 
 CLIENT_ROOT = os.environ.get(
     "SENSOS_CLIENT_ROOT",
-    os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..")),
+    os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..")),
 )
 
 API_PASSWORD_FILE = os.path.join(CLIENT_ROOT, "keys", "api_password")

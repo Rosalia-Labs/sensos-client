@@ -4,7 +4,7 @@ This repo should use an explicit repo version as the install and migration key.
 
 ## Source Of Truth
 
-The current desired client version lives in [`VERSION`](/Users/keittth/Projects/sensos-client/VERSION).
+The current desired client version lives in [`VERSION`](/Users/tkeitt/Projects/sensos-client/VERSION).
 
 Format:
 
@@ -32,9 +32,9 @@ Git commit hashes are useful for traceability, but they are not the primary vers
 
 ## Installed State
 
-Each machine should record local install state in:
+Each machine should record local install state in the deployed overlay:
 
-[`etc/install-state.env`](/Users/keittth/Projects/sensos-client/etc/install-state.env)
+[`/sensos/etc/install-state.env`](/sensos/etc/install-state.env)
 
 Suggested fields:
 
@@ -47,7 +47,8 @@ OS_ID=raspbian
 OS_VERSION_ID=12
 ```
 
-This file is machine-local state. It is not the repo's source of truth.
+This file is machine-local state inside the deployed `/sensos` tree. It is not
+the repo's source of truth.
 
 ## Client Host Guard
 
@@ -76,7 +77,7 @@ Before a release:
 When running setup on a Pi:
 
 - `setup/00-preflight` reads the repo `VERSION`
-- it compares that against [`etc/install-state.env`](/Users/keittth/Projects/sensos-client/etc/install-state.env)
+- it compares that against [`/sensos/etc/install-state.env`](/sensos/etc/install-state.env)
 - it determines whether this is a fresh install, reconfigure, repair, or upgrade
 - later setup or migration steps should only mark the install complete after success
 
@@ -94,10 +95,12 @@ script for this flow. It:
 - requires a clean git worktree before pulling
 - uses `git pull --ff-only`
 - runs version-aware migrations from [`migrations/versions`](/Users/tkeitt/Projects/sensos-client/migrations/versions)
-- reruns setup
+- redeploys `overlay/` into `/sensos` and reruns setup
 - records install-state only after success
-- rolls the repo back to the previous git revision and reapplies setup if the
-  post-pull upgrade fails
+
+The repo also includes a top-level [`install`](/Users/tkeitt/Projects/sensos-client/install)
+script for first-time deployment. It runs the repo's setup scripts and deploys
+the live overlay into `/sensos`.
 
 ## Reminder
 

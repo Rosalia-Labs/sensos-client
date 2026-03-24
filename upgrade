@@ -5,14 +5,11 @@ set -euo pipefail
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
 REPO_ROOT="${SCRIPT_DIR}"
+DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
 
 PREFLIGHT_SCRIPT="${REPO_ROOT}/setup/00-preflight"
 MIGRATIONS_SCRIPT="${REPO_ROOT}/migrations/run"
 SETUP_SCRIPT="${REPO_ROOT}/setup/install"
-
-ROLLBACK_REQUIRED=0
-OLD_VERSION=""
-OLD_REVISION=""
 
 log() {
     printf '[upgrade] %s\n' "$*"
@@ -70,33 +67,12 @@ ensure_upstream() {
 }
 
 sudo_run() {
-    sudo env "SENSOS_CLIENT_ROOT=${REPO_ROOT}" "$@"
-}
-
-rollback() {
-    local exit_code="$1"
-
-    if [[ "${ROLLBACK_REQUIRED}" -eq 0 ]]; then
-        exit "${exit_code}"
-    fi
-
-    log "upgrade failed; rolling back repo to ${OLD_REVISION} (${OLD_VERSION})"
-
-    if ! git -C "${REPO_ROOT}" reset --hard "${OLD_REVISION}"; then
-        log "rollback failed while resetting git state"
-        exit "${exit_code}"
-    fi
-
-    if sudo_run "${SETUP_SCRIPT}"; then
-        log "rollback restored the previous overlay revision"
-    else
-        log "rollback restored git state but reapplying setup failed; inspect the host before retrying"
-    fi
-
-    exit "${exit_code}"
+    sudo env "SENSOS_REPO_ROOT=${REPO_ROOT}" "SENSOS_DEPLOY_ROOT=${DEPLOY_ROOT}" "$@"
 }
 
 main() {
+    local old_version
+    local pre_pull_version
     local new_version
 
     ensure_not_root
@@ -109,30 +85,28 @@ main() {
     [[ -x "${SETUP_SCRIPT}" ]] || die "missing or non-executable setup script: ${SETUP_SCRIPT}"
 
     log "verifying client host guard before pulling"
-    "${PREFLIGHT_SCRIPT}" >/dev/null
+    env "SENSOS_REPO_ROOT=${REPO_ROOT}" "SENSOS_DEPLOY_ROOT=${DEPLOY_ROOT}" "${PREFLIGHT_SCRIPT}" >/dev/null
 
-    OLD_VERSION="$(read_repo_version)"
-    OLD_REVISION="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
-
-    trap 'rollback $?' ERR
+    pre_pull_version="$(read_repo_version)"
+    old_version="$(sudo_run awk -F= '/^INSTALLED_VERSION=/{print $2}' "${DEPLOY_ROOT}/etc/install-state.env" 2>/dev/null || true)"
+    if [[ -z "${old_version}" ]]; then
+        old_version="${pre_pull_version}"
+    fi
 
     log "pulling the latest changes"
     git -C "${REPO_ROOT}" pull --ff-only
-    ROLLBACK_REQUIRED=1
 
     new_version="$(read_repo_version)"
-    if version_lt "${new_version}" "${OLD_VERSION}"; then
-        die "pulled revision moved repo version backward: ${OLD_VERSION} -> ${new_version}"
+    if version_lt "${new_version}" "${old_version}"; then
+        die "pulled revision moved repo version backward: ${old_version} -> ${new_version}"
     fi
 
-    log "running migrations for ${OLD_VERSION} -> ${new_version}"
-    sudo_run "${MIGRATIONS_SCRIPT}" "${OLD_VERSION}" "${new_version}"
+    log "running migrations for ${old_version} -> ${new_version}"
+    sudo_run "${MIGRATIONS_SCRIPT}" "${old_version}" "${new_version}"
 
     log "running setup"
     sudo_run "${SETUP_SCRIPT}"
 
-    ROLLBACK_REQUIRED=0
-    trap - ERR
     log "upgrade complete at version ${new_version}"
 }
 

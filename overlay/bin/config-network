@@ -14,7 +14,7 @@ import psutil
 SCRIPT_FILE = os.path.realpath(__file__)
 SCRIPT_DIR = os.path.dirname(SCRIPT_FILE)
 OVERLAY_ROOT = os.path.dirname(SCRIPT_DIR)
-CLIENT_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", os.path.dirname(OVERLAY_ROOT))
+CLIENT_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", OVERLAY_ROOT)
 UTILS_FILE = os.path.join(OVERLAY_ROOT, "libexec", "utils.py")
 
 if not os.path.isfile(UTILS_FILE):

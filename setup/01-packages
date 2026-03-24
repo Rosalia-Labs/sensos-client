@@ -6,7 +6,7 @@ SCRIPT_PATH="${BASH_SOURCE[0]}"
 SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${REPO_ROOT}}"
+CLIENT_ROOT="${SENSOS_REPO_ROOT:-${REPO_ROOT}}"
 PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
 REQUIRED_PACKAGES_FILE="${CLIENT_ROOT}/setup/packages-required.txt"
 DISCOURAGED_PACKAGES_FILE="${CLIENT_ROOT}/setup/packages-discouraged.txt"

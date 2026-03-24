@@ -6,7 +6,8 @@ SCRIPT_PATH="${BASH_SOURCE[0]}"
 SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${REPO_ROOT}}"
+CLIENT_ROOT="${SENSOS_REPO_ROOT:-${REPO_ROOT}}"
+DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
 PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
 
 SENSOS_ADMIN_USER="sensos-admin"
@@ -14,16 +15,21 @@ SENSOS_RUNNER_USER="sensos-runner"
 SENSOS_DATA_GROUP="sensos-data"
 
 MUTABLE_DIRS=(
-    "${CLIENT_ROOT}/data"
-    "${CLIENT_ROOT}/data/audio_recordings"
-    "${CLIENT_ROOT}/data/audio_recordings/queued"
-    "${CLIENT_ROOT}/data/audio_recordings/processed"
-    "${CLIENT_ROOT}/data/birdnet"
-    "${CLIENT_ROOT}/data/microenv"
-    "${CLIENT_ROOT}/etc"
-    "${CLIENT_ROOT}/init.d"
-    "${CLIENT_ROOT}/keys"
-    "${CLIENT_ROOT}/log"
+    "${DEPLOY_ROOT}"
+    "${DEPLOY_ROOT}/bin"
+    "${DEPLOY_ROOT}/data"
+    "${DEPLOY_ROOT}/data/audio_recordings"
+    "${DEPLOY_ROOT}/data/audio_recordings/queued"
+    "${DEPLOY_ROOT}/data/audio_recordings/processed"
+    "${DEPLOY_ROOT}/data/birdnet"
+    "${DEPLOY_ROOT}/data/microenv"
+    "${DEPLOY_ROOT}/etc"
+    "${DEPLOY_ROOT}/init.d"
+    "${DEPLOY_ROOT}/keys"
+    "${DEPLOY_ROOT}/libexec"
+    "${DEPLOY_ROOT}/log"
+    "${DEPLOY_ROOT}/python"
+    "${DEPLOY_ROOT}/systemd"
 )
 
 log() {
@@ -87,49 +93,29 @@ ensure_mutable_layout() {
         ensure_dir "${dir_path}"
     done
 
-    set_shared_dir_policy "${CLIENT_ROOT}/data"
-    set_shared_dir_policy "${CLIENT_ROOT}/data/audio_recordings"
-    set_shared_dir_policy "${CLIENT_ROOT}/data/audio_recordings/queued"
-    set_shared_dir_policy "${CLIENT_ROOT}/data/audio_recordings/processed"
-    set_shared_dir_policy "${CLIENT_ROOT}/data/birdnet"
-    set_shared_dir_policy "${CLIENT_ROOT}/data/microenv"
-    set_shared_dir_policy "${CLIENT_ROOT}/etc"
-    set_shared_dir_policy "${CLIENT_ROOT}/init.d"
-    set_shared_dir_policy "${CLIENT_ROOT}/log"
+    set_shared_dir_policy "${DEPLOY_ROOT}"
+    set_shared_dir_policy "${DEPLOY_ROOT}/data"
+    set_shared_dir_policy "${DEPLOY_ROOT}/data/audio_recordings"
+    set_shared_dir_policy "${DEPLOY_ROOT}/data/audio_recordings/queued"
+    set_shared_dir_policy "${DEPLOY_ROOT}/data/audio_recordings/processed"
+    set_shared_dir_policy "${DEPLOY_ROOT}/data/birdnet"
+    set_shared_dir_policy "${DEPLOY_ROOT}/data/microenv"
+    set_shared_dir_policy "${DEPLOY_ROOT}/etc"
+    set_shared_dir_policy "${DEPLOY_ROOT}/init.d"
+    set_shared_dir_policy "${DEPLOY_ROOT}/log"
+    set_shared_dir_policy "${DEPLOY_ROOT}/python"
 
-    set_private_dir_policy "${CLIENT_ROOT}/keys"
-}
-
-ensure_executable_scripts() {
-    if [[ -d "${CLIENT_ROOT}/setup" ]]; then
-        find "${CLIENT_ROOT}/setup" -maxdepth 1 -type f -name '[0-9][0-9]-*' -exec chmod 0755 '{}' +
-    fi
-
-    if [[ -d "${CLIENT_ROOT}/bin" ]]; then
-        find "${CLIENT_ROOT}/bin" -maxdepth 1 -type f ! -name '.*' -exec chmod 0755 '{}' +
-    fi
-
-    if [[ -d "${CLIENT_ROOT}/libexec" ]]; then
-        find "${CLIENT_ROOT}/libexec" -maxdepth 1 -type f ! -name '.*' -exec chmod 0755 '{}' +
-    fi
-
-    if [[ -d "${CLIENT_ROOT}/overlay/bin" ]]; then
-        find "${CLIENT_ROOT}/overlay/bin" -maxdepth 1 -type f ! -name '.*' -exec chmod 0755 '{}' +
-    fi
-
-    if [[ -d "${CLIENT_ROOT}/overlay/libexec" ]]; then
-        find "${CLIENT_ROOT}/overlay/libexec" -maxdepth 1 -type f ! -name '.*' -exec chmod 0755 '{}' +
-    fi
+    set_private_dir_policy "${DEPLOY_ROOT}/keys"
 }
 
 ensure_key_permissions() {
     local key_file
 
-    [[ -d "${CLIENT_ROOT}/keys" ]] || return
+    [[ -d "${DEPLOY_ROOT}/keys" ]] || return
 
     while IFS= read -r key_file; do
         set_key_file_policy "${key_file}"
-    done < <(find "${CLIENT_ROOT}/keys" -maxdepth 1 -type f)
+    done < <(find "${DEPLOY_ROOT}/keys" -maxdepth 1 -type f)
 }
 
 main() {
@@ -138,7 +124,6 @@ main() {
     run_preflight
     require_identity
     ensure_mutable_layout
-    ensure_executable_scripts
     ensure_key_permissions
 }
 

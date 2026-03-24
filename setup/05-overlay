@@ -6,12 +6,20 @@ SCRIPT_PATH="${BASH_SOURCE[0]}"
 SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${REPO_ROOT}}"
+CLIENT_ROOT="${SENSOS_REPO_ROOT:-${REPO_ROOT}}"
+DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
 PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
 OVERLAY_ROOT="${CLIENT_ROOT}/overlay"
 
 OVERLAY_BIN_DIR="${OVERLAY_ROOT}/bin"
+OVERLAY_ETC_DIR="${OVERLAY_ROOT}/etc"
+OVERLAY_LIBEXEC_DIR="${OVERLAY_ROOT}/libexec"
 OVERLAY_SYSTEMD_DIR="${OVERLAY_ROOT}/systemd"
+
+DEPLOY_BIN_DIR="${DEPLOY_ROOT}/bin"
+DEPLOY_ETC_DIR="${DEPLOY_ROOT}/etc"
+DEPLOY_LIBEXEC_DIR="${DEPLOY_ROOT}/libexec"
+DEPLOY_SYSTEMD_DIR="${DEPLOY_ROOT}/systemd"
 
 HOST_BIN_DIR="/usr/local/bin"
 HOST_SYSTEMD_DIR="/etc/systemd/system"
@@ -32,7 +40,6 @@ require_root() {
 require_inputs() {
     [[ -x "${PRECHECK_SCRIPT}" ]] || die "missing or non-executable preflight script: ${PRECHECK_SCRIPT}"
     [[ -d "${OVERLAY_ROOT}" ]] || die "missing overlay directory: ${OVERLAY_ROOT}"
-    [[ -d "${OVERLAY_BIN_DIR}" ]] || die "missing overlay bin directory: ${OVERLAY_BIN_DIR}"
     [[ -d "${OVERLAY_SYSTEMD_DIR}" ]] || die "missing overlay systemd directory: ${OVERLAY_SYSTEMD_DIR}"
 }
 
@@ -46,11 +53,59 @@ ensure_host_dirs() {
     install -d -m 0755 "${HOST_SYSTEMD_DIR}"
 }
 
-ensure_executable_files() {
-    local dir_path="$1"
+ensure_deploy_dirs() {
+    install -d -m 2775 "${DEPLOY_ROOT}"
+    install -d -m 2775 "${DEPLOY_BIN_DIR}"
+    install -d -m 2775 "${DEPLOY_ETC_DIR}"
+    install -d -m 2775 "${DEPLOY_LIBEXEC_DIR}"
+    install -d -m 2775 "${DEPLOY_SYSTEMD_DIR}"
+}
 
-    [[ -d "${dir_path}" ]] || return
-    find "${dir_path}" -maxdepth 1 -type f ! -name '.gitkeep' -exec chmod 0755 '{}' +
+purge_target_dir() {
+    local target_dir="$1"
+    local target_path
+
+    [[ -d "${target_dir}" ]] || return
+
+    while IFS= read -r target_path; do
+        rm -f "${target_path}"
+    done < <(find "${target_dir}" \( -type f -o -type l \) -mindepth 1 -maxdepth 1)
+}
+
+install_dir_entries() {
+    local source_dir="$1"
+    local target_dir="$2"
+    local mode="$3"
+    local purge_existing="${4:-yes}"
+    local source_path
+
+    [[ -d "${source_dir}" ]] || return
+
+    if [[ "${purge_existing}" == "yes" ]]; then
+        purge_target_dir "${target_dir}"
+    fi
+
+    while IFS= read -r source_path; do
+        install -m "${mode}" "${source_path}" "${target_dir}/$(basename "${source_path}")"
+        log "installed ${target_dir}/$(basename "${source_path}") from ${source_path}"
+    done < <(find "${source_dir}" -maxdepth 1 -type f ! -name '.gitkeep' | sort)
+}
+
+remove_managed_host_symlinks() {
+    local source_dir="$1"
+    local target_dir="$2"
+    local target_path
+    local resolved_path
+
+    [[ -d "${target_dir}" ]] || return
+
+    while IFS= read -r target_path; do
+        resolved_path="$(readlink "${target_path}")"
+        if [[ "${resolved_path}" == "${source_dir}/"* ]]; then
+            rm -f "${target_path}"
+            log "removed stale managed link ${target_path}"
+        fi
+    done < <(find "${target_dir}" -maxdepth 1 -type l | sort)
 }
 
 symlink_dir_entries() {
@@ -59,6 +114,8 @@ symlink_dir_entries() {
     local source_path
 
     [[ -d "${source_dir}" ]] || return
+
+    remove_managed_host_symlinks "${source_dir}" "${target_dir}"
 
     while IFS= read -r source_path; do
         ln -sfn "${source_path}" "${target_dir}/$(basename "${source_path}")"
@@ -79,10 +136,14 @@ main() {
     require_root
     require_inputs
     run_preflight
+    ensure_deploy_dirs
     ensure_host_dirs
-    ensure_executable_files "${OVERLAY_BIN_DIR}"
-    symlink_dir_entries "${OVERLAY_BIN_DIR}" "${HOST_BIN_DIR}"
-    symlink_dir_entries "${OVERLAY_SYSTEMD_DIR}" "${HOST_SYSTEMD_DIR}"
+    install_dir_entries "${OVERLAY_BIN_DIR}" "${DEPLOY_BIN_DIR}" 0755 yes
+    install_dir_entries "${OVERLAY_ETC_DIR}" "${DEPLOY_ETC_DIR}" 0644 no
+    install_dir_entries "${OVERLAY_LIBEXEC_DIR}" "${DEPLOY_LIBEXEC_DIR}" 0755 yes
+    install_dir_entries "${OVERLAY_SYSTEMD_DIR}" "${DEPLOY_SYSTEMD_DIR}" 0644 yes
+    symlink_dir_entries "${DEPLOY_BIN_DIR}" "${HOST_BIN_DIR}"
+    symlink_dir_entries "${DEPLOY_SYSTEMD_DIR}" "${HOST_SYSTEMD_DIR}"
     reload_systemd
 }
 
