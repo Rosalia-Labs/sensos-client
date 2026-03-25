@@ -69,6 +69,15 @@ cd sensos-client
 ./install
 ```
 
+If that bootstrap user will also generate test audio directly into
+`/sensos/data` from the repo checkout, add it to `sensos-data` after install:
+
+```bash
+sudo usermod -aG sensos-data <bootstrap-user>
+```
+
+Then log out and back in again so the new group membership takes effect.
+
 Because the QEMU helper runs the guest with `-snapshot`, you need to repeat
 this bootstrap on each disposable `run` boot unless you bake it into the base
 image during the `install` phase.

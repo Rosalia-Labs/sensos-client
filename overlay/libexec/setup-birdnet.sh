@@ -42,8 +42,11 @@ birdnet_backend() {
     fi
 
     case "${backend}" in
-        tensorflow|tflite)
+        tensorflow)
             printf '%s\n' "${backend}"
+            ;;
+        litert|tflite)
+            printf '%s\n' "litert"
             ;;
         *)
             die "unsupported BIRDNET_BACKEND='${backend}' in ${BIRDNET_CONFIG_FILE}"
@@ -92,10 +95,10 @@ install_birdnet_requirements_if_needed() {
     case "${backend}" in
         tensorflow)
             backend_package="tensorflow"
-            other_package="tflite-runtime"
+            other_package="ai-edge-litert"
             ;;
-        tflite)
-            backend_package="tflite-runtime"
+        litert)
+            backend_package="ai-edge-litert"
             other_package="tensorflow"
             ;;
     esac

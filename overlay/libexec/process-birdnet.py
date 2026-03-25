@@ -86,20 +86,27 @@ def read_backend_preference(config_path: Path) -> str:
     except FileNotFoundError:
         return backend
 
-    if backend not in {"tensorflow", "tflite"}:
+    if backend == "tflite":
+        backend = "litert"
+    if backend not in {"tensorflow", "litert"}:
         raise RuntimeError(f"Unsupported BIRDNET_BACKEND='{backend}' in {config_path}")
     return backend
 
 
 BACKEND_PREFERENCE = read_backend_preference(BIRDNET_CONFIG)
-if BACKEND_PREFERENCE == "tflite":
+if BACKEND_PREFERENCE == "litert":
     try:
-        import tflite_runtime.interpreter as tflite
+        from ai_edge_litert.interpreter import Interpreter
     except ImportError as exc:
         raise RuntimeError(
-            "BirdNET backend is configured as 'tflite', but tflite-runtime is not installed."
+            "BirdNET backend is configured as 'litert', but ai-edge-litert is not installed."
         ) from exc
-    INTERPRETER_BACKEND = "tflite-runtime"
+
+    class _LiteRTModule:
+        Interpreter = Interpreter
+
+    tflite = _LiteRTModule()
+    INTERPRETER_BACKEND = "litert"
 else:
     try:
         import tensorflow as tf
@@ -312,7 +319,15 @@ def backfill_flac_run_columns(conn: sqlite3.Connection) -> None:
     )
 
 
-def find_next_wav() -> Path | None:
+def was_processed_successfully(conn: sqlite3.Connection, path: Path) -> bool:
+    row = conn.execute(
+        "SELECT status FROM processed_files WHERE source_path = ?",
+        (relative_source(path),),
+    ).fetchone()
+    return row is not None and row[0] == "done"
+
+
+def find_next_wav(conn: sqlite3.Connection) -> Path | None:
     if not INPUT_ROOT.exists():
         return None
     now = time.time()
@@ -323,6 +338,8 @@ def find_next_wav() -> Path | None:
         except FileNotFoundError:
             continue
         if age >= MIN_FILE_AGE_SEC:
+            if was_processed_successfully(conn, path):
+                continue
             candidates.append(path)
     return min(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
 
@@ -721,7 +738,7 @@ def main() -> None:
                         f"⚠️ BirdNET meta-model missing at {META_MODEL_PATH}. Occupancy scores disabled."
                     )
 
-            next_wav = find_next_wav()
+            next_wav = find_next_wav(conn)
             if next_wav is None:
                 time.sleep(IDLE_SLEEP_SEC)
                 continue

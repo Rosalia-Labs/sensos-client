@@ -58,7 +58,7 @@ Current exploratory contents:
 - `numpy`
 - `soundfile`
 
-The managed BirdNET path installs either `tensorflow` or `tflite-runtime`
+The managed BirdNET path installs either `tensorflow` or `ai-edge-litert`
 based on the configured backend.
 
 ## Download model files
@@ -89,10 +89,10 @@ Or, to download the model bundle first and then enable BirdNET:
 sudo -u sensos-admin config-birdnet --download-models
 ```
 
-To use TensorFlow Lite instead of TensorFlow:
+To use LiteRT instead of TensorFlow:
 
 ```bash
-sudo -u sensos-admin config-birdnet --backend tflite
+sudo -u sensos-admin config-birdnet --backend litert
 ```
 
 That will:
@@ -127,7 +127,7 @@ python3 -m venv /sensos/python/birdnet-venv
 
 If you need to test the backend manually, installing `tensorflow`, `numpy`, and
 `soundfile` into `/sensos/python/birdnet-venv` should match the managed path for
-the TensorFlow backend. For the TensorFlow Lite backend, use `tflite-runtime`
+the TensorFlow backend. For the LiteRT backend, use `ai-edge-litert`
 instead of `tensorflow`.
 
 ## Generate test WAV files
