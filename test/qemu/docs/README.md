@@ -122,6 +122,20 @@ or:
 sudo -u sensos-admin config-<script>
 ```
 
+To generate synthetic queued WAV files for BirdNET testing inside the guest:
+
+```bash
+python3 /path/to/repo/test/generate-queued-wav --count 3 --preset birdish
+```
+
+That writes files under:
+
+```text
+/sensos/data/audio_recordings/queued/YYYY/MM/DD/
+```
+
+Use `--preset mixed` or `--preset noise` if you want simpler non-birdlike input.
+
 ## Installer display
 
 The launcher attaches a virtio GPU plus USB keyboard and tablet so the Debian installer appears in the QEMU window on macOS. If you ever land in the QEMU monitor instead of the guest display, try:

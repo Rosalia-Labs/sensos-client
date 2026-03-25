@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+
+import argparse
+import math
+import random
+import struct
+import wave
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+DEFAULT_OUTPUT_ROOT = Path("/sensos/data/audio_recordings/queued")
+DEFAULT_SAMPLE_RATE = 48_000
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Generate synthetic queued WAV files for SensOS/BirdNET testing."
+    )
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=DEFAULT_OUTPUT_ROOT,
+        help=f"Queued audio root (default: {DEFAULT_OUTPUT_ROOT})",
+    )
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=1,
+        help="Number of WAV files to generate (default: 1)",
+    )
+    parser.add_argument(
+        "--duration-sec",
+        type=float,
+        default=30.0,
+        help="Duration of each WAV file in seconds (default: 30)",
+    )
+    parser.add_argument(
+        "--sample-rate",
+        type=int,
+        default=DEFAULT_SAMPLE_RATE,
+        help=f"Sample rate in Hz (default: {DEFAULT_SAMPLE_RATE})",
+    )
+    parser.add_argument(
+        "--preset",
+        choices=["noise", "tone", "chirp", "birdish", "mixed"],
+        default="birdish",
+        help="Signal preset to synthesize (default: birdish)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=1234,
+        help="Random seed for deterministic output (default: 1234)",
+    )
+    parser.add_argument(
+        "--start-time",
+        type=str,
+        help="UTC start timestamp for first file in YYYYMMDDTHHMMSS format",
+    )
+    parser.add_argument(
+        "--spacing-sec",
+        type=int,
+        default=65,
+        help="Seconds to advance between generated filenames (default: 65)",
+    )
+    return parser.parse_args()
+
+
+def parse_start_time(raw: str | None) -> datetime:
+    if raw is None:
+        return datetime.now(UTC).replace(microsecond=0)
+    return datetime.strptime(raw, "%Y%m%dT%H%M%S").replace(tzinfo=UTC)
+
+
+def clamp_pcm(sample: float) -> int:
+    sample = max(-1.0, min(1.0, sample))
+    return int(sample * 32767.0)
+
+
+def envelope(t: float, total: float) -> float:
+    attack = min(0.02 * total, 0.5)
+    release = min(0.08 * total, 1.0)
+    if t < attack:
+        return t / attack if attack > 0 else 1.0
+    if t > total - release:
+        return max(0.0, (total - t) / release) if release > 0 else 1.0
+    return 1.0
+
+
+def sample_noise(rng: random.Random) -> float:
+    return rng.uniform(-1.0, 1.0)
+
+
+def sample_tone(t: float, freq: float) -> float:
+    return math.sin(2.0 * math.pi * freq * t)
+
+
+def sample_chirp(t: float, total: float, start_freq: float, end_freq: float) -> float:
+    sweep = t / total if total > 0 else 0.0
+    freq = start_freq + (end_freq - start_freq) * sweep
+    return sample_tone(t, freq)
+
+
+def sample_birdish(t: float, total: float, rng: random.Random) -> float:
+    burst_window = 1.6
+    phase = (t % burst_window) / burst_window
+    burst = max(0.0, math.sin(math.pi * phase)) ** 2
+    chirp = sample_chirp(t, total, 1800.0, 6200.0)
+    overtone = 0.45 * sample_tone(t, 2.3 * (1800.0 + 2200.0 * math.sin(2 * math.pi * 0.35 * t)))
+    trill = 0.25 * sample_tone(t, 38.0) * sample_tone(t, 4100.0 + 500.0 * math.sin(2 * math.pi * 0.6 * t))
+    wind = 0.08 * sample_noise(rng)
+    return burst * (0.6 * chirp + overtone + trill) + wind
+
+
+def sample_mixed(t: float, total: float, rng: random.Random) -> float:
+    bed = 0.18 * sample_noise(rng)
+    low = 0.25 * sample_tone(t, 220.0)
+    high = 0.18 * sample_chirp(t, total, 900.0, 5200.0)
+    accent = 0.45 * sample_birdish(t, total, rng)
+    return bed + low + high + accent
+
+
+def generate_samples(preset: str, duration_sec: float, sample_rate: int, rng: random.Random) -> bytes:
+    total_frames = int(duration_sec * sample_rate)
+    frames = bytearray()
+
+    for frame in range(total_frames):
+        t = frame / sample_rate
+        amp = envelope(t, duration_sec)
+
+        if preset == "noise":
+            sample = 0.22 * sample_noise(rng)
+        elif preset == "tone":
+            sample = 0.35 * sample_tone(t, 1200.0)
+        elif preset == "chirp":
+            sample = 0.35 * sample_chirp(t, duration_sec, 900.0, 6000.0)
+        elif preset == "birdish":
+            sample = 0.65 * sample_birdish(t, duration_sec, rng)
+        else:
+            sample = 0.55 * sample_mixed(t, duration_sec, rng)
+
+        pcm = clamp_pcm(sample * amp)
+        frames.extend(struct.pack("<h", pcm))
+
+    return bytes(frames)
+
+
+def output_path(root: Path, timestamp: datetime) -> Path:
+    dated = root / timestamp.strftime("%Y/%m/%d")
+    dated.mkdir(parents=True, exist_ok=True)
+    return dated / f"sensos_{timestamp.strftime('%Y%m%dT%H%M%S')}.wav"
+
+
+def write_wav(path: Path, frames: bytes, sample_rate: int) -> None:
+    with wave.open(str(path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(frames)
+
+
+def main() -> int:
+    args = parse_args()
+    rng = random.Random(args.seed)
+    start = parse_start_time(args.start_time)
+
+    if args.count <= 0:
+        raise SystemExit("--count must be positive")
+    if args.duration_sec <= 0:
+        raise SystemExit("--duration-sec must be positive")
+    if args.sample_rate <= 0:
+        raise SystemExit("--sample-rate must be positive")
+
+    for index in range(args.count):
+        timestamp = start + timedelta(seconds=index * args.spacing_sec)
+        path = output_path(args.output_root, timestamp)
+        frames = generate_samples(args.preset, args.duration_sec, args.sample_rate, rng)
+        write_wav(path, frames, args.sample_rate)
+        print(path)
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
