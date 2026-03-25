@@ -8,6 +8,7 @@ REPO_ROOT="${SCRIPT_DIR}"
 DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
 SETUP_SCRIPT="${REPO_ROOT}/setup/install"
 PREFLIGHT_SCRIPT="${REPO_ROOT}/setup/00-preflight"
+INSTALL_STATE_FILE="${DEPLOY_ROOT}/etc/install-state.env"
 
 log() {
     printf '[install] %s\n' "$*"
@@ -66,6 +67,11 @@ sudo_run() {
         "$@"
 }
 
+verify_install_state() {
+    sudo test -f "${INSTALL_STATE_FILE}" || \
+        die "setup completed without writing ${INSTALL_STATE_FILE}"
+}
+
 main() {
     parse_args "$@"
     ensure_not_root
@@ -75,6 +81,7 @@ main() {
     confirm_install_target
     log "running setup into ${DEPLOY_ROOT}"
     sudo_run "${SETUP_SCRIPT}"
+    verify_install_state
     log "install complete"
 }
 

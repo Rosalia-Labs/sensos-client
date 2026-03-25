@@ -12,6 +12,7 @@ MIGRATIONS_SCRIPT="${REPO_ROOT}/migrations/run"
 SETUP_SCRIPT="${REPO_ROOT}/setup/install"
 REFRESH_APT=0
 REFRESH_PIP=0
+INSTALL_STATE_FILE="${DEPLOY_ROOT}/etc/install-state.env"
 
 log() {
     printf '[upgrade] %s\n' "$*"
@@ -129,6 +130,17 @@ sudo_run() {
     sudo env "${env_args[@]}" "$@"
 }
 
+have_deployed_client() {
+    [[ -d "${DEPLOY_ROOT}/etc" ]] || return 1
+    [[ -d "${DEPLOY_ROOT}/libexec" ]] || return 1
+    return 0
+}
+
+verify_install_state() {
+    sudo test -f "${INSTALL_STATE_FILE}" || \
+        die "setup completed without writing ${INSTALL_STATE_FILE}"
+}
+
 main() {
     local old_version
     local pre_pull_version
@@ -145,10 +157,16 @@ main() {
     [[ -x "${SETUP_SCRIPT}" ]] || die "missing or non-executable setup script: ${SETUP_SCRIPT}"
 
     log "verifying existing deployed client state before pulling"
-    env "SENSOS_REPO_ROOT=${REPO_ROOT}" "SENSOS_DEPLOY_ROOT=${DEPLOY_ROOT}" "${PREFLIGHT_SCRIPT}" >/dev/null
+    if [[ -f "${INSTALL_STATE_FILE}" ]]; then
+        env "SENSOS_REPO_ROOT=${REPO_ROOT}" "SENSOS_DEPLOY_ROOT=${DEPLOY_ROOT}" "${PREFLIGHT_SCRIPT}" >/dev/null
+    elif have_deployed_client; then
+        log "install-state missing at ${INSTALL_STATE_FILE}; continuing and expecting setup to repair it"
+    else
+        die "no deployed client install-state found at ${INSTALL_STATE_FILE}; use ./install for first-time deployment"
+    fi
 
     pre_pull_version="$(read_repo_version)"
-    old_version="$(sudo_run awk -F= '/^INSTALLED_VERSION=/{print $2}' "${DEPLOY_ROOT}/etc/install-state.env" 2>/dev/null || true)"
+    old_version="$(sudo_run awk -F= '/^INSTALLED_VERSION=/{print $2}' "${INSTALL_STATE_FILE}" 2>/dev/null || true)"
     if [[ -z "${old_version}" ]]; then
         old_version="${pre_pull_version}"
     fi
@@ -166,6 +184,7 @@ main() {
 
     log "running setup"
     sudo_run "${SETUP_SCRIPT}"
+    verify_install_state
 
     log "upgrade complete at version ${new_version}"
 }

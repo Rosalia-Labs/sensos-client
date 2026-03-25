@@ -8,7 +8,6 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 CLIENT_ROOT="${SENSOS_REPO_ROOT:-${REPO_ROOT}}"
 DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
-PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
 INSTALL_STATE_FILE="${DEPLOY_ROOT}/etc/install-state.env"
 OS_RELEASE_FILE="/etc/os-release"
 SENSOS_ADMIN_USER="sensos-admin"
@@ -28,12 +27,8 @@ require_root() {
 }
 
 require_inputs() {
-    [[ -x "${PRECHECK_SCRIPT}" ]] || die "missing or non-executable preflight script: ${PRECHECK_SCRIPT}"
-}
-
-run_preflight() {
-    [[ "${SENSOS_PREFLIGHT_QUIET:-0}" == "1" ]] || log "running preflight"
-    "${PRECHECK_SCRIPT}"
+    [[ -d "${CLIENT_ROOT}" ]] || die "client root not found: ${CLIENT_ROOT}"
+    [[ -f "${CLIENT_ROOT}/VERSION" ]] || die "missing VERSION file at ${CLIENT_ROOT}/VERSION"
 }
 
 read_client_version() {
@@ -93,7 +88,6 @@ EOF
 main() {
     require_root
     require_inputs
-    run_preflight
     CLIENT_VERSION="$(read_client_version)"
     CLIENT_REVISION="$(read_repo_revision)"
     INSTALLED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
