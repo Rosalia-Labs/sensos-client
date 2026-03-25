@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+import argparse
+import os
+import shutil
+import sys
+import tempfile
+import urllib.request
+import zipfile
+from pathlib import Path
+
+DEFAULT_URL = "https://zenodo.org/records/15050749/files/BirdNET_v2.4_tflite.zip?download=1"
+CLIENT_ROOT = Path(os.environ.get("SENSOS_CLIENT_ROOT", "/sensos"))
+MODEL_BASE_DIR = CLIENT_ROOT / "birdnet"
+EXPECTED_MODEL_ROOT = MODEL_BASE_DIR / "BirdNET_v2.4_tflite"
+
+
+def require_sensos_admin() -> None:
+    if os.geteuid() == 0:
+        return
+    username = os.environ.get("USER", "")
+    if username != "sensos-admin":
+        raise SystemExit("ERROR: this script must be run as sensos-admin or root.")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Download and install BirdNET model files into /sensos/birdnet."
+    )
+    parser.add_argument(
+        "--url",
+        default=DEFAULT_URL,
+        help=f"BirdNET model zip URL (default: {DEFAULT_URL})",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace an existing BirdNET_v2.4_tflite directory if present.",
+    )
+    return parser.parse_args()
+
+
+def download_zip(url: str, target: Path) -> None:
+    with urllib.request.urlopen(url) as response, target.open("wb") as out_file:
+        shutil.copyfileobj(response, out_file)
+
+
+def extract_zip(zip_path: Path, destination: Path) -> Path:
+    with zipfile.ZipFile(zip_path) as archive:
+        archive.extractall(destination)
+
+    expected = destination / "BirdNET_v2.4_tflite"
+    if expected.exists():
+        return expected
+
+    matches = [path for path in destination.iterdir() if path.is_dir()]
+    if len(matches) == 1:
+        return matches[0]
+
+    raise SystemExit("ERROR: could not locate extracted BirdNET_v2.4_tflite directory.")
+
+
+def verify_model_layout(root: Path) -> None:
+    required = [
+        root / "audio-model.tflite",
+        root / "labels" / "en_us.txt",
+    ]
+    missing = [str(path) for path in required if not path.exists()]
+    if missing:
+        joined = "\n  ".join(missing)
+        raise SystemExit(f"ERROR: extracted BirdNET model bundle is missing:\n  {joined}")
+
+
+def install_models(source_root: Path, force: bool) -> None:
+    if EXPECTED_MODEL_ROOT.exists():
+        if not force:
+            raise SystemExit(
+                f"ERROR: {EXPECTED_MODEL_ROOT} already exists. Use --force to replace it."
+            )
+        shutil.rmtree(EXPECTED_MODEL_ROOT)
+
+    MODEL_BASE_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(source_root), str(EXPECTED_MODEL_ROOT))
+
+
+def main() -> int:
+    require_sensos_admin()
+    args = parse_args()
+
+    with tempfile.TemporaryDirectory(prefix="birdnet-models.") as tmpdir:
+        tmp_path = Path(tmpdir)
+        zip_path = tmp_path / "birdnet-models.zip"
+        extract_root = tmp_path / "extract"
+        extract_root.mkdir(parents=True, exist_ok=True)
+
+        print(f"Downloading BirdNET models from {args.url}")
+        download_zip(args.url, zip_path)
+
+        print("Extracting model archive")
+        extracted = extract_zip(zip_path, extract_root)
+        verify_model_layout(extracted)
+
+        print(f"Installing models into {EXPECTED_MODEL_ROOT}")
+        install_models(extracted, args.force)
+
+    print(f"BirdNET models installed at {EXPECTED_MODEL_ROOT}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

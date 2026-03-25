@@ -62,12 +62,32 @@ Current exploratory contents:
 If `tflite-runtime` is not available on the host, use a host-native alternative
 that works on your platform, such as TensorFlow in the BirdNET-specific venv.
 
+## Download model files
+
+To download and install the BirdNET model bundle directly into `/sensos/birdnet`:
+
+```bash
+sudo -u sensos-admin install-birdnet-models
+```
+
+To use a different URL:
+
+```bash
+sudo -u sensos-admin install-birdnet-models --url '<zip-url>'
+```
+
 ## Enable BirdNET
 
 Run as `sensos-admin`:
 
 ```bash
 sudo -u sensos-admin config-birdnet
+```
+
+Or, to download the model bundle first and then enable BirdNET:
+
+```bash
+sudo -u sensos-admin config-birdnet --download-models
 ```
 
 That will:

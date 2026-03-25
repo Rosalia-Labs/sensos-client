@@ -14,6 +14,7 @@ CONFIG_FILE = CLIENT_ROOT / "etc" / "birdnet.env"
 MODEL_ROOT = CLIENT_ROOT / "birdnet" / "BirdNET_v2.4_tflite"
 SERVICE_NAME = "process-birdnet.service"
 SETUP_STEP = REPO_ROOT / "setup" / "08-birdnet"
+INSTALL_MODELS_CMD = "install-birdnet-models"
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
@@ -48,6 +49,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Start process-birdnet.service after setup.",
     )
+    parser.add_argument(
+        "--download-models",
+        action="store_true",
+        help="Download and install the BirdNET model bundle before enabling BirdNET.",
+    )
+    parser.add_argument(
+        "--models-url",
+        help="Override the BirdNET model zip URL used with --download-models.",
+    )
     return parser.parse_args()
 
 
@@ -79,6 +89,15 @@ def run_setup_step() -> None:
         raise SystemExit(result.returncode)
 
 
+def install_models(url: str | None) -> None:
+    cmd = [INSTALL_MODELS_CMD]
+    if url:
+        cmd.extend(["--url", url])
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        raise SystemExit(result.returncode)
+
+
 def systemctl(*args: str) -> None:
     result = subprocess.run(["sudo", "systemctl", *args])
     if result.returncode != 0:
@@ -94,6 +113,9 @@ def main() -> int:
         systemctl("disable", "--now", SERVICE_NAME)
         print("BirdNET disabled.")
         return 0
+
+    if args.download_models:
+        install_models(args.models_url)
 
     ensure_models_present()
     write_config(True)
