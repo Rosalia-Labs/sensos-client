@@ -9,7 +9,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CLIENT_ROOT="${SENSOS_REPO_ROOT:-${REPO_ROOT}}"
 PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
 REQUIRED_PACKAGES_FILE="${CLIENT_ROOT}/setup/packages-required.txt"
-DISCOURAGED_PACKAGES_FILE="${CLIENT_ROOT}/setup/packages-discouraged.txt"
+REMOVE_PACKAGES_FILE="${CLIENT_ROOT}/setup/packages-remove.txt"
 
 log() {
     printf '[setup/01-packages] %s\n' "$*"
@@ -27,7 +27,7 @@ require_root() {
 require_inputs() {
     [[ -x "${PRECHECK_SCRIPT}" ]] || die "missing or non-executable preflight script: ${PRECHECK_SCRIPT}"
     [[ -f "${REQUIRED_PACKAGES_FILE}" ]] || die "missing ${REQUIRED_PACKAGES_FILE}"
-    [[ -f "${DISCOURAGED_PACKAGES_FILE}" ]] || die "missing ${DISCOURAGED_PACKAGES_FILE}"
+    [[ -f "${REMOVE_PACKAGES_FILE}" ]] || die "missing ${REMOVE_PACKAGES_FILE}"
 }
 
 run_preflight() {
@@ -45,24 +45,25 @@ package_is_installed() {
     dpkg-query -W -f='${Status}\n' "${package_name}" 2>/dev/null | grep -Fxq 'install ok installed'
 }
 
-warn_discouraged_packages() {
-    local warned=0
+remove_listed_packages() {
+    local packages=()
     local package_name
 
     while IFS= read -r package_name; do
         [[ -n "${package_name}" ]] || continue
         if package_is_installed "${package_name}"; then
-            if [[ "${warned}" -eq 0 ]]; then
-                log "detected discouraged packages from the old pi-gen removal list:"
-                warned=1
-            fi
-            log "warning: installed discouraged package: ${package_name}"
+            packages+=("${package_name}")
         fi
-    done < <(read_package_file "${DISCOURAGED_PACKAGES_FILE}")
+    done < <(read_package_file "${REMOVE_PACKAGES_FILE}")
 
-    if [[ "${warned}" -eq 0 ]]; then
-        log "no discouraged packages detected"
+    if [[ "${#packages[@]}" -eq 0 ]]; then
+        log "no removable packages detected"
+        return
     fi
+
+    log "removing packages listed in ${REMOVE_PACKAGES_FILE}"
+    apt-get purge -y "${packages[@]}"
+    apt-get autoremove -y
 }
 
 install_required_packages() {
@@ -87,7 +88,7 @@ main() {
     require_root
     require_inputs
     run_preflight
-    warn_discouraged_packages
+    remove_listed_packages
     install_required_packages
 }
 
