@@ -15,8 +15,14 @@ That path is gitignored.
 Layout:
 
 - `test/qemu/artifacts/images/debian-trixie-arm64-base.qcow2`
+- `test/qemu/artifacts/images/debian-trixie-arm64-data.qcow2`
 - `test/qemu/artifacts/images/edk2-arm64-vars.fd`
 - `test/qemu/artifacts/iso/debian-trixie-arm64-netinst.iso`
+
+By default, the helper creates two 32 GB qcow2 disks:
+
+- base/system disk: `32G`
+- data disk: `32G`
 
 ## Workflow
 
