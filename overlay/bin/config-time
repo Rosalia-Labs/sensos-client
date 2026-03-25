@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 CHRONY_CONF = Path("/etc/chrony/chrony.conf")
 SENSOS_CHRONY_CONF = Path(os.environ.get("SENSOS_CLIENT_ROOT", "/sensos")) / "etc" / "chrony.conf"
+DEFAULT_DISPLAY_TIMEZONE = "America/Chicago"
 
 
 def run(cmd):
@@ -43,7 +44,7 @@ def current_timezone_name() -> str:
 
 
 def display_timezone_name() -> str:
-    return os.environ.get("TZ", "").strip() or current_timezone_name()
+    return os.environ.get("TZ", "").strip() or DEFAULT_DISPLAY_TIMEZONE
 
 
 def current_local_time_display(timezone_name: str) -> str:
