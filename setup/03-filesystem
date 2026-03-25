@@ -16,6 +16,7 @@ SENSOS_DATA_GROUP="sensos-data"
 
 MUTABLE_DIRS=(
     "${DEPLOY_ROOT}"
+    "${DEPLOY_ROOT}/birdnet"
     "${DEPLOY_ROOT}/data"
     "${DEPLOY_ROOT}/data/audio_recordings"
     "${DEPLOY_ROOT}/data/audio_recordings/queued"
@@ -92,6 +93,7 @@ ensure_mutable_layout() {
     done
 
     set_shared_dir_policy "${DEPLOY_ROOT}"
+    set_shared_dir_policy "${DEPLOY_ROOT}/birdnet"
     set_shared_dir_policy "${DEPLOY_ROOT}/data"
     set_shared_dir_policy "${DEPLOY_ROOT}/data/audio_recordings"
     set_shared_dir_policy "${DEPLOY_ROOT}/data/audio_recordings/queued"
