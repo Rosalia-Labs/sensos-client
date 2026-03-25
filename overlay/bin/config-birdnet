@@ -14,6 +14,7 @@ MODEL_ROOT = CLIENT_ROOT / "birdnet" / "BirdNET_v2.4_tflite"
 SERVICE_NAME = "process-birdnet.service"
 SETUP_HELPER = CLIENT_ROOT / "libexec" / "setup-birdnet.sh"
 INSTALL_MODELS_CMD = "install-birdnet-models"
+DEFAULT_BACKEND = "tensorflow"
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
@@ -57,12 +58,37 @@ def parse_args() -> argparse.Namespace:
         "--models-url",
         help="Override the BirdNET model zip URL used with --download-models.",
     )
+    parser.add_argument(
+        "--backend",
+        choices=["tensorflow", "tflite"],
+        default=DEFAULT_BACKEND,
+        help="BirdNET inference backend to install and require (default: tensorflow).",
+    )
     return parser.parse_args()
 
 
-def write_config(enabled: bool) -> None:
+def read_existing_backend() -> str:
+    if not CONFIG_FILE.exists():
+        return DEFAULT_BACKEND
+
+    for line in CONFIG_FILE.read_text(encoding="utf-8").splitlines():
+        if line.startswith("BIRDNET_BACKEND="):
+            backend = line.split("=", 1)[1].strip()
+            if backend in {"tensorflow", "tflite"}:
+                return backend
+
+    return DEFAULT_BACKEND
+
+
+def write_config(enabled: bool, backend: str) -> None:
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(f"BIRDNET_ENABLED={'1' if enabled else '0'}\n", encoding="utf-8")
+    CONFIG_FILE.write_text(
+        (
+            f"BIRDNET_ENABLED={'1' if enabled else '0'}\n"
+            f"BIRDNET_BACKEND={backend}\n"
+        ),
+        encoding="utf-8",
+    )
 
 
 def ensure_models_present() -> None:
@@ -108,7 +134,7 @@ def main() -> int:
     args = parse_args()
 
     if args.disable:
-        write_config(False)
+        write_config(False, read_existing_backend())
         systemctl("disable", "--now", SERVICE_NAME)
         print("BirdNET disabled.")
         return 0
@@ -117,7 +143,7 @@ def main() -> int:
         install_models(args.models_url)
 
     ensure_models_present()
-    write_config(True)
+    write_config(True, args.backend)
     run_setup_step()
 
     if args.enable_service:
@@ -125,7 +151,7 @@ def main() -> int:
     if args.start_service:
         systemctl("start", SERVICE_NAME)
 
-    print(f"BirdNET configured. Service: {SERVICE_NAME}")
+    print(f"BirdNET configured. Backend: {args.backend}. Service: {SERVICE_NAME}")
     return 0
 
 

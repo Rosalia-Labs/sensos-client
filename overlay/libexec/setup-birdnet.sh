@@ -9,6 +9,7 @@ BIRDNET_VENV_DIR="${DEPLOY_ROOT}/python/birdnet-venv"
 BIRDNET_STAMP_FILE="${BIRDNET_VENV_DIR}/.requirements.sha256"
 BIRDNET_SERVICE="process-birdnet.service"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+DEFAULT_BIRDNET_BACKEND="tensorflow"
 
 log() {
     printf '[libexec/setup-birdnet] %s\n' "$*"
@@ -32,18 +33,38 @@ birdnet_enabled() {
     grep -Eq '^BIRDNET_ENABLED=1$' "${BIRDNET_CONFIG_FILE}"
 }
 
+birdnet_backend() {
+    local backend
+
+    backend="$(awk -F= '/^BIRDNET_BACKEND=/{print $2}' "${BIRDNET_CONFIG_FILE}" 2>/dev/null | tail -n 1 | tr -d '[:space:]')"
+    if [[ -z "${backend}" ]]; then
+        backend="${DEFAULT_BIRDNET_BACKEND}"
+    fi
+
+    case "${backend}" in
+        tensorflow|tflite)
+            printf '%s\n' "${backend}"
+            ;;
+        *)
+            die "unsupported BIRDNET_BACKEND='${backend}' in ${BIRDNET_CONFIG_FILE}"
+            ;;
+    esac
+}
+
 requirements_declared() {
     grep -Eq '^\s*[^#[:space:]]' "${BIRDNET_REQUIREMENTS_FILE}"
 }
 
 requirements_digest() {
+    local backend="$1"
+
     if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "${BIRDNET_REQUIREMENTS_FILE}" | awk '{print $1}'
+        printf '%s:%s\n' "$(sha256sum "${BIRDNET_REQUIREMENTS_FILE}" | awk '{print $1}')" "${backend}"
         return
     fi
 
     if command -v shasum >/dev/null 2>&1; then
-        shasum -a 256 "${BIRDNET_REQUIREMENTS_FILE}" | awk '{print $1}'
+        printf '%s:%s\n' "$(shasum -a 256 "${BIRDNET_REQUIREMENTS_FILE}" | awk '{print $1}')" "${backend}"
         return
     fi
 
@@ -62,10 +83,24 @@ ensure_venv() {
 }
 
 install_birdnet_requirements_if_needed() {
+    local backend="$1"
     local current_digest
     local previous_digest=""
+    local backend_package
+    local other_package
 
-    current_digest="$(requirements_digest)"
+    case "${backend}" in
+        tensorflow)
+            backend_package="tensorflow"
+            other_package="tflite-runtime"
+            ;;
+        tflite)
+            backend_package="tflite-runtime"
+            other_package="tensorflow"
+            ;;
+    esac
+
+    current_digest="$(requirements_digest "${backend}")"
     if [[ -f "${BIRDNET_STAMP_FILE}" ]]; then
         previous_digest="$(head -n 1 "${BIRDNET_STAMP_FILE}" | tr -d '[:space:]')"
     fi
@@ -76,11 +111,14 @@ install_birdnet_requirements_if_needed() {
     fi
 
     if requirements_declared; then
-        log "installing BirdNET Python dependencies from ${BIRDNET_REQUIREMENTS_FILE}"
-        "${BIRDNET_VENV_DIR}/bin/pip" install -r "${BIRDNET_REQUIREMENTS_FILE}"
+        log "installing BirdNET Python dependencies from ${BIRDNET_REQUIREMENTS_FILE} with backend ${backend}"
+        "${BIRDNET_VENV_DIR}/bin/pip" install -r "${BIRDNET_REQUIREMENTS_FILE}" "${backend_package}"
     else
-        log "no BirdNET Python requirements declared; skipping pip"
+        log "no BirdNET Python requirements declared; installing backend ${backend} only"
+        "${BIRDNET_VENV_DIR}/bin/pip" install "${backend_package}"
     fi
+
+    "${BIRDNET_VENV_DIR}/bin/pip" uninstall -y "${other_package}" >/dev/null 2>&1 || true
 
     printf '%s\n' "${current_digest}" >"${BIRDNET_STAMP_FILE}"
 }
@@ -103,6 +141,8 @@ reconcile_service_state() {
 }
 
 main() {
+    local backend
+
     require_root
     require_inputs
 
@@ -111,8 +151,9 @@ main() {
         return 0
     fi
 
+    backend="$(birdnet_backend)"
     ensure_venv
-    install_birdnet_requirements_if_needed
+    install_birdnet_requirements_if_needed "${backend}"
     set_permissions
     reconcile_service_state
 }

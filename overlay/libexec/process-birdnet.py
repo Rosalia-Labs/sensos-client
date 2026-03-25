@@ -15,17 +15,6 @@ from typing import List
 
 import numpy as np
 import soundfile as sf
-try:
-    import tflite_runtime.interpreter as tflite
-    INTERPRETER_BACKEND = "tflite-runtime"
-except ImportError:
-    import tensorflow as tf
-
-    class _TensorFlowLiteModule:
-        Interpreter = tf.lite.Interpreter
-
-    tflite = _TensorFlowLiteModule()
-    INTERPRETER_BACKEND = "tensorflow"
 
 SCRIPT_FILE = os.path.realpath(__file__)
 SCRIPT_DIR = os.path.dirname(SCRIPT_FILE)
@@ -72,6 +61,7 @@ MODEL_PATH = MODEL_ROOT / "audio-model.tflite"
 META_MODEL_PATH = MODEL_ROOT / "meta-model.tflite"
 LABELS_PATH = MODEL_ROOT / "labels" / "en_us.txt"
 LOCATION_CONF = CLIENT_ROOT_PATH / "etc" / "location.conf"
+BIRDNET_CONFIG = CLIENT_ROOT_PATH / "etc" / "birdnet.env"
 
 WINDOW_SEC = 3
 STRIDE_SEC = 1
@@ -82,6 +72,47 @@ MIN_FILE_AGE_SEC = int(os.environ.get("BIRDNET_MIN_FILE_AGE_SEC", "15"))
 FILE_STABLE_SEC = int(os.environ.get("BIRDNET_FILE_STABLE_SEC", "30"))
 IDLE_SLEEP_SEC = int(os.environ.get("BIRDNET_IDLE_SLEEP_SEC", "60"))
 ERROR_SLEEP_SEC = int(os.environ.get("BIRDNET_ERROR_SLEEP_SEC", "10"))
+
+
+def read_backend_preference(config_path: Path) -> str:
+    backend = "tensorflow"
+    try:
+        for line in config_path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("BIRDNET_BACKEND="):
+                candidate = line.split("=", 1)[1].strip()
+                if candidate:
+                    backend = candidate
+                break
+    except FileNotFoundError:
+        return backend
+
+    if backend not in {"tensorflow", "tflite"}:
+        raise RuntimeError(f"Unsupported BIRDNET_BACKEND='{backend}' in {config_path}")
+    return backend
+
+
+BACKEND_PREFERENCE = read_backend_preference(BIRDNET_CONFIG)
+if BACKEND_PREFERENCE == "tflite":
+    try:
+        import tflite_runtime.interpreter as tflite
+    except ImportError as exc:
+        raise RuntimeError(
+            "BirdNET backend is configured as 'tflite', but tflite-runtime is not installed."
+        ) from exc
+    INTERPRETER_BACKEND = "tflite-runtime"
+else:
+    try:
+        import tensorflow as tf
+    except ImportError as exc:
+        raise RuntimeError(
+            "BirdNET backend is configured as 'tensorflow', but tensorflow is not installed."
+        ) from exc
+
+    class _TensorFlowLiteModule:
+        Interpreter = tf.lite.Interpreter
+
+    tflite = _TensorFlowLiteModule()
+    INTERPRETER_BACKEND = "tensorflow"
 
 
 @dataclass
