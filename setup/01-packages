@@ -45,7 +45,8 @@ package_is_installed() {
     dpkg-query -W -f='${Status}\n' "${package_name}" 2>/dev/null | grep -Fxq 'install ok installed'
 }
 
-remove_listed_packages() {
+collect_installed_packages_from_file() {
+    local package_file="$1"
     local packages=()
     local package_name
 
@@ -54,42 +55,71 @@ remove_listed_packages() {
         if package_is_installed "${package_name}"; then
             packages+=("${package_name}")
         fi
-    done < <(read_package_file "${REMOVE_PACKAGES_FILE}")
+    done < <(read_package_file "${package_file}")
 
-    if [[ "${#packages[@]}" -eq 0 ]]; then
+    printf '%s\n' "${packages[@]}"
+}
+
+remove_listed_packages() {
+    local packages=("$@")
+
+    [[ "${#packages[@]}" -gt 0 ]] || {
         log "no removable packages detected"
         return
-    fi
+    }
 
     log "removing packages listed in ${REMOVE_PACKAGES_FILE}"
     apt-get purge -y "${packages[@]}"
     apt-get autoremove -y
 }
 
-install_required_packages() {
+collect_missing_required_packages() {
     local packages=()
     local package_name
 
     while IFS= read -r package_name; do
         [[ -n "${package_name}" ]] || continue
-        packages+=("${package_name}")
+        if ! package_is_installed "${package_name}"; then
+            packages+=("${package_name}")
+        fi
     done < <(read_package_file "${REQUIRED_PACKAGES_FILE}")
 
-    [[ "${#packages[@]}" -gt 0 ]] || die "no packages listed in ${REQUIRED_PACKAGES_FILE}"
+    printf '%s\n' "${packages[@]}"
+}
 
-    log "updating apt package index"
-    apt-get update
+install_required_packages() {
+    local packages=("$@")
 
-    log "installing required packages"
+    [[ "${#packages[@]}" -gt 0 ]] || {
+        log "all required packages already installed"
+        return
+    }
+
+    log "installing missing required packages"
     apt-get install -y --no-install-recommends "${packages[@]}"
 }
 
 main() {
+    local remove_packages=()
+    local install_packages=()
+
     require_root
     require_inputs
     run_preflight
-    remove_listed_packages
-    install_required_packages
+
+    mapfile -t remove_packages < <(collect_installed_packages_from_file "${REMOVE_PACKAGES_FILE}")
+    mapfile -t install_packages < <(collect_missing_required_packages)
+
+    if [[ "${#remove_packages[@]}" -eq 0 && "${#install_packages[@]}" -eq 0 ]]; then
+        log "package state already converged; skipping apt operations"
+        return
+    fi
+
+    log "updating apt package index"
+    apt-get update
+
+    remove_listed_packages "${remove_packages[@]}"
+    install_required_packages "${install_packages[@]}"
 }
 
 main "$@"
