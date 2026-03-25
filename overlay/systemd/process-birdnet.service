@@ -4,6 +4,10 @@ After=multi-user.target sensos-arecord.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
+# This service is optional. It also requires:
+# - BirdNET model files under /sensos/birdnet/BirdNET_v2.4_tflite
+# - host-native Python deps from python/requirements-birdnet.txt
+
 [Service]
 Type=simple
 User=sensos-runner
