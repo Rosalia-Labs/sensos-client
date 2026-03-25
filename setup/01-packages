@@ -57,7 +57,9 @@ collect_installed_packages_from_file() {
         fi
     done < <(read_package_file "${package_file}")
 
-    printf '%s\n' "${packages[@]}"
+    if [[ "${#packages[@]}" -gt 0 ]]; then
+        printf '%s\n' "${packages[@]}"
+    fi
 }
 
 remove_listed_packages() {
@@ -84,7 +86,9 @@ collect_missing_required_packages() {
         fi
     done < <(read_package_file "${REQUIRED_PACKAGES_FILE}")
 
-    printf '%s\n' "${packages[@]}"
+    if [[ "${#packages[@]}" -gt 0 ]]; then
+        printf '%s\n' "${packages[@]}"
+    fi
 }
 
 install_required_packages() {
