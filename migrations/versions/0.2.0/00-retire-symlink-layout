@@ -1,0 +1,37 @@
+#!/bin/bash
+
+set -euo pipefail
+
+DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
+LEGACY_BIN_DIR="${DEPLOY_ROOT}/bin"
+LEGACY_SYSTEMD_DIR="${DEPLOY_ROOT}/systemd"
+HOST_BIN_DIR="/usr/local/bin"
+HOST_SYSTEMD_DIR="/etc/systemd/system"
+
+log() {
+    printf '[migrations/0.2.0/00-retire-symlink-layout] %s\n' "$*"
+}
+
+remove_managed_symlinks() {
+    local source_dir="$1"
+    local target_dir="$2"
+    local target_path
+    local resolved_path
+
+    [[ -d "${target_dir}" ]] || return
+
+    while IFS= read -r target_path; do
+        resolved_path="$(readlink "${target_path}")"
+        if [[ "${resolved_path}" == "${source_dir}/"* ]]; then
+            rm -f "${target_path}"
+            log "removed legacy symlink ${target_path} -> ${resolved_path}"
+        fi
+    done < <(find "${target_dir}" -maxdepth 1 -type l | sort)
+}
+
+main() {
+    remove_managed_symlinks "${LEGACY_BIN_DIR}" "${HOST_BIN_DIR}"
+    remove_managed_symlinks "${LEGACY_SYSTEMD_DIR}" "${HOST_SYSTEMD_DIR}"
+}
+
+main "$@"
