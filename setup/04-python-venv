@@ -11,6 +11,7 @@ DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
 PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
 REQUIREMENTS_FILE="${CLIENT_ROOT}/python/requirements.txt"
 VENV_DIR="${DEPLOY_ROOT}/python/venv"
+REQUIREMENTS_STAMP_FILE="${VENV_DIR}/.requirements.sha256"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 SENSOS_ADMIN_USER="sensos-admin"
@@ -56,15 +57,53 @@ ensure_venv() {
     if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
         log "creating virtual environment at ${VENV_DIR}"
         "${PYTHON_BIN}" -m venv "${VENV_DIR}"
+        VENV_CREATED=1
     else
         log "reusing existing virtual environment at ${VENV_DIR}"
+        VENV_CREATED=0
     fi
 }
 
-install_requirements() {
-    log "installing Python dependencies from ${REQUIREMENTS_FILE}"
-    "${VENV_DIR}/bin/pip" install --upgrade pip
-    "${VENV_DIR}/bin/pip" install -r "${REQUIREMENTS_FILE}"
+requirements_declared() {
+    grep -Eq '^\s*[^#[:space:]]' "${REQUIREMENTS_FILE}"
+}
+
+requirements_digest() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "${REQUIREMENTS_FILE}" | awk '{print $1}'
+        return
+    fi
+
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "${REQUIREMENTS_FILE}" | awk '{print $1}'
+        return
+    fi
+
+    die "missing sha256sum/shasum; cannot track Python requirements state"
+}
+
+install_requirements_if_needed() {
+    local current_digest
+    local previous_digest=""
+
+    current_digest="$(requirements_digest)"
+    if [[ -f "${REQUIREMENTS_STAMP_FILE}" ]]; then
+        previous_digest="$(head -n 1 "${REQUIREMENTS_STAMP_FILE}" | tr -d '[:space:]')"
+    fi
+
+    if [[ "${VENV_CREATED}" -eq 0 && "${current_digest}" == "${previous_digest}" ]]; then
+        log "Python requirements unchanged; skipping pip"
+        return
+    fi
+
+    if requirements_declared; then
+        log "installing Python dependencies from ${REQUIREMENTS_FILE}"
+        "${VENV_DIR}/bin/pip" install -r "${REQUIREMENTS_FILE}"
+    else
+        log "no Python requirements declared; skipping pip"
+    fi
+
+    printf '%s\n' "${current_digest}" >"${REQUIREMENTS_STAMP_FILE}"
 }
 
 set_venv_permissions() {
@@ -82,7 +121,7 @@ main() {
     require_python
     ensure_python_layout
     ensure_venv
-    install_requirements
+    install_requirements_if_needed
     set_venv_permissions
 }
 
