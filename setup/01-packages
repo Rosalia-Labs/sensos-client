@@ -10,6 +10,7 @@ CLIENT_ROOT="${SENSOS_REPO_ROOT:-${REPO_ROOT}}"
 PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
 REQUIRED_PACKAGES_FILE="${CLIENT_ROOT}/setup/packages-required.txt"
 REMOVE_PACKAGES_FILE="${CLIENT_ROOT}/setup/packages-remove.txt"
+EAGER_APT="${SENSOS_EAGER_APT:-0}"
 
 log() {
     printf '[setup/01-packages] %s\n' "$*"
@@ -113,6 +114,15 @@ main() {
 
     mapfile -t remove_packages < <(collect_installed_packages_from_file "${REMOVE_PACKAGES_FILE}")
     mapfile -t install_packages < <(collect_missing_required_packages)
+
+    if [[ "${EAGER_APT}" == "1" ]]; then
+        log "eager APT mode enabled; refreshing package index"
+        apt-get update
+        remove_listed_packages "${remove_packages[@]}"
+        log "installing required packages"
+        apt-get install -y --no-install-recommends $(read_package_file "${REQUIRED_PACKAGES_FILE}")
+        return
+    fi
 
     if [[ "${#remove_packages[@]}" -eq 0 && "${#install_packages[@]}" -eq 0 ]]; then
         log "package state already converged; skipping apt operations"

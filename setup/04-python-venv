@@ -13,6 +13,7 @@ REQUIREMENTS_FILE="${CLIENT_ROOT}/python/requirements.txt"
 VENV_DIR="${DEPLOY_ROOT}/python/venv"
 REQUIREMENTS_STAMP_FILE="${VENV_DIR}/.requirements.sha256"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+EAGER_PIP="${SENSOS_EAGER_PIP:-0}"
 
 SENSOS_ADMIN_USER="sensos-admin"
 SENSOS_DATA_GROUP="sensos-data"
@@ -89,6 +90,17 @@ install_requirements_if_needed() {
     current_digest="$(requirements_digest)"
     if [[ -f "${REQUIREMENTS_STAMP_FILE}" ]]; then
         previous_digest="$(head -n 1 "${REQUIREMENTS_STAMP_FILE}" | tr -d '[:space:]')"
+    fi
+
+    if [[ "${EAGER_PIP}" == "1" ]]; then
+        if requirements_declared; then
+            log "eager pip mode enabled; installing Python dependencies from ${REQUIREMENTS_FILE}"
+            "${VENV_DIR}/bin/pip" install -r "${REQUIREMENTS_FILE}"
+        else
+            log "eager pip mode enabled but no Python requirements declared; skipping pip"
+        fi
+        printf '%s\n' "${current_digest}" >"${REQUIREMENTS_STAMP_FILE}"
+        return
     fi
 
     if [[ "${VENV_CREATED}" -eq 0 && "${current_digest}" == "${previous_digest}" ]]; then

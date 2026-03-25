@@ -31,7 +31,13 @@ confirm_install_target() {
 }
 
 sudo_run() {
-    sudo env "SENSOS_REPO_ROOT=${REPO_ROOT}" "SENSOS_DEPLOY_ROOT=${DEPLOY_ROOT}" "SENSOS_ALLOW_FRESH_INSTALL=1" "$@"
+    sudo env \
+        "SENSOS_REPO_ROOT=${REPO_ROOT}" \
+        "SENSOS_DEPLOY_ROOT=${DEPLOY_ROOT}" \
+        "SENSOS_ALLOW_FRESH_INSTALL=1" \
+        "SENSOS_EAGER_APT=1" \
+        "SENSOS_EAGER_PIP=1" \
+        "$@"
 }
 
 main() {
