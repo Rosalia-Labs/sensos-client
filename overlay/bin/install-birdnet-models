@@ -55,9 +55,9 @@ def extract_zip(zip_path: Path, destination: Path) -> Path:
     if expected.exists():
         return expected
 
-    matches = [path for path in destination.iterdir() if path.is_dir()]
-    if len(matches) == 1:
-        return matches[0]
+    model_files = list(destination.rglob("audio-model.tflite"))
+    if len(model_files) == 1:
+        return model_files[0].parent
 
     raise SystemExit("ERROR: could not locate extracted BirdNET_v2.4_tflite directory.")
 
