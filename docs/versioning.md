@@ -26,6 +26,14 @@ Git commit hashes are useful for traceability, but they are not the primary vers
 
 ## Meaning
 
+Before `1.0.0`, this repo should be treated as pre-stable:
+
+- `MAJOR`: reserved for the eventual stable compatibility line (`1.0.0` and beyond)
+- `MINOR`: the main release boundary during `0.x`; may include breaking deployment, state-layout, or migration-contract changes
+- `PATCH`: bug fixes and idempotence fixes that do not intentionally change the desired setup contract
+
+After `1.0.0`, use stricter semver-style meaning:
+
 - `MAJOR`: breaking compatibility, incompatible state layout, or migration contract changes
 - `MINOR`: backward-compatible features or additive setup/state changes
 - `PATCH`: bug fixes and idempotence fixes that do not change the migration contract
@@ -58,6 +66,8 @@ Before a release:
 - bump [`VERSION`](/Users/keittth/Projects/sensos-client/VERSION) intentionally
 - if the release changes persisted state or setup behavior, add or update migration logic
 
+During `0.x`, prefer `MINOR` bumps for meaningful deployment-model or setup-contract changes, even when they are not backward-compatible.
+
 When running setup on a Pi:
 
 - `setup/00-preflight` reads the repo `VERSION`
@@ -84,7 +94,7 @@ script for this flow. It:
 
 The repo also includes a top-level [`install`](/Users/tkeitt/Projects/sensos-client/install)
 script for first-time deployment. It prompts with a `[y/N]` warning, then runs
-the repo's setup scripts and deploys the live overlay into `/sensos`.
+the repo's setup scripts and deploys the live overlay into the host plus `/sensos`.
 
 ## Reminder
 

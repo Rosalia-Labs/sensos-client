@@ -16,7 +16,6 @@ SENSOS_DATA_GROUP="sensos-data"
 
 MUTABLE_DIRS=(
     "${DEPLOY_ROOT}"
-    "${DEPLOY_ROOT}/bin"
     "${DEPLOY_ROOT}/data"
     "${DEPLOY_ROOT}/data/audio_recordings"
     "${DEPLOY_ROOT}/data/audio_recordings/queued"
@@ -29,7 +28,6 @@ MUTABLE_DIRS=(
     "${DEPLOY_ROOT}/libexec"
     "${DEPLOY_ROOT}/log"
     "${DEPLOY_ROOT}/python"
-    "${DEPLOY_ROOT}/systemd"
 )
 
 log() {
