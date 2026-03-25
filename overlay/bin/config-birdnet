@@ -9,11 +9,10 @@ import sys
 from pathlib import Path
 
 CLIENT_ROOT = Path(os.environ.get("SENSOS_CLIENT_ROOT", "/sensos"))
-REPO_ROOT = Path(os.environ.get("SENSOS_REPO_ROOT", Path(__file__).resolve().parents[2]))
 CONFIG_FILE = CLIENT_ROOT / "etc" / "birdnet.env"
 MODEL_ROOT = CLIENT_ROOT / "birdnet" / "BirdNET_v2.4_tflite"
 SERVICE_NAME = "process-birdnet.service"
-SETUP_STEP = REPO_ROOT / "setup" / "08-birdnet"
+SETUP_HELPER = CLIENT_ROOT / "libexec" / "setup-birdnet.sh"
 INSTALL_MODELS_CMD = "install-birdnet-models"
 
 
@@ -82,9 +81,9 @@ def ensure_models_present() -> None:
 
 
 def run_setup_step() -> None:
-    if not SETUP_STEP.exists():
-        raise SystemExit(f"ERROR: missing BirdNET setup step at {SETUP_STEP}")
-    result = subprocess.run(["sudo", str(SETUP_STEP)])
+    if not SETUP_HELPER.exists():
+        raise SystemExit(f"ERROR: missing BirdNET setup helper at {SETUP_HELPER}")
+    result = subprocess.run(["sudo", str(SETUP_HELPER)])
     if result.returncode != 0:
         raise SystemExit(result.returncode)
 

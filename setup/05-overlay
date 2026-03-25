@@ -15,6 +15,7 @@ OVERLAY_BIN_DIR="${OVERLAY_ROOT}/bin"
 OVERLAY_ETC_DIR="${OVERLAY_ROOT}/etc"
 OVERLAY_LIBEXEC_DIR="${OVERLAY_ROOT}/libexec"
 OVERLAY_SYSTEMD_DIR="${OVERLAY_ROOT}/systemd"
+BIRDNET_REQUIREMENTS_SOURCE="${CLIENT_ROOT}/python/requirements-birdnet.txt"
 
 DEPLOY_ETC_DIR="${DEPLOY_ROOT}/etc"
 DEPLOY_LIBEXEC_DIR="${DEPLOY_ROOT}/libexec"
@@ -57,6 +58,15 @@ ensure_deploy_dirs() {
     install -d -m 2775 "${DEPLOY_ROOT}"
     install -d -m 2775 "${DEPLOY_ETC_DIR}"
     install -d -m 2775 "${DEPLOY_LIBEXEC_DIR}"
+}
+
+install_birdnet_requirements() {
+    if [[ -f "${BIRDNET_REQUIREMENTS_SOURCE}" ]]; then
+        install -m 0644 "${BIRDNET_REQUIREMENTS_SOURCE}" "${DEPLOY_ETC_DIR}/birdnet-requirements.txt"
+        log "installed ${DEPLOY_ETC_DIR}/birdnet-requirements.txt from ${BIRDNET_REQUIREMENTS_SOURCE}"
+    else
+        log "no BirdNET requirements file found at ${BIRDNET_REQUIREMENTS_SOURCE}; skipping"
+    fi
 }
 
 purge_target_dir() {
@@ -150,6 +160,7 @@ main() {
     ensure_host_dirs
     install_dir_entries "${OVERLAY_ETC_DIR}" "${DEPLOY_ETC_DIR}" 0644 no
     install_dir_entries "${OVERLAY_LIBEXEC_DIR}" "${DEPLOY_LIBEXEC_DIR}" 0755 yes
+    install_birdnet_requirements
     remove_legacy_symlinks
     install_host_entries "${OVERLAY_BIN_DIR}" "${HOST_BIN_DIR}" 0755
     install_host_entries "${OVERLAY_SYSTEMD_DIR}" "${HOST_SYSTEMD_DIR}" 0644
