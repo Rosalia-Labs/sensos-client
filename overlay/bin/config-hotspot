@@ -33,6 +33,10 @@ require_command() {
     }
 }
 
+have_command() {
+    command -v "$1" >/dev/null 2>&1
+}
+
 read_network_value() {
     local wanted_key="$1"
     local key value
@@ -49,7 +53,6 @@ read_network_value() {
 }
 
 require_command nmcli
-require_command rfkill
 
 [[ -f "${NETWORK_CONF}" ]] || {
     echo "ERROR: ${NETWORK_CONF} does not exist." >&2
@@ -92,7 +95,11 @@ mkdir -p "${LOG_DIR}"
 exec 3>>"${LOG_FILE}"
 echo "[$(date -Is)] Applying access point config..." >&3
 
-rfkill list wifi 2>/dev/null | grep -q "Soft blocked: yes" && sudo rfkill unblock wifi || true
+if have_command rfkill; then
+    rfkill list wifi 2>/dev/null | grep -q "Soft blocked: yes" && sudo rfkill unblock wifi || true
+else
+    echo "[$(date -Is)] rfkill not installed; skipping Wi-Fi unblock step." >&3
+fi
 sudo nmcli radio wifi on || true
 
 current_con="$(nmcli -t -f GENERAL.CONNECTION device show "${IFACE}" | cut -d: -f2 || true)"
