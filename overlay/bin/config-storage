@@ -71,12 +71,41 @@ ensure_data_layout() {
     sudo chmod -R +rX "${CLIENT_ROOT}/data" "${CLIENT_ROOT}/etc" "${CLIENT_ROOT}/log"
 }
 
-if [[ -z "${device}" ]]; then
-    echo "❌ --device must be specified (e.g., /dev/sda, /dev/nvme0n1, etc.)."
+prompt_for_device_selection() {
+    local selection=""
+
+    echo "ℹ️  No block device specified."
+    echo "Available block devices:"
+    lsblk -dpno NAME,SIZE,TYPE,MOUNTPOINT | awk '$3 == "disk" { print }'
     echo
-    echo "Hint: Run 'lsblk -o NAME,SIZE,TYPE,MOUNTPOINT' to list available devices."
-    lsblk -o NAME,SIZE,TYPE,MOUNTPOINT
-    exit 1
+    echo "Enter a device path such as /dev/sda, or 'none' to prepare ${DATA_MOUNT} on the current filesystem."
+
+    while true; do
+        read -p "❓ Device to use [none]: " selection
+        selection="${selection:-none}"
+
+        if [[ "${selection}" == "none" ]]; then
+            device=""
+            return 0
+        fi
+
+        if [[ -b "${selection}" ]]; then
+            device="${selection}"
+            return 0
+        fi
+
+        echo "❌ '${selection}' is not a valid block device. Enter a device path or 'none'."
+    done
+}
+
+if [[ -z "${device}" ]]; then
+    prompt_for_device_selection
+fi
+
+if [[ -z "${device}" ]]; then
+    ensure_data_layout
+    echo "✅ SensOS data layout initialized under ${DATA_MOUNT}"
+    exit 0
 fi
 
 has_partition_table() {

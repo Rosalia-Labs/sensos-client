@@ -151,6 +151,26 @@ def output_path(root: Path, timestamp: datetime) -> Path:
     return dated / f"sensos_{timestamp.strftime('%Y%m%dT%H%M%S')}.wav"
 
 
+def ensure_output_root_ready(root: Path) -> None:
+    if root.exists():
+        if not root.is_dir():
+            raise SystemExit(f"--output-root is not a directory: {root}")
+        return
+
+    default_root = DEFAULT_OUTPUT_ROOT
+    if root == default_root:
+        raise SystemExit(
+            "Default queued-audio root does not exist: "
+            f"{root}\n"
+            "Run config-storage first, or pass --output-root to write somewhere else."
+        )
+
+    raise SystemExit(
+        f"--output-root does not exist: {root}\n"
+        "Create it first or choose an existing writable directory."
+    )
+
+
 def write_wav(path: Path, frames: bytes, sample_rate: int) -> None:
     with wave.open(str(path), "wb") as wav_file:
         wav_file.setnchannels(1)
@@ -170,6 +190,8 @@ def main() -> int:
         raise SystemExit("--duration-sec must be positive")
     if args.sample_rate <= 0:
         raise SystemExit("--sample-rate must be positive")
+
+    ensure_output_root_ready(args.output_root)
 
     for index in range(args.count):
         timestamp = start + timedelta(seconds=index * args.spacing_sec)
