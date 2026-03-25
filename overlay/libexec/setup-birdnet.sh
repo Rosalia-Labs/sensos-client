@@ -7,7 +7,7 @@ BIRDNET_CONFIG_FILE="${DEPLOY_ROOT}/etc/birdnet.env"
 BIRDNET_REQUIREMENTS_FILE="${DEPLOY_ROOT}/etc/birdnet-requirements.txt"
 BIRDNET_VENV_DIR="${DEPLOY_ROOT}/python/birdnet-venv"
 BIRDNET_STAMP_FILE="${BIRDNET_VENV_DIR}/.requirements.sha256"
-BIRDNET_SERVICE="process-birdnet.service"
+BIRDNET_SERVICE="sensos-birdnet.service"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 DEFAULT_BIRDNET_BACKEND="tensorflow"
 

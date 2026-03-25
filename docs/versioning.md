@@ -68,6 +68,30 @@ Before a release:
 
 During `0.x`, prefer `MINOR` bumps for meaningful deployment-model or setup-contract changes, even when they are not backward-compatible.
 
+## Working Mode During Active Stabilization
+
+While the repo is still in a high-churn bug-swatting phase, use a rolling
+`-dev` version for the current migration boundary.
+
+Example:
+
+```text
+0.3.0-dev
+```
+
+In this mode:
+
+- do not bump `PATCH` for every bug fix or idempotence fix
+- keep the same `MAJOR.MINOR.PATCH-dev` while you are stabilizing one intended deployment contract
+- bump `MINOR` when the migration boundary changes in a meaningful way
+  - service renames
+  - command renames
+  - state-layout changes
+  - install or upgrade contract changes
+- cut the non-`-dev` version only when that migration line is stable enough to treat as a release boundary
+
+This keeps the migration key meaningful without forcing noisy version churn for every repair commit.
+
 When running setup on a Pi:
 
 - `setup/00-preflight` reads the repo `VERSION`

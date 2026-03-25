@@ -1,0 +1,34 @@
+#!/bin/bash
+
+set -euo pipefail
+
+DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
+HOST_BIN_DIR="/usr/local/bin"
+HOST_SYSTEMD_DIR="/etc/systemd/system"
+OLD_LOCATION_CMD="${HOST_BIN_DIR}/set-location"
+OLD_BIRDNET_UNIT="${HOST_SYSTEMD_DIR}/process-birdnet.service"
+
+log() {
+    printf '[migrations/0.3.0/00-rename-entrypoints] %s\n' "$*"
+}
+
+remove_if_present() {
+    local target_path="$1"
+
+    if [[ -e "${target_path}" || -L "${target_path}" ]]; then
+        rm -f "${target_path}"
+        log "removed retired path ${target_path}"
+    fi
+}
+
+main() {
+    remove_if_present "${OLD_LOCATION_CMD}"
+    remove_if_present "${OLD_BIRDNET_UNIT}"
+
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload
+        log "reloaded systemd unit files"
+    fi
+}
+
+main "$@"

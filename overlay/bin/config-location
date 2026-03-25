@@ -86,7 +86,7 @@ def main():
         (["--config-server"], {"help": "Override config server hostname or IP"}),
         (["--port"], {"help": "Override server port"}),
     ]
-    args = parse_args_with_defaults(arg_defs, ["global", "set_location"])
+    args = parse_args_with_defaults(arg_defs, ["global", "config_location"])
 
     if args.latitude is None or args.longitude is None:
         print("❌ Both --latitude and --longitude must be provided.", file=sys.stderr)

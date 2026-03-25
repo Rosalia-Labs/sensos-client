@@ -460,7 +460,7 @@ if [[ ! -f "$LOCATION_FILE" ]] ||
     echo
     echo "WARNING: device location is not configured."
     echo "The storage metadata was written, but it does not include a valid location."
-    echo "Run: set-location --latitude <lat> --longitude <lon>"
+    echo "Run: config-location --latitude <lat> --longitude <lon>"
     echo
 fi
 

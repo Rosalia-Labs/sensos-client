@@ -71,7 +71,7 @@ warn_clock_and_location() {
     echo "Recordings may have incorrect timestamps or missing location context."
     echo "Recommended actions:"
     echo "  - Verify time sync before field deployment."
-    echo "  - Run set-location --latitude <lat> --longitude <lon>."
+    echo "  - Run config-location --latitude <lat> --longitude <lon>."
     echo
 }
 

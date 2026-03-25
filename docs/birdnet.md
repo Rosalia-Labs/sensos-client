@@ -12,14 +12,14 @@ activated after you opt in and install its separate Python runtime.
 Normal client setup installs:
 
 - `/sensos/libexec/process-birdnet.py`
-- `/etc/systemd/system/process-birdnet.service`
+- `/etc/systemd/system/sensos-birdnet.service`
 - `/sensos/birdnet/`
 
 Normal client setup does **not**:
 
 - create the BirdNET venv
 - install TensorFlow / BirdNET Python dependencies
-- enable or start `process-birdnet.service`
+- enable or start `sensos-birdnet.service`
 
 That work is done by `config-birdnet`.
 
@@ -102,7 +102,7 @@ That will:
 - run `setup/08-birdnet`
 - create `/sensos/python/birdnet-venv` if needed
 - install or refresh BirdNET Python dependencies lazily
-- enable `process-birdnet.service`
+- enable `sensos-birdnet.service`
 
 To enable and start immediately:
 
@@ -155,19 +155,19 @@ Useful presets:
 Start BirdNET manually:
 
 ```bash
-sudo systemctl start process-birdnet.service
+sudo systemctl start sensos-birdnet.service
 ```
 
 Follow logs:
 
 ```bash
-sudo journalctl -u process-birdnet.service -f
+sudo journalctl -u sensos-birdnet.service -f
 ```
 
 Inspect service definition:
 
 ```bash
-systemctl cat process-birdnet.service
+systemctl cat sensos-birdnet.service
 ```
 
 ## Check outputs

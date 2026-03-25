@@ -11,7 +11,7 @@ from pathlib import Path
 CLIENT_ROOT = Path(os.environ.get("SENSOS_CLIENT_ROOT", "/sensos"))
 CONFIG_FILE = CLIENT_ROOT / "etc" / "birdnet.env"
 MODEL_ROOT = CLIENT_ROOT / "birdnet" / "BirdNET_v2.4_tflite"
-SERVICE_NAME = "process-birdnet.service"
+SERVICE_NAME = "sensos-birdnet.service"
 SETUP_HELPER = CLIENT_ROOT / "libexec" / "setup-birdnet.sh"
 INSTALL_MODELS_CMD = "install-birdnet-models"
 DEFAULT_BACKEND = "tensorflow"
@@ -47,12 +47,12 @@ def parse_args() -> argparse.Namespace:
         "--enable-service",
         action="store_true",
         default=True,
-        help="Enable process-birdnet.service after setup (default: true).",
+        help="Enable sensos-birdnet.service after setup (default: true).",
     )
     parser.add_argument(
         "--start-service",
         action="store_true",
-        help="Start process-birdnet.service after setup.",
+        help="Start sensos-birdnet.service after setup.",
     )
     parser.add_argument(
         "--download-models",
