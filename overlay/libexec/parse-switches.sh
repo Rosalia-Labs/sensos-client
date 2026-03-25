@@ -5,6 +5,7 @@
 declare -A __cli_options_help
 declare -A __cli_options_defaults
 declare -A __cli_options_is_bool
+declare -A __cli_options_varname
 
 register_option() {
     local opt="$1"
@@ -15,6 +16,7 @@ register_option() {
     local safe_varname="${varname//-/_}"
     __cli_options_help["$opt"]="$help"
     __cli_options_defaults["$safe_varname"]="$default"
+    __cli_options_varname["$opt"]="$safe_varname"
 
     case "$default" in
         true|false) __cli_options_is_bool["$opt"]=1 ;;
@@ -120,14 +122,14 @@ show_usage() {
 
     local opt varname safe_varname default help hint
     for opt in "${keys[@]}"; do
-        varname="${opt#--}"
-        safe_varname="${varname//-/_}"
+        safe_varname="${__cli_options_varname[$opt]}"
+        varname="${safe_varname}"
         default="${__cli_options_defaults[$safe_varname]-}"
         help="${__cli_options_help[$opt]}"
 
         hint=""
         if [[ ${__cli_options_is_bool["$opt"]:-0} -eq 1 ]]; then
-            hint=" (boolean; use --no-${varname} to negate)"
+            hint=" (boolean; use --no-${opt#--} to negate)"
         fi
         printf "  %-24s %-50s %s\n" "$opt [value]" "$help$hint" "(default: $default)"
     done
