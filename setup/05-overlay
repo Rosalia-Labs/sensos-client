@@ -132,14 +132,16 @@ remove_legacy_symlinks() {
 install_host_entries() {
     local source_dir="$1"
     local target_dir="$2"
-    local mode="$3"
     local source_path
+    local target_path
 
     [[ -d "${source_dir}" ]] || return
 
     while IFS= read -r source_path; do
-        install -m "${mode}" "${source_path}" "${target_dir}/$(basename "${source_path}")"
-        log "installed ${target_dir}/$(basename "${source_path}") from ${source_path}"
+        target_path="${target_dir}/$(basename "${source_path}")"
+        rm -f "${target_path}"
+        ln -s "${source_path}" "${target_path}"
+        log "linked ${target_path} -> ${source_path}"
     done < <(find "${source_dir}" -maxdepth 1 -type f ! -name '.gitkeep' | sort)
 }
 
