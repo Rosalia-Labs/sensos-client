@@ -24,7 +24,6 @@ MUTABLE_DIRS=(
     "${DEPLOY_ROOT}/data/birdnet"
     "${DEPLOY_ROOT}/data/microenv"
     "${DEPLOY_ROOT}/etc"
-    "${DEPLOY_ROOT}/init.d"
     "${DEPLOY_ROOT}/keys"
     "${DEPLOY_ROOT}/libexec"
     "${DEPLOY_ROOT}/log"
@@ -101,7 +100,6 @@ ensure_mutable_layout() {
     set_shared_dir_policy "${DEPLOY_ROOT}/data/birdnet"
     set_shared_dir_policy "${DEPLOY_ROOT}/data/microenv"
     set_shared_dir_policy "${DEPLOY_ROOT}/etc"
-    set_shared_dir_policy "${DEPLOY_ROOT}/init.d"
     set_shared_dir_policy "${DEPLOY_ROOT}/log"
     set_shared_dir_policy "${DEPLOY_ROOT}/python"
 
