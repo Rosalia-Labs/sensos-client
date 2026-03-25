@@ -71,14 +71,72 @@ ensure_data_layout() {
     sudo chmod -R +rX "${CLIENT_ROOT}/data" "${CLIENT_ROOT}/etc" "${CLIENT_ROOT}/log"
 }
 
+root_mount_source() {
+    findmnt -n -o SOURCE / 2>/dev/null || true
+}
+
+root_backing_device() {
+    local root_source
+    local pkname
+
+    root_source="$(root_mount_source)"
+    [[ -n "${root_source}" ]] || return 0
+
+    if [[ -b "${root_source}" ]]; then
+        pkname="$(lsblk -no PKNAME "${root_source}" 2>/dev/null | head -n 1)"
+        if [[ -n "${pkname}" ]]; then
+            printf '/dev/%s\n' "${pkname}"
+            return 0
+        fi
+        printf '%s\n' "${root_source}"
+        return 0
+    fi
+
+    printf '%s\n' "${root_source}"
+}
+
+print_device_selection_context() {
+    local root_source
+    local root_device
+
+    root_source="$(root_mount_source)"
+    root_device="$(root_backing_device)"
+
+    echo "Available block devices:"
+    lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS
+    echo
+
+    if [[ -n "${root_source}" ]]; then
+        echo "⚠️  Root filesystem source: ${root_source}"
+    fi
+    if [[ -n "${root_device}" && "${root_device}" != "${root_source}" ]]; then
+        echo "⚠️  Root backing disk: ${root_device}"
+    fi
+    echo "Choose the extra data disk if present, or 'none' to prepare ${DATA_MOUNT} on the current filesystem."
+}
+
+confirm_risky_device_selection() {
+    local selected_device="$1"
+    local root_device
+
+    root_device="$(root_backing_device)"
+    if [[ -z "${root_device}" || "${selected_device}" != "${root_device}" ]]; then
+        return 0
+    fi
+
+    echo "⚠️  ${selected_device} appears to be the disk backing /."
+    echo "Formatting or repartitioning it can destroy the running system."
+    read -p "❓ Type 'ROOT' to continue with ${selected_device}, or press Enter to choose again: " confirm_root
+    [[ "${confirm_root}" == "ROOT" ]]
+}
+
 prompt_for_device_selection() {
     local selection=""
 
     echo "ℹ️  No block device specified."
-    echo "Available block devices:"
-    lsblk -dpno NAME,SIZE,TYPE,MOUNTPOINT | awk '$3 == "disk" { print }'
+    print_device_selection_context
     echo
-    echo "Enter a device path such as /dev/sda, or 'none' to prepare ${DATA_MOUNT} on the current filesystem."
+    echo "Enter a device path such as /dev/vdb, or 'none' to prepare ${DATA_MOUNT} on the current filesystem."
 
     while true; do
         read -p "❓ Device to use [none]: " selection
@@ -90,6 +148,10 @@ prompt_for_device_selection() {
         fi
 
         if [[ -b "${selection}" ]]; then
+            if ! confirm_risky_device_selection "${selection}"; then
+                echo "➡️  Choose another device or 'none'."
+                continue
+            fi
             device="${selection}"
             return 0
         fi
