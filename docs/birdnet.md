@@ -57,10 +57,10 @@ Current exploratory contents:
 
 - `numpy`
 - `soundfile`
-- `tflite-runtime`
+- `tensorflow`
 
-If `tflite-runtime` is not available on the host, use a host-native alternative
-that works on your platform, such as TensorFlow in the BirdNET-specific venv.
+The worker prefers `tflite-runtime` if it is present, but the managed BirdNET
+path currently expects TensorFlow as the host-native backend.
 
 ## Download model files
 
@@ -120,8 +120,8 @@ python3 -m venv /sensos/python/birdnet-venv
 /sensos/python/birdnet-venv/bin/pip install -r /home/<user>/sensos-client/python/requirements-birdnet.txt
 ```
 
-If the exploratory requirements do not work on your platform, install a working
-set into `/sensos/python/birdnet-venv` manually and keep that venv for BirdNET.
+If you need to test the backend manually, installing `tensorflow`, `numpy`, and
+`soundfile` into `/sensos/python/birdnet-venv` should match the managed path.
 
 ## Generate test WAV files
 

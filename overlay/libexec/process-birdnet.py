@@ -15,7 +15,17 @@ from typing import List
 
 import numpy as np
 import soundfile as sf
-import tflite_runtime.interpreter as tflite
+try:
+    import tflite_runtime.interpreter as tflite
+    INTERPRETER_BACKEND = "tflite-runtime"
+except ImportError:
+    import tensorflow as tf
+
+    class _TensorFlowLiteModule:
+        Interpreter = tf.lite.Interpreter
+
+    tflite = _TensorFlowLiteModule()
+    INTERPRETER_BACKEND = "tensorflow"
 
 SCRIPT_FILE = os.path.realpath(__file__)
 SCRIPT_DIR = os.path.dirname(SCRIPT_FILE)
@@ -652,7 +662,7 @@ def main() -> None:
                 continue
 
             if model is None:
-                print(f"🧠 Loading BirdNET model from {MODEL_PATH}")
+                print(f"🧠 Loading BirdNET model from {MODEL_PATH} using {INTERPRETER_BACKEND}")
                 model = load_birdnet_model(MODEL_PATH, LABELS_PATH)
                 if META_MODEL_PATH.exists():
                     print(f"🧭 Loading BirdNET meta-model from {META_MODEL_PATH}")
