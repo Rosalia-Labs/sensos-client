@@ -73,11 +73,11 @@ purge_target_dir() {
     local target_dir="$1"
     local target_path
 
-    [[ -d "${target_dir}" ]] || return
+    [[ -d "${target_dir}" ]] || return 0
 
     while IFS= read -r target_path; do
         rm -f "${target_path}"
-    done < <(find "${target_dir}" \( -type f -o -type l \) -mindepth 1 -maxdepth 1)
+    done < <(find "${target_dir}" -mindepth 1 -maxdepth 1 \( -type f -o -type l \))
 }
 
 install_dir_entries() {
@@ -87,7 +87,7 @@ install_dir_entries() {
     local purge_existing="${4:-yes}"
     local source_path
 
-    [[ -d "${source_dir}" ]] || return
+    [[ -d "${source_dir}" ]] || return 0
 
     if [[ "${purge_existing}" == "yes" ]]; then
         purge_target_dir "${target_dir}"
@@ -105,7 +105,7 @@ remove_managed_host_symlinks() {
     local target_path
     local resolved_path
 
-    [[ -d "${target_dir}" ]] || return
+    [[ -d "${target_dir}" ]] || return 0
 
     while IFS= read -r target_path; do
         resolved_path="$(readlink "${target_path}")"
@@ -119,7 +119,7 @@ remove_managed_host_symlinks() {
 retire_legacy_deploy_dir() {
     local target_dir="$1"
 
-    [[ -e "${target_dir}" ]] || return
+    [[ -e "${target_dir}" ]] || return 0
     rm -rf "${target_dir}"
     log "removed retired legacy deployment directory ${target_dir}"
 }
@@ -135,7 +135,7 @@ install_host_entries() {
     local mode="$3"
     local source_path
 
-    [[ -d "${source_dir}" ]] || return
+    [[ -d "${source_dir}" ]] || return 0
 
     while IFS= read -r source_path; do
         install -m "${mode}" "${source_path}" "${target_dir}/$(basename "${source_path}")"

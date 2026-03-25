@@ -109,7 +109,7 @@ ensure_mutable_layout() {
 ensure_key_permissions() {
     local key_file
 
-    [[ -d "${DEPLOY_ROOT}/keys" ]] || return
+    [[ -d "${DEPLOY_ROOT}/keys" ]] || return 0
 
     while IFS= read -r key_file; do
         set_key_file_policy "${key_file}"
