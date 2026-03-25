@@ -10,6 +10,8 @@ DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
 PREFLIGHT_SCRIPT="${REPO_ROOT}/setup/00-preflight"
 MIGRATIONS_SCRIPT="${REPO_ROOT}/migrations/run"
 SETUP_SCRIPT="${REPO_ROOT}/setup/install"
+REFRESH_APT=0
+REFRESH_PIP=0
 
 log() {
     printf '[upgrade] %s\n' "$*"
@@ -18,6 +20,49 @@ log() {
 die() {
     printf '[upgrade] ERROR: %s\n' "$*" >&2
     exit 1
+}
+
+print_usage() {
+    cat <<EOF
+Usage: ${SCRIPT_PATH} [options]
+
+Pull the latest repo changes, run migrations, and reconcile the deployed client.
+
+Defaults:
+  APT refresh is lazy.
+  Python requirements refresh is lazy.
+
+Options:
+  --refresh          Equivalent to --refresh-apt --refresh-pip
+  --refresh-apt      Force APT metadata refresh and reapply declared packages
+  --refresh-pip      Force Python requirements refresh
+  --help             Show this help and exit
+EOF
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --refresh)
+                REFRESH_APT=1
+                REFRESH_PIP=1
+                ;;
+            --refresh-apt)
+                REFRESH_APT=1
+                ;;
+            --refresh-pip)
+                REFRESH_PIP=1
+                ;;
+            --help|-h)
+                print_usage
+                exit 0
+                ;;
+            *)
+                die "unknown option: $1"
+                ;;
+        esac
+        shift
+    done
 }
 
 validate_version_text() {
@@ -67,7 +112,20 @@ ensure_upstream() {
 }
 
 sudo_run() {
-    sudo env "SENSOS_REPO_ROOT=${REPO_ROOT}" "SENSOS_DEPLOY_ROOT=${DEPLOY_ROOT}" "$@"
+    local -a env_args=(
+        "SENSOS_REPO_ROOT=${REPO_ROOT}"
+        "SENSOS_DEPLOY_ROOT=${DEPLOY_ROOT}"
+    )
+
+    if [[ "${REFRESH_APT}" == "1" ]]; then
+        env_args+=("SENSOS_EAGER_APT=1")
+    fi
+
+    if [[ "${REFRESH_PIP}" == "1" ]]; then
+        env_args+=("SENSOS_EAGER_PIP=1")
+    fi
+
+    sudo env "${env_args[@]}" "$@"
 }
 
 main() {
@@ -75,6 +133,7 @@ main() {
     local pre_pull_version
     local new_version
 
+    parse_args "$@"
     ensure_not_root
     ensure_git_repo
     ensure_clean_repo

@@ -18,6 +18,32 @@ die() {
     exit 1
 }
 
+print_usage() {
+    cat <<EOF
+Usage: ${SCRIPT_PATH} [options]
+
+Configure the current machine as a SensOS client.
+
+Options:
+  --help             Show this help and exit
+EOF
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --help|-h)
+                print_usage
+                exit 0
+                ;;
+            *)
+                die "unknown option: $1"
+                ;;
+        esac
+        shift
+    done
+}
+
 ensure_not_root() {
     [[ "${EUID}" -ne 0 ]] || die "run ${SCRIPT_PATH} as the bootstrap user; it will use sudo for privileged steps"
 }
@@ -41,6 +67,7 @@ sudo_run() {
 }
 
 main() {
+    parse_args "$@"
     ensure_not_root
     [[ -x "${SETUP_SCRIPT}" ]] || die "missing or non-executable setup script: ${SETUP_SCRIPT}"
     [[ -x "${PREFLIGHT_SCRIPT}" ]] || die "missing or non-executable preflight script: ${PREFLIGHT_SCRIPT}"
