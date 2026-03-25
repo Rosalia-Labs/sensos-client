@@ -9,7 +9,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CLIENT_ROOT="${SENSOS_REPO_ROOT:-${REPO_ROOT}}"
 DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
 PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
-OVERLAY_SYSTEMD_DIR="${DEPLOY_ROOT}/systemd"
+OVERLAY_SYSTEMD_DIR="${CLIENT_ROOT}/overlay/systemd"
 
 HOST_BASELINE_UNITS=(
     nftables.service

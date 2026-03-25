@@ -115,6 +115,7 @@ sudo_run() {
     local -a env_args=(
         "SENSOS_REPO_ROOT=${REPO_ROOT}"
         "SENSOS_DEPLOY_ROOT=${DEPLOY_ROOT}"
+        "SENSOS_PREFLIGHT_QUIET=1"
     )
 
     if [[ "${REFRESH_APT}" == "1" ]]; then
