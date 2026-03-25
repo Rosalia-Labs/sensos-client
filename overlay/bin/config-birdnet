@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+import argparse
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+CLIENT_ROOT = Path(os.environ.get("SENSOS_CLIENT_ROOT", "/sensos"))
+REPO_ROOT = Path(os.environ.get("SENSOS_REPO_ROOT", Path(__file__).resolve().parents[2]))
+CONFIG_FILE = CLIENT_ROOT / "etc" / "birdnet.env"
+MODEL_ROOT = CLIENT_ROOT / "birdnet" / "BirdNET_v2.4_tflite"
+SERVICE_NAME = "process-birdnet.service"
+SETUP_STEP = REPO_ROOT / "setup" / "08-birdnet"
+
+
+def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, text=True, capture_output=True)
+
+
+def require_sensos_admin() -> None:
+    if os.geteuid() == 0:
+        return
+    username = os.environ.get("USER") or run(["id", "-un"]).stdout.strip()
+    if username != "sensos-admin":
+        raise SystemExit("ERROR: this script must be run as sensos-admin or root.")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Configure optional host-native BirdNET processing."
+    )
+    parser.add_argument(
+        "--disable",
+        action="store_true",
+        help="Disable BirdNET processing and stop the systemd service.",
+    )
+    parser.add_argument(
+        "--enable-service",
+        action="store_true",
+        default=True,
+        help="Enable process-birdnet.service after setup (default: true).",
+    )
+    parser.add_argument(
+        "--start-service",
+        action="store_true",
+        help="Start process-birdnet.service after setup.",
+    )
+    return parser.parse_args()
+
+
+def write_config(enabled: bool) -> None:
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(f"BIRDNET_ENABLED={'1' if enabled else '0'}\n", encoding="utf-8")
+
+
+def ensure_models_present() -> None:
+    required = [
+        MODEL_ROOT / "audio-model.tflite",
+        MODEL_ROOT / "labels" / "en_us.txt",
+    ]
+    missing = [str(path) for path in required if not path.exists()]
+    if missing:
+        joined = "\n  ".join(missing)
+        raise SystemExit(
+            "ERROR: BirdNET model files are missing:\n"
+            f"  {joined}\n"
+            "Place model files under /sensos/birdnet/BirdNET_v2.4_tflite before enabling BirdNET."
+        )
+
+
+def run_setup_step() -> None:
+    if not SETUP_STEP.exists():
+        raise SystemExit(f"ERROR: missing BirdNET setup step at {SETUP_STEP}")
+    result = subprocess.run(["sudo", str(SETUP_STEP)])
+    if result.returncode != 0:
+        raise SystemExit(result.returncode)
+
+
+def systemctl(*args: str) -> None:
+    result = subprocess.run(["sudo", "systemctl", *args])
+    if result.returncode != 0:
+        raise SystemExit(result.returncode)
+
+
+def main() -> int:
+    require_sensos_admin()
+    args = parse_args()
+
+    if args.disable:
+        write_config(False)
+        systemctl("disable", "--now", SERVICE_NAME)
+        print("BirdNET disabled.")
+        return 0
+
+    ensure_models_present()
+    write_config(True)
+    run_setup_step()
+
+    if args.enable_service:
+        systemctl("enable", SERVICE_NAME)
+    if args.start_service:
+        systemctl("start", SERVICE_NAME)
+
+    print(f"BirdNET configured. Service: {SERVICE_NAME}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -11,7 +11,7 @@ StartLimitBurst=5
 [Service]
 Type=simple
 User=sensos-runner
-ExecStart=/sensos/python/venv/bin/python /sensos/libexec/process-birdnet.py
+ExecStart=/sensos/python/birdnet-venv/bin/python /sensos/libexec/process-birdnet.py
 WorkingDirectory=/sensos/data
 StandardOutput=journal
 StandardError=journal
