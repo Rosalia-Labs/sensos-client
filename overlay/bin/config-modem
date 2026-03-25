@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+set -euo pipefail
+
+SCRIPT_FILE="$(realpath "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_FILE}")" && pwd)"
+OVERLAY_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${OVERLAY_ROOT}}"
+
+SCRIPT_NAME="$(basename "$0")"
+NETWORK_CONF="${CLIENT_ROOT}/etc/network.conf"
+PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
+
+[[ -f "${PARSE_SWITCHES_LIB}" ]] || {
+    echo "❌ Missing parse-switches library at ${PARSE_SWITCHES_LIB}" >&2
+    exit 1
+}
+source "${PARSE_SWITCHES_LIB}"
+
+if [[ "$(id -un)" != "sensos-admin" ]]; then
+    echo "ERROR: this script must be run as sensos-admin." >&2
+    exit 1
+fi
+
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || {
+        echo "ERROR: missing required command: $1" >&2
+        exit 1
+    }
+}
+
+read_network_value() {
+    local wanted_key="$1"
+    local key value
+
+    [[ -f "${NETWORK_CONF}" ]] || return 0
+
+    while IFS='=' read -r key value; do
+        [[ -n "${key}" ]] || continue
+        if [[ "${key}" == "${wanted_key}" ]]; then
+            printf '%s\n' "${value}"
+            return 0
+        fi
+    done < <(grep -Ev '^\s*(#|$)' "${NETWORK_CONF}" || true)
+}
+
+clear_tc_limits() {
+    local dev="$1"
+    sudo tc qdisc del dev "${dev}" root 2>/dev/null || true
+    sudo tc qdisc del dev "${dev}" ingress 2>/dev/null || true
+}
+
+apply_tc_limits() {
+    local dev="$1"
+    local up_kbit="${2:-}"
+    local down_kbit="${3:-}"
+
+    if [[ -n "${up_kbit}" ]]; then
+        echo "Applying egress cap ${up_kbit} kbit on ${dev}..."
+        sudo tc qdisc del dev "${dev}" root 2>/dev/null || true
+        sudo tc qdisc add dev "${dev}" root tbf rate "${up_kbit}kbit" burst 32kbit latency 400ms
+    fi
+
+    if [[ -n "${down_kbit}" ]]; then
+        echo "Applying ingress cap ${down_kbit} kbit on ${dev}..."
+        sudo tc qdisc del dev "${dev}" handle ffff: ingress 2>/dev/null || true
+        sudo tc qdisc add dev "${dev}" handle ffff: ingress
+        sudo tc filter add dev "${dev}" parent ffff: protocol all u32 \
+            match u32 0 0 police rate "${down_kbit}kbit" burst 32k drop flowid :1
+    fi
+}
+
+set_wireguard_mtu_for_1nce() {
+    local wg_iface="$1"
+    local wg_conf="/etc/wireguard/${wg_iface}.conf"
+
+    if ! sudo test -f "${wg_conf}"; then
+        echo "NOTE: ${wg_conf} not found; WireGuard MTU update skipped." >&2
+        return
+    fi
+
+    if sudo grep -q '^[[:space:]]*MTU[[:space:]]*=' "${wg_conf}"; then
+        sudo sed -i -E 's/^[[:space:]]*MTU[[:space:]]*=.*/MTU = 1120/' "${wg_conf}"
+    else
+        sudo sed -i '/^\[Interface\]/a MTU = 1120' "${wg_conf}"
+    fi
+
+    sudo wg-quick down "${wg_iface}" >/dev/null 2>&1 || true
+    sudo wg-quick up "${wg_iface}"
+    echo "Set WireGuard MTU=1120 in ${wg_conf} and reloaded ${wg_iface} for 1NCE."
+}
+
+register_vnstat_iface() {
+    local iface="$1"
+
+    if ! command -v vnstat >/dev/null 2>&1; then
+        echo "WARNING: vnstat not installed; cannot track usage on ${iface}." >&2
+        return
+    fi
+
+    if ! ip link show "${iface}" >/dev/null 2>&1; then
+        echo "WARNING: interface ${iface} not present yet; skipping vnStat registration." >&2
+        return
+    fi
+
+    if ! vnstat -i "${iface}" --oneline >/dev/null 2>&1; then
+        if vnstat --help 2>/dev/null | grep -q -- '--create'; then
+            echo "Creating vnStat database for ${iface}..."
+            sudo vnstat --create -i "${iface}"
+        else
+            echo "Adding vnStat interface ${iface}..."
+            sudo vnstat --add -i "${iface}"
+        fi
+    fi
+
+    if command -v systemctl >/dev/null 2>&1; then
+        sudo systemctl enable --now vnstat >/dev/null 2>&1 || true
+    fi
+}
+
+register_option --service service "Cellular provider (e.g. 1nce, Soracom)" ""
+register_option --device device "NetworkManager control port (e.g. cdc-wdm0 or ttyUSB2)" "cdc-wdm0"
+register_option --start start_now "Bring modem online after config" "false"
+register_option --limit-up-kbit limit_up_kbit "Optional egress cap in kbit" ""
+register_option --limit-down-kbit limit_down_kbit "Optional ingress cap in kbit" ""
+
+parse_switches "${SCRIPT_NAME}" "$@"
+
+[[ -n "${service}" ]] || {
+    echo "ERROR: --service must be specified." >&2
+    exit 1
+}
+
+[[ -f "${NETWORK_CONF}" ]] || {
+    echo "ERROR: required config ${NETWORK_CONF} is missing." >&2
+    exit 1
+}
+
+require_command nmcli
+
+CONNECTIVITY_MODE="$(read_network_value CONNECTIVITY_MODE)"
+BANDWIDTH_POLICY="$(read_network_value BANDWIDTH_POLICY)"
+NETWORK_NAME="$(read_network_value NETWORK_NAME)"
+CONNECTIVITY_MODE="${CONNECTIVITY_MODE:-manual}"
+BANDWIDTH_POLICY="${BANDWIDTH_POLICY:-open}"
+
+[[ -n "${NETWORK_NAME}" ]] || {
+    echo "ERROR: NETWORK_NAME is missing in ${NETWORK_CONF}." >&2
+    exit 1
+}
+
+WG_IFACE="${NETWORK_NAME//$'\r'/}"
+WG_IFACE="${WG_IFACE#"${WG_IFACE%%[![:space:]]*}"}"
+WG_IFACE="${WG_IFACE%"${WG_IFACE##*[![:space:]]}"}"
+
+case "${service,,}" in
+    1nce) apn="iot.1nce.net" ;;
+    soracom) apn="soracom.io" ;;
+    *)
+        echo "ERROR: unsupported service '${service}'." >&2
+        exit 1
+        ;;
+esac
+
+NM_CON_NAME="sensos-${service,,}"
+
+if [[ "${device}" == wwan* ]]; then
+    echo "NOTE: '${device}' looks like a data interface. Using control port 'cdc-wdm0' instead."
+    device="cdc-wdm0"
+fi
+
+data_iface="${device}"
+if [[ "${device}" == cdc-wdm* || "${device}" == ttyUSB* ]]; then
+    data_iface="wwan0"
+fi
+
+if nmcli -t -f NAME con show | grep -Fxq "${NM_CON_NAME}"; then
+    echo "Updating modem connection '${NM_CON_NAME}' for device '${device}'..."
+else
+    echo "Creating modem connection '${NM_CON_NAME}' on device '${device}'..."
+    sudo nmcli con add type gsm ifname "${device}" con-name "${NM_CON_NAME}" apn "${apn}"
+fi
+
+sudo nmcli con mod "${NM_CON_NAME}" gsm.apn "${apn}" || true
+sudo nmcli con mod "${NM_CON_NAME}" connection.id "${NM_CON_NAME}" || true
+sudo nmcli con mod "${NM_CON_NAME}" connection.interface-name "${device}" || true
+sudo nmcli con mod "${NM_CON_NAME}" ipv4.method auto || true
+sudo nmcli con mod "${NM_CON_NAME}" ipv6.method ignore || true
+
+if [[ "${CONNECTIVITY_MODE}" == "always" ]]; then
+    sudo nmcli con mod "${NM_CON_NAME}" connection.autoconnect yes
+    echo "Autoconnect enabled (CONNECTIVITY_MODE=always)."
+else
+    sudo nmcli con mod "${NM_CON_NAME}" connection.autoconnect no
+    echo "Autoconnect disabled (CONNECTIVITY_MODE=${CONNECTIVITY_MODE})."
+fi
+
+if [[ -z "${limit_up_kbit}" && -z "${limit_down_kbit}" ]]; then
+    if [[ "${BANDWIDTH_POLICY}" == "restricted" ]]; then
+        limit_up_kbit="32"
+        limit_down_kbit="256"
+        echo "BANDWIDTH_POLICY=restricted -> applying defaults: up=${limit_up_kbit} kbit, down=${limit_down_kbit} kbit"
+    else
+        echo "BANDWIDTH_POLICY=${BANDWIDTH_POLICY} -> clearing any existing traffic caps on ${data_iface}"
+        clear_tc_limits "${data_iface}"
+    fi
+else
+    echo "CLI limits provided -> overriding policy (up='${limit_up_kbit}', down='${limit_down_kbit}')."
+fi
+
+if [[ -n "${limit_up_kbit}" || -n "${limit_down_kbit}" ]]; then
+    require_command tc
+    apply_tc_limits "${data_iface}" "${limit_up_kbit}" "${limit_down_kbit}"
+fi
+
+if [[ "${service,,}" == "1nce" ]]; then
+    echo "Setting modem MTU=1200 for 1NCE on connection '${NM_CON_NAME}'..."
+    sudo nmcli con mod "${NM_CON_NAME}" gsm.mtu 1200 || {
+        echo "WARNING: NetworkManager build may not support gsm.mtu; enforcing live MTU only." >&2
+    }
+    if ip link show "${data_iface}" >/dev/null 2>&1; then
+        sudo ip link set dev "${data_iface}" mtu 1200 || true
+    fi
+    require_command wg-quick
+    set_wireguard_mtu_for_1nce "${WG_IFACE}"
+fi
+
+register_vnstat_iface "${data_iface}"
+
+if [[ "${start_now}" == "true" ]]; then
+    echo "Bringing up modem connection '${NM_CON_NAME}' via '${device}'..."
+    if ! sudo nmcli -w 45 con up "${NM_CON_NAME}" ifname "${device}"; then
+        echo "WARNING: failed to start modem connection '${NM_CON_NAME}' (ifname=${device})." >&2
+    fi
+fi
+
+echo "Done."
+echo "Manage the modem with:"
+echo "  sudo nmcli con up   \"${NM_CON_NAME}\""
+echo "  sudo nmcli con down \"${NM_CON_NAME}\""

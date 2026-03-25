@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+set -euo pipefail
+
+SCRIPT_FILE="$(realpath "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_FILE}")" && pwd)"
+OVERLAY_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${OVERLAY_ROOT}}"
+
+SCRIPT_NAME="$(basename "$0")"
+NETWORK_CONF="${CLIENT_ROOT}/etc/network.conf"
+LOG_DIR="${CLIENT_ROOT}/log"
+LOG_FILE="${LOG_DIR}/access_point.log"
+PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
+
+[[ -f "${PARSE_SWITCHES_LIB}" ]] || {
+    echo "❌ Missing parse-switches library at ${PARSE_SWITCHES_LIB}" >&2
+    exit 1
+}
+source "${PARSE_SWITCHES_LIB}"
+
+if [[ "$(id -un)" != "sensos-admin" ]]; then
+    echo "ERROR: this script must be run as sensos-admin." >&2
+    exit 1
+fi
+
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || {
+        echo "ERROR: missing required command: $1" >&2
+        exit 1
+    }
+}
+
+read_network_value() {
+    local wanted_key="$1"
+    local key value
+
+    [[ -f "${NETWORK_CONF}" ]] || return 0
+
+    while IFS='=' read -r key value; do
+        [[ -n "${key}" ]] || continue
+        if [[ "${key}" == "${wanted_key}" ]]; then
+            printf '%s\n' "${value}"
+            return 0
+        fi
+    done < <(grep -Ev '^\s*(#|$)' "${NETWORK_CONF}" || true)
+}
+
+require_command nmcli
+require_command rfkill
+
+[[ -f "${NETWORK_CONF}" ]] || {
+    echo "ERROR: ${NETWORK_CONF} does not exist." >&2
+    exit 1
+}
+
+NETWORK_NAME="$(read_network_value NETWORK_NAME)"
+CLIENT_WG_IP="$(read_network_value CLIENT_WG_IP)"
+
+[[ -n "${NETWORK_NAME}" && -n "${CLIENT_WG_IP}" ]] || {
+    echo "ERROR: NETWORK_NAME or CLIENT_WG_IP not set in ${NETWORK_CONF}." >&2
+    exit 1
+}
+
+IFS='.' read -r _ _ oct3 oct4 <<<"${CLIENT_WG_IP}"
+DEFAULT_SSID="${NETWORK_NAME}-${oct3}-${oct4}"
+
+register_option --ssid ssid "Wi-Fi SSID" "${DEFAULT_SSID}"
+register_option --password password "Wi-Fi password (8-63 chars)" ""
+register_option --power-save power_save "Enable Wi-Fi power management" "false"
+register_option --interface interface "Wireless interface to use" "wlan0"
+register_option --channel channel "2.4 GHz channel (1/6/11 or empty for auto)" "6"
+
+parse_switches "${SCRIPT_NAME}" "$@"
+
+SSID="${ssid:-${DEFAULT_SSID}}"
+IFACE="${interface:-wlan0}"
+
+[[ -n "${password}" ]] || {
+    echo "ERROR: --password is required (SSID defaults to '${DEFAULT_SSID}' unless provided)." >&2
+    exit 1
+}
+
+if [[ ${#password} -lt 8 || ${#password} -gt 63 ]]; then
+    echo "ERROR: WPA2 password must be between 8 and 63 characters." >&2
+    exit 1
+fi
+
+mkdir -p "${LOG_DIR}"
+exec 3>>"${LOG_FILE}"
+echo "[$(date -Is)] Applying access point config..." >&3
+
+rfkill list wifi 2>/dev/null | grep -q "Soft blocked: yes" && sudo rfkill unblock wifi || true
+sudo nmcli radio wifi on || true
+
+current_con="$(nmcli -t -f GENERAL.CONNECTION device show "${IFACE}" | cut -d: -f2 || true)"
+if [[ -n "${current_con}" ]]; then
+    mode="$(nmcli -t -f 802-11-wireless.mode connection show "${current_con}" 2>/dev/null | cut -d: -f2 || true)"
+    if [[ "${mode}" == "ap" ]]; then
+        echo "[$(date -Is)] ${IFACE} already hosts AP '${current_con}'; adopting it." >&3
+    else
+        sudo nmcli dev disconnect "${IFACE}" || true
+    fi
+fi
+
+AP_CON=""
+if [[ -n "${current_con}" ]]; then
+    mode="$(nmcli -t -f 802-11-wireless.mode connection show "${current_con}" 2>/dev/null | cut -d: -f2 || true)"
+    if [[ "${mode}" == "ap" ]]; then
+        AP_CON="${current_con}"
+    fi
+fi
+
+if [[ -z "${AP_CON}" ]]; then
+    saved_ap="$(nmcli -t -f NAME,TYPE,802-11-wireless.mode connection show 2>/dev/null \
+        | awk -F: '$2=="wifi" && $3=="ap"{print $1; exit}')"
+    if [[ -n "${saved_ap}" ]]; then
+        AP_CON="${saved_ap}"
+        echo "[$(date -Is)] Reusing saved AP '${AP_CON}'." >&3
+    fi
+fi
+
+if [[ -z "${AP_CON}" ]]; then
+    AP_CON="sensosap"
+    echo "[$(date -Is)] Creating new AP '${AP_CON}'..." >&3
+    sudo nmcli connection add type wifi ifname "${IFACE}" con-name "${AP_CON}" ssid "${SSID}"
+fi
+
+if [[ "${AP_CON}" != "sensosap" ]]; then
+    echo "[$(date -Is)] Renaming AP '${AP_CON}' -> 'sensosap'." >&3
+    sudo nmcli connection modify "${AP_CON}" connection.id sensosap
+    AP_CON="sensosap"
+fi
+
+sudo nmcli connection modify "${AP_CON}" \
+    connection.interface-name "${IFACE}" \
+    802-11-wireless.mode ap \
+    802-11-wireless.ssid "${SSID}" \
+    802-11-wireless.band bg \
+    802-11-wireless.hidden no \
+    wifi-sec.key-mgmt wpa-psk \
+    wifi-sec.proto rsn \
+    wifi-sec.group ccmp \
+    wifi-sec.pairwise ccmp \
+    wifi-sec.psk "${password}" \
+    ipv4.method shared \
+    connection.autoconnect yes \
+    connection.autoconnect-priority 100
+
+if [[ -n "${channel}" && "${channel}" =~ ^[0-9]+$ ]]; then
+    sudo nmcli connection modify "${AP_CON}" 802-11-wireless.channel "${channel}"
+else
+    sudo nmcli connection modify "${AP_CON}" 802-11-wireless.channel "" || true
+fi
+
+if ! sudo nmcli connection up "${AP_CON}"; then
+    echo "[$(date -Is)] ERROR: failed to bring up AP '${AP_CON}'." >&3
+    exit 1
+fi
+
+if [[ "${power_save,,}" == "true" ]]; then
+    sudo iw dev "${IFACE}" set power_save on || true
+else
+    sudo iw dev "${IFACE}" set power_save off || true
+fi
+
+iw dev "${IFACE}" info >&3 || true
+nmcli -f GENERAL.CONNECTION,IP4.ADDRESS device show "${IFACE}" >&3 || true
+nmcli -f GENERAL,IP4,802-11-wireless connection show "${AP_CON}" >&3 || true
+
+if sudo nmcli -t -f NAME connection show --active | grep -Fxq "sensosap"; then
+    echo "[$(date -Is)] AP '${AP_CON}' active; disabling auto-hotspot.service if present." >&3
+    sudo systemctl disable --now auto-hotspot.service 2>/dev/null || true
+fi
+
+echo "[$(date -Is)] AP '${AP_CON}' active on ${IFACE} (autoconnect enabled)." >&3
+exec 3>&-
