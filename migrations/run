@@ -28,7 +28,7 @@ require_inputs() {
 }
 
 run_preflight() {
-    log "running preflight"
+    [[ "${SENSOS_PREFLIGHT_QUIET:-0}" == "1" ]] || log "running preflight"
     "${PRECHECK_SCRIPT}"
 }
 

@@ -11,11 +11,13 @@ DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
 VERSION_FILE="${CLIENT_ROOT}/VERSION"
 INSTALL_STATE_FILE="${DEPLOY_ROOT}/etc/install-state.env"
 ALLOW_FRESH_INSTALL="${SENSOS_ALLOW_FRESH_INSTALL:-0}"
+PREFLIGHT_QUIET="${SENSOS_PREFLIGHT_QUIET:-0}"
 OS_RELEASE_FILE="/etc/os-release"
 SUPPORTED_OS_ID_REGEX='^(raspbian|debian)$'
 SUPPORTED_OS_CODENAME="trixie"
 
 log() {
+    [[ "${PREFLIGHT_QUIET}" == "1" ]] && return
     printf '[setup/00-preflight] %s\n' "$*"
 }
 
