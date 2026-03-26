@@ -380,7 +380,7 @@ def main():
         if wait:
             time.sleep(wait)
 
-        timestamp = datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+        timestamp = datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         print(f"Polling {sensor['sensor_type']} at {sensor['addr']}...")
 
         data = None

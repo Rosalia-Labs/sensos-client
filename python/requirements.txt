@@ -7,5 +7,6 @@ adafruit-circuitpython-ads1x15
 adafruit-circuitpython-bme280
 adafruit-circuitpython-scd30
 adafruit-circuitpython-scd4x
+lgpio
 pynmea2
 smbus2
