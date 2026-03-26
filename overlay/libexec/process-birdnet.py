@@ -595,6 +595,14 @@ def record_failure(conn: sqlite3.Connection, source_key: str, info: sf.SoundFile
     conn.commit()
 
 
+def update_deleted_source(conn: sqlite3.Connection, source_key: str, source_path: Path) -> None:
+    conn.execute(
+        "UPDATE processed_files SET deleted_source = ? WHERE source_path = ?",
+        (0 if source_path.exists() else 1, source_key),
+    )
+    conn.commit()
+
+
 def delete_source(path: Path) -> None:
     try:
         path.unlink(missing_ok=True)
@@ -713,11 +721,7 @@ def process_wav(
     conn.commit()
 
     delete_source(source_path)
-    conn.execute(
-        "UPDATE processed_files SET deleted_source = ? WHERE source_path = ?",
-        (0 if source_path.exists() else 1, source_key),
-    )
-    conn.commit()
+    update_deleted_source(conn, source_key, source_path)
 
 
 def main() -> None:
@@ -761,8 +765,14 @@ def main() -> None:
             print(f"✅ Finished {next_wav}")
         except Exception as exc:
             if next_wav is not None and next_wav.exists():
+                source_key = relative_source(next_wav)
                 try:
-                    record_failure(conn, relative_source(next_wav), sf.info(next_wav), str(exc))
+                    record_failure(conn, source_key, sf.info(next_wav), str(exc))
+                except Exception:
+                    pass
+                delete_source(next_wav)
+                try:
+                    update_deleted_source(conn, source_key, next_wav)
                 except Exception:
                     pass
             print(f"❌ BirdNET processing failure: {exc}", file=sys.stderr)
