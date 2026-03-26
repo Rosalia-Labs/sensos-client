@@ -80,14 +80,9 @@ cd sensos-client
 ./install
 ```
 
-If that bootstrap user will also generate test audio directly into
-`/sensos/data` from the repo checkout, add it to `sensos-data` after install:
-
-```bash
-sudo usermod -aG sensos-data <bootstrap-user>
-```
-
-Then log out and back in again so the new group membership takes effect.
+The install flow adds that bootstrap user to `sensos-data`, so after `./install`
+completes, log out and back in again if you want the new group membership in
+that shell before generating test audio directly into `/sensos/data`.
 
 Because `run` is disposable, anything you want to keep should be completed
 during the install flow before switching to `run`.

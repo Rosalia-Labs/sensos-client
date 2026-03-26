@@ -60,6 +60,18 @@ detect_bootstrap_user() {
     fi
 }
 
+ensure_bootstrap_user_membership() {
+    local group_name
+
+    [[ -n "${BOOTSTRAP_USER}" ]] || return 0
+    id -u "${BOOTSTRAP_USER}" >/dev/null 2>&1 || \
+        die "detected bootstrap user does not exist: ${BOOTSTRAP_USER}"
+
+    for group_name in "${SENSOS_MANAGED_GROUPS[@]}"; do
+        ensure_membership "${BOOTSTRAP_USER}" "${group_name}"
+    done
+}
+
 ensure_group_exists() {
     local group_name="$1"
     if ! getent group "${group_name}" >/dev/null 2>&1; then
@@ -181,8 +193,9 @@ main() {
     lock_user_password sensos-runner
 
     install_admin_authorized_keys
+    ensure_bootstrap_user_membership
 
-    log "left bootstrap user unchanged${BOOTSTRAP_USER:+: ${BOOTSTRAP_USER}}"
+    log "left bootstrap user otherwise unchanged${BOOTSTRAP_USER:+: ${BOOTSTRAP_USER}}"
 }
 
 main "$@"
