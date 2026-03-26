@@ -15,7 +15,6 @@ That path is gitignored.
 Layout:
 
 - `test/qemu/artifacts/images/debian-trixie-arm64-base.qcow2`
-- `test/qemu/artifacts/images/debian-trixie-arm64-setup.qcow2`
 - `test/qemu/artifacts/images/debian-trixie-arm64-data.qcow2`
 - `test/qemu/artifacts/images/edk2-arm64-vars.fd`
 - `test/qemu/artifacts/iso/debian-trixie-arm64-netinst.iso`
@@ -40,35 +39,29 @@ test/qemu/run-debian-trixie-arm64 install
 ```
 
 The `install` command recreates the base/system image first, so rerunning it
-starts a fresh Debian install instead of reusing the previous OS image. It also
-removes the durable `setup` overlay so the next `setup` boot starts cleanly from
-that fresh install. The writable UEFI vars file is also reset during `install`
-so stale boot entries do not skip the installer ISO.
+starts a fresh Debian install instead of reusing the previous VM state. It also
+removes the data disk image and the writable UEFI vars file so the next boot
+starts from a fully clean slate and stale boot
+entries do not skip the installer ISO. The installer boot only attaches the
+system disk so Debian cannot accidentally install itself onto the test data
+disk.
 
-3. Boot that installed image in persistent setup mode to do guest bootstrap and host configuration before installing the SensOS client:
-
-```bash
-test/qemu/run-debian-trixie-arm64 setup
-```
-
-4. Boot that installed image in disposable mode when you want a non-sticky test run:
+3. Do any one-time guest bootstrap during the install boot or after its first
+reboot, then use disposable run boots when you want a non-sticky test session:
 
 ```bash
 test/qemu/run-debian-trixie-arm64 run
 ```
 
-The `setup` command boots a durable qcow2 overlay backed by the installed base
-image, so guest changes persist across later `setup` and `run` boots.
-
-The `run` command boots a fresh temporary qcow2 overlay backed by the durable
-`setup` image, so guest disk changes are discarded when QEMU exits while still
-seeing everything you prepared during `setup`.
+The `run` command uses `-snapshot`, so guest disk changes are discarded when
+QEMU exits.
 
 ## Guest bootstrap
 
 The stock Debian guest does not include `git` or `sudo`, so there is a small
 one-time bootstrap step inside the VM before cloning this repo and running
-`./install`.
+`./install`. Do that during the initial install flow before you switch to
+disposable `run` boots.
 
 As `root` in the guest:
 
@@ -96,9 +89,8 @@ sudo usermod -aG sensos-data <bootstrap-user>
 
 Then log out and back in again so the new group membership takes effect.
 
-Do that bootstrap during the sticky `setup` phase so it is available in later
-disposable `run` boots. Any additional changes made during `run` are still
-discarded on shutdown.
+Because `run` is disposable, anything you want to keep should be completed
+during the install flow before switching to `run`.
 
 ## Data disk
 

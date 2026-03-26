@@ -12,7 +12,6 @@ IMAGE_DIR="${ARTIFACT_ROOT}/images"
 ISO_DIR="${ARTIFACT_ROOT}/iso"
 
 BASE_IMAGE="${SENSOS_QEMU_BASE_IMAGE:-${IMAGE_DIR}/debian-trixie-arm64-base.qcow2}"
-SETUP_IMAGE="${SENSOS_QEMU_SETUP_IMAGE:-${IMAGE_DIR}/debian-trixie-arm64-setup.qcow2}"
 INSTALLER_ISO="${SENSOS_QEMU_INSTALLER_ISO:-${ISO_DIR}/debian-trixie-arm64-netinst.iso}"
 FIRMWARE_CODE="${SENSOS_QEMU_FIRMWARE_CODE:-/opt/local/share/qemu/edk2-aarch64-code.fd}"
 FIRMWARE_VARS="${SENSOS_QEMU_FIRMWARE_VARS:-${IMAGE_DIR}/edk2-arm64-vars.fd}"
@@ -37,13 +36,11 @@ usage() {
     cat <<EOF
 Usage:
   $(basename "$0") install
-  $(basename "$0") setup
   $(basename "$0") run
 
 Commands:
   install   Boot the Debian ARM64 installer ISO and write to the base disk image.
-  setup     Boot a durable setup overlay on top of the installed base image.
-  run       Boot a temporary overlay on top of the setup image, discarding changes on shutdown.
+  run       Boot the installed base image with -snapshot, discarding changes on shutdown.
 
 Artifacts are kept under:
   ${DEFAULT_ARTIFACT_ROOT}
@@ -51,7 +48,6 @@ Artifacts are kept under:
 Environment overrides:
   SENSOS_QEMU_HOME
   SENSOS_QEMU_BASE_IMAGE
-  SENSOS_QEMU_SETUP_IMAGE
   SENSOS_QEMU_INSTALLER_ISO
   SENSOS_QEMU_FIRMWARE_CODE
   SENSOS_QEMU_FIRMWARE_VARS
@@ -119,19 +115,10 @@ recreate_base_image() {
     qemu-img create -f qcow2 "${BASE_IMAGE}" "${DISK_SIZE}" >/dev/null
 }
 
-remove_setup_image() {
-    if [[ -f "${SETUP_IMAGE}" ]]; then
-        log "removing existing setup overlay ${SETUP_IMAGE}"
-        rm -f "${SETUP_IMAGE}"
-    fi
-}
-
-ensure_setup_image() {
-    require_base_image
-
-    if [[ ! -f "${SETUP_IMAGE}" ]]; then
-        log "creating setup overlay ${SETUP_IMAGE} with backing file ${BASE_IMAGE}"
-        qemu-img create -f qcow2 -F qcow2 -b "${BASE_IMAGE}" "${SETUP_IMAGE}" >/dev/null
+remove_data_image() {
+    if [[ -f "${DATA_IMAGE}" ]]; then
+        log "removing existing data image ${DATA_IMAGE}"
+        rm -f "${DATA_IMAGE}"
     fi
 }
 
@@ -146,10 +133,6 @@ require_base_image() {
     [[ -f "${BASE_IMAGE}" ]] || die "base image not found at ${BASE_IMAGE}; run '$(basename "$0") install' first"
 }
 
-require_setup_image() {
-    [[ -f "${SETUP_IMAGE}" ]] || die "setup image not found at ${SETUP_IMAGE}; run '$(basename "$0") setup' first"
-}
-
 require_installer_iso() {
     [[ -f "${INSTALLER_ISO}" ]] || die "installer ISO not found at ${INSTALLER_ISO}"
 }
@@ -159,7 +142,6 @@ print_connection_hints() {
 
 Artifact root: ${ARTIFACT_ROOT}
 Base image:    ${BASE_IMAGE}
-Setup image:   ${SETUP_IMAGE}
 Data image:    ${DATA_IMAGE}
 SSH forward:   ssh -p ${SSH_FORWARD_PORT} <user>@127.0.0.1
 Host access:   guest can reach macOS services at 10.0.2.2
@@ -171,13 +153,17 @@ EOF
 run_qemu() {
     local mode="$1"
     shift
+    local attach_data_image="${1:-yes}"
+    shift
     local -a extra_drives=()
 
     log "launching QEMU in ${mode} mode"
     print_connection_hints
 
-    ensure_data_image
-    extra_drives+=(-drive "if=virtio,file=${DATA_IMAGE},format=qcow2")
+    if [[ "${attach_data_image}" == "yes" ]]; then
+        ensure_data_image
+        extra_drives+=(-drive "if=virtio,file=${DATA_IMAGE},format=qcow2")
+    fi
 
     qemu-system-aarch64 \
         -machine virt,accel=hvf \
@@ -201,40 +187,23 @@ run_qemu() {
 run_install() {
     require_installer_iso
     recreate_base_image
-    remove_setup_image
+    remove_data_image
     reset_firmware_vars
 
-    run_qemu install \
+    run_qemu install no \
         -boot order=d \
         -drive "if=virtio,file=${BASE_IMAGE},format=qcow2" \
         -cdrom "${INSTALLER_ISO}"
 }
 
-run_setup() {
-    ensure_setup_image
-    ensure_firmware_vars
-
-    run_qemu setup \
-        -boot order=c \
-        -drive "if=virtio,file=${SETUP_IMAGE},format=qcow2"
-}
-
 run_snapshot() {
-    local run_image
-
-    require_setup_image
+    require_base_image
     ensure_firmware_vars
-    run_image="$(mktemp "${IMAGE_DIR}/debian-trixie-arm64-run.XXXXXX.qcow2")"
-    log "creating temporary run overlay ${run_image} with backing file ${SETUP_IMAGE}"
-    qemu-img create -f qcow2 -F qcow2 -b "${SETUP_IMAGE}" "${run_image}" >/dev/null
-    trap 'rm -f "${run_image}"' EXIT
 
-    run_qemu snapshot \
+    run_qemu snapshot yes \
         -boot order=c \
-        -drive "if=virtio,file=${run_image},format=qcow2"
-
-    rm -f "${run_image}"
-    trap - EXIT
+        -drive "if=virtio,file=${BASE_IMAGE},format=qcow2" \
+        -snapshot
 }
 
 main() {
@@ -248,11 +217,6 @@ main() {
             ensure_artifact_dirs
             ensure_firmware_code
             run_install
-            ;;
-        setup)
-            ensure_artifact_dirs
-            ensure_firmware_code
-            run_setup
             ;;
         run)
             ensure_artifact_dirs
