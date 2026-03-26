@@ -50,8 +50,8 @@ AUDIO_ROOT = DATA_ROOT / "audio_recordings"
 OUTPUT_ROOT = AUDIO_ROOT / "processed"
 STATE_ROOT = DATA_ROOT / "birdnet"
 DB_PATH = STATE_ROOT / "birdnet.db"
-MIN_FREE_MB = int(os.environ.get("BIRDNET_MIN_FREE_MB", "100"))
-TARGET_FREE_MB = int(os.environ.get("BIRDNET_TARGET_FREE_MB", "200"))
+MIN_FREE_PERCENT = float(os.environ.get("BIRDNET_MIN_FREE_PERCENT", "10"))
+TARGET_FREE_PERCENT = float(os.environ.get("BIRDNET_TARGET_FREE_PERCENT", "20"))
 IDLE_SLEEP_SEC = int(os.environ.get("BIRDNET_THIN_IDLE_SLEEP_SEC", "60"))
 ERROR_SLEEP_SEC = int(os.environ.get("BIRDNET_THIN_ERROR_SLEEP_SEC", "30"))
 
@@ -62,6 +62,13 @@ def now_iso() -> str:
 
 def free_mb(path: Path) -> float:
     return shutil.disk_usage(path).free / (1024 * 1024)
+
+
+def free_percent(path: Path) -> float:
+    usage = shutil.disk_usage(path)
+    if usage.total <= 0:
+        return 0.0
+    return (usage.free / usage.total) * 100.0
 
 
 def ensure_column(
@@ -206,22 +213,22 @@ def main() -> None:
 
     while True:
         try:
-            current_free_mb = free_mb(DATA_ROOT)
-            if current_free_mb >= MIN_FREE_MB:
+            current_free_percent = free_percent(DATA_ROOT)
+            if current_free_percent >= MIN_FREE_PERCENT:
                 time.sleep(IDLE_SLEEP_SEC)
                 continue
 
             print(
-                f"Free space low: {current_free_mb:.1f} MB < {MIN_FREE_MB} MB. Starting thinning."
+                f"Free space low: {current_free_percent:.1f}% < {MIN_FREE_PERCENT:.1f}%. Starting thinning."
             )
-            while current_free_mb < TARGET_FREE_MB:
+            while current_free_percent < TARGET_FREE_PERCENT:
                 if not thin_once(conn):
                     print("No FLAC files available to thin.", file=sys.stderr)
                     break
-                current_free_mb = free_mb(DATA_ROOT)
+                current_free_percent = free_percent(DATA_ROOT)
             print(
-                f"Thinning pass complete. Free space now {current_free_mb:.1f} MB "
-                f"(target {TARGET_FREE_MB} MB)"
+                f"Thinning pass complete. Free space now {current_free_percent:.1f}% "
+                f"(target {TARGET_FREE_PERCENT:.1f}%)"
             )
             time.sleep(IDLE_SLEEP_SEC)
         except Exception as exc:
