@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+import importlib.util
+import os
+import subprocess
+import sys
+
+SCRIPT_FILE = os.path.realpath(__file__)
+SCRIPT_DIR = os.path.dirname(SCRIPT_FILE)
+DEFAULT_OVERLAY_ROOT = os.path.dirname(SCRIPT_DIR)
+
+
+def resolve_overlay_root() -> str:
+    candidates = []
+    env_root = os.environ.get("SENSOS_CLIENT_ROOT")
+    if env_root:
+        candidates.append(env_root)
+    candidates.extend([DEFAULT_OVERLAY_ROOT, "/sensos"])
+
+    for candidate in candidates:
+        utils_file = os.path.join(candidate, "libexec", "utils.py")
+        if os.path.isfile(utils_file):
+            return candidate
+
+    return DEFAULT_OVERLAY_ROOT
+
+
+OVERLAY_ROOT = resolve_overlay_root()
+CLIENT_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", OVERLAY_ROOT)
+UTILS_FILE = os.path.join(OVERLAY_ROOT, "libexec", "utils.py")
+
+if not os.path.isfile(UTILS_FILE):
+    raise RuntimeError(f"Missing utils.py at {UTILS_FILE}")
+
+UTILS_SPEC = importlib.util.spec_from_file_location("sensos_overlay_utils", UTILS_FILE)
+UTILS_MODULE = importlib.util.module_from_spec(UTILS_SPEC)
+assert UTILS_SPEC.loader is not None
+UTILS_SPEC.loader.exec_module(UTILS_MODULE)
+
+parse_args_with_defaults = UTILS_MODULE.parse_args_with_defaults
+create_dir = UTILS_MODULE.create_dir
+write_file = UTILS_MODULE.write_file
+
+CONFIG_PATH = os.path.join(CLIENT_ROOT, "etc", "gps.conf")
+SERVICE_NAME = "sensos-gps.service"
+
+
+def require_sensos_admin() -> None:
+    if os.geteuid() == 0:
+        return
+    username = os.environ.get("USER") or subprocess.run(
+        ["id", "-un"], text=True, capture_output=True, check=False
+    ).stdout.strip()
+    if username != "sensos-admin":
+        raise SystemExit("ERROR: this script must be run as sensos-admin or root.")
+
+
+def systemctl(*args: str) -> None:
+    result = subprocess.run(["sudo", "systemctl", *args], check=False)
+    if result.returncode != 0:
+        raise SystemExit(result.returncode)
+
+
+def main() -> int:
+    require_sensos_admin()
+    arg_defs = [
+        (["--disable"], {"action": "store_true", "help": "Disable GPS service and stop updates."}),
+        (["--backend"], {"default": "i2c", "choices": ["i2c"], "help": "GPS backend type."}),
+        (["--i2c-addr"], {"dest": "i2c_addr", "default": "0x10", "help": "I2C GPS address."}),
+        (["--i2c-bus"], {"dest": "i2c_bus", "type": int, "default": 1, "help": "I2C bus number."}),
+        (["--interval"], {"dest": "interval", "type": int, "default": 60, "help": "Polling interval in seconds."}),
+        (["--sync-time"], {"dest": "sync_time", "default": "true", "help": "Update system time from GPS if needed."}),
+        (["--update-location"], {"dest": "update_location", "default": "true", "help": "Update location.conf from GPS if needed."}),
+        (["--location-drift-m"], {"dest": "location_drift_m", "type": float, "default": 50.0, "help": "Minimum movement before location.conf is updated."}),
+        (["--time-drift-sec"], {"dest": "time_drift_sec", "type": float, "default": 30.0, "help": "Minimum time drift before clock is corrected."}),
+        (["--enable-service"], {"dest": "enable_service", "default": "true", "help": "Enable the systemd service."}),
+        (["--start-service"], {"dest": "start_service", "default": "false", "help": "Start the systemd service now."}),
+    ]
+    args = parse_args_with_defaults(arg_defs, ["global", "config_gps"])
+
+    create_dir(os.path.dirname(CONFIG_PATH), owner="sensos-admin", group="sensos-data", mode=0o2775)
+
+    if args.disable:
+        write_file(
+            CONFIG_PATH,
+            "GPS_ENABLED=false\n",
+            mode=0o664,
+            user="sensos-admin",
+            group="sensos-data",
+        )
+        systemctl("disable", "--now", SERVICE_NAME)
+        print("GPS disabled.")
+        return 0
+
+    content = (
+        "GPS_ENABLED=true\n"
+        f"GPS_BACKEND={args.backend}\n"
+        f"GPS_I2C_ADDR={args.i2c_addr}\n"
+        f"GPS_I2C_BUS={args.i2c_bus}\n"
+        f"GPS_INTERVAL_SEC={args.interval}\n"
+        f"GPS_SYNC_TIME={args.sync_time}\n"
+        f"GPS_UPDATE_LOCATION={args.update_location}\n"
+        f"GPS_LOCATION_DRIFT_M={args.location_drift_m}\n"
+        f"GPS_TIME_DRIFT_SEC={args.time_drift_sec}\n"
+    )
+    write_file(CONFIG_PATH, content, mode=0o664, user="sensos-admin", group="sensos-data")
+    print(f"Wrote GPS config to {CONFIG_PATH}")
+
+    subprocess.run(["sudo", "systemctl", "daemon-reload"], check=False)
+    if str(args.enable_service).lower() in {"1", "true", "yes", "on"}:
+        systemctl("enable", SERVICE_NAME)
+    if str(args.start_service).lower() in {"1", "true", "yes", "on"}:
+        systemctl("start", SERVICE_NAME)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -84,7 +84,6 @@ register_option --bme280-0x77-interval bme280_0x77_interval "Interval for BME280
 register_option --scd30-interval scd30_interval "Interval for SCD30 (seconds)" ""
 register_option --scd4x-interval scd4x_interval "Interval for SCD4X (seconds)" ""
 register_option --ads1015-interval ads1015_interval "Interval for ADS1015 (seconds)" ""
-register_option --i2c-gps-interval i2c_gps_interval "Interval for I2C GPS (seconds)" ""
 register_option --enable-service enable_service "Enable systemd service" "true"
 register_option --start-service start_service "Start systemd service" "false"
 
@@ -99,7 +98,6 @@ parse_switches "$script_name" "$@"
     [[ -n "$scd30_interval" ]] && echo "SCD30_INTERVAL_SEC=$scd30_interval"
     [[ -n "$scd4x_interval" ]] && echo "SCD4X_INTERVAL_SEC=$scd4x_interval"
     [[ -n "$ads1015_interval" ]] && echo "ADS1015_INTERVAL_SEC=$ads1015_interval"
-    [[ -n "$i2c_gps_interval" ]] && echo "I2C_GPS_INTERVAL_SEC=$i2c_gps_interval"
 } >"$config_path"
 
 echo "Wrote config to $config_path:"

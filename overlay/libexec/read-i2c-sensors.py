@@ -346,7 +346,6 @@ def main():
         ("LT150", "0x49", "LT150", read_lt150),
         ("SCD30", "0x61", "SCD30", read_scd30),
         ("SCD4X", "0x62", "SCD4X", read_scd4x),
-        ("I2C_GPS", "0x10", "I2C_GPS", read_i2c_gps),
     ]
 
     polling_queue = []
