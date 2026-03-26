@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Rosalia Labs LLC
 
+import argparse
 import importlib.util
 import os
 import random
@@ -54,10 +55,39 @@ MIN_FREE_PERCENT = float(os.environ.get("BIRDNET_MIN_FREE_PERCENT", "10"))
 TARGET_FREE_PERCENT = float(os.environ.get("BIRDNET_TARGET_FREE_PERCENT", "20"))
 IDLE_SLEEP_SEC = int(os.environ.get("BIRDNET_THIN_IDLE_SLEEP_SEC", "60"))
 ERROR_SLEEP_SEC = int(os.environ.get("BIRDNET_THIN_ERROR_SLEEP_SEC", "30"))
+TRACE = False
+INTERACTIVE_TEST_MODE = False
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Thin retained data when disk space is low."
+    )
+    parser.add_argument(
+        "--test-all",
+        action="store_true",
+        help="Ignore free-space thresholds, iteratively thin until no more candidates remain, then exit.",
+    )
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="Log thinning decision details for debugging.",
+    )
+    return parser.parse_args()
 
 
 def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def trace(message: str) -> None:
+    if TRACE:
+        print(f"TRACE: {message}")
+
+
+def confirm_delete(path: Path) -> bool:
+    response = input(f"Delete {path}? [y/N] ").strip()
+    return response.lower() == "y"
 
 
 def free_mb(path: Path) -> float:
@@ -90,6 +120,7 @@ def backfill_flac_run_columns(conn: sqlite3.Connection) -> None:
     if not rows:
         return
 
+    trace(f"backfilling label_dir for {len(rows)} flac_runs rows")
     conn.executemany(
         "UPDATE flac_runs SET label_dir = ? WHERE id = ?",
         [(Path(flac_path).parent.as_posix(), row_id) for row_id, flac_path in rows],
@@ -132,6 +163,7 @@ def connect_db() -> sqlite3.Connection:
 
 
 def mark_missing(conn: sqlite3.Connection, run_id: int) -> None:
+    trace(f"marking missing flac_run id={run_id}")
     conn.execute(
         "UPDATE flac_runs SET deleted_at = COALESCE(deleted_at, ?) WHERE id = ?",
         (now_iso(), run_id),
@@ -151,10 +183,16 @@ def choose_victim_dir(conn: sqlite3.Connection) -> str | None:
         """
     ).fetchall()
     if not rows:
+        trace("no active label directories available for thinning")
         return None
     max_count = rows[0][1]
     candidates = [label_dir for label_dir, count in rows if count == max_count]
-    return random.choice(candidates)
+    chosen = random.choice(candidates)
+    trace(
+        f"selected label_dir={chosen} from {len(candidates)} candidate(s) "
+        f"with file_count={max_count}"
+    )
+    return chosen
 
 
 def choose_victim_file(conn: sqlite3.Connection, label_dir: str) -> tuple[int, Path] | None:
@@ -171,8 +209,11 @@ def choose_victim_file(conn: sqlite3.Connection, label_dir: str) -> tuple[int, P
     for run_id, rel_path in rows:
         abs_path = AUDIO_ROOT / rel_path
         if abs_path.exists():
+            trace(f"selected victim run_id={run_id} path={abs_path}")
             return run_id, abs_path
+        trace(f"candidate missing on disk run_id={run_id} path={abs_path}")
         mark_missing(conn, run_id)
+    trace(f"no remaining files found under label_dir={label_dir}")
     return None
 
 
@@ -181,7 +222,9 @@ def prune_empty_dirs(start: Path) -> None:
     while current != OUTPUT_ROOT and current.exists():
         try:
             current.rmdir()
+            trace(f"removed empty directory {current}")
         except OSError:
+            trace(f"stopped pruning at non-empty directory {current}")
             break
         current = current.parent
 
@@ -196,6 +239,9 @@ def thin_once(conn: sqlite3.Connection) -> bool:
         return False
 
     run_id, victim_file = victim
+    if INTERACTIVE_TEST_MODE and not confirm_delete(victim_file):
+        print("Test thinning stopped by user.")
+        raise SystemExit(0)
     print(f"Thinning {victim_file}")
     victim_file.unlink(missing_ok=True)
     conn.execute(
@@ -208,8 +254,27 @@ def thin_once(conn: sqlite3.Connection) -> bool:
 
 
 def main() -> None:
-    setup_logging("thin_data.log")
+    global TRACE, INTERACTIVE_TEST_MODE
+
+    args = parse_args()
+    TRACE = args.trace or args.test_all
+    INTERACTIVE_TEST_MODE = args.test_all
+    if not args.test_all:
+        setup_logging("thin_data.log")
     conn = connect_db()
+    print(
+        "thin-data starting: "
+        f"root={DATA_ROOT} min_free_percent={MIN_FREE_PERCENT:.1f} "
+        f"target_free_percent={TARGET_FREE_PERCENT:.1f} "
+        f"test_all={'yes' if args.test_all else 'no'} trace={'yes' if TRACE else 'no'}"
+    )
+
+    if args.test_all:
+        deleted_count = 0
+        while thin_once(conn):
+            deleted_count += 1
+        print(f"Test thinning complete. Deleted {deleted_count} file(s).")
+        return
 
     while True:
         try:
