@@ -103,7 +103,6 @@ That will:
 - create `/sensos/python/birdnet-venv` if needed
 - install or refresh BirdNET Python dependencies lazily
 - enable `sensos-birdnet.service`
-- enable `thin-data.service`
 
 To enable and start immediately:
 

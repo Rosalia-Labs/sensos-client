@@ -1,13 +1,13 @@
 [Unit]
 Description=Thin retained data when disk space is low
-After=multi-user.target sensos-birdnet.service
+After=multi-user.target sensos-arecord.service sensos-compress-audio.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Service]
 Type=simple
 User=sensos-runner
-ExecStart=/sensos/python/birdnet-venv/bin/python /sensos/libexec/thin-data.py
+ExecStart=/sensos/python/venv/bin/python /sensos/libexec/thin-data.py
 WorkingDirectory=/sensos/data
 StandardOutput=journal
 StandardError=journal

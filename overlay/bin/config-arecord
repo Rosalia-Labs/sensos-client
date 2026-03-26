@@ -119,6 +119,16 @@ if systemctl is-active --quiet sensos-compress-audio.service; then
     fi
 fi
 
+if systemctl is-active --quiet thin-data.service; then
+    read -p "thin-data.service is currently running. Would you like to stop it? (y/n): " answer
+    if [[ "$answer" =~ ^[Yy] ]]; then
+        echo "Stopping thin-data.service..."
+        sudo systemctl stop thin-data.service
+    else
+        echo "Data thinning is still running; retained audio may be pruned while you reconfigure."
+    fi
+fi
+
 if [ -n "$device" ]; then
     echo "Validating provided device string: $device"
     valid_devices=$(arecord -l | grep '^card ' | sed -n 's/^card \([0-9]\+\):.*device \([0-9]\+\):.*/hw:\1,\2\nplughw:\1,\2/p')
@@ -291,6 +301,8 @@ if [[ "$enable_service" == "true" ]]; then
     sudo systemctl enable sensos-arecord.service
     echo "Enabling sensos-compress-audio.service..."
     sudo systemctl enable sensos-compress-audio.service
+    echo "Enabling thin-data.service..."
+    sudo systemctl enable thin-data.service
 fi
 
 if [[ "$start_service" == "true" ]]; then
@@ -299,6 +311,8 @@ if [[ "$start_service" == "true" ]]; then
     sudo systemctl start sensos-arecord.service
     echo "Starting sensos-compress-audio.service..."
     sudo systemctl start sensos-compress-audio.service
+    echo "Starting thin-data.service..."
+    sudo systemctl start thin-data.service
 fi
 
 warn_clock_and_location

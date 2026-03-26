@@ -8,7 +8,6 @@ BIRDNET_REQUIREMENTS_FILE="${DEPLOY_ROOT}/etc/birdnet-requirements.txt"
 BIRDNET_VENV_DIR="${DEPLOY_ROOT}/python/birdnet-venv"
 BIRDNET_STAMP_FILE="${BIRDNET_VENV_DIR}/.requirements.sha256"
 BIRDNET_SERVICE="sensos-birdnet.service"
-THIN_DATA_SERVICE="thin-data.service"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 DEFAULT_BIRDNET_BACKEND="litert"
 
@@ -137,14 +136,10 @@ set_permissions() {
 reconcile_service_state() {
     if birdnet_enabled; then
         systemctl enable "${BIRDNET_SERVICE}"
-        systemctl enable "${THIN_DATA_SERVICE}"
         log "enabled ${BIRDNET_SERVICE}"
-        log "enabled ${THIN_DATA_SERVICE}"
     else
         systemctl disable --now "${BIRDNET_SERVICE}" >/dev/null 2>&1 || true
-        systemctl disable --now "${THIN_DATA_SERVICE}" >/dev/null 2>&1 || true
         log "BirdNET not enabled; disabled ${BIRDNET_SERVICE}"
-        log "BirdNET not enabled; disabled ${THIN_DATA_SERVICE}"
     fi
 }
 
