@@ -9,7 +9,7 @@ BIRDNET_VENV_DIR="${DEPLOY_ROOT}/python/birdnet-venv"
 BIRDNET_STAMP_FILE="${BIRDNET_VENV_DIR}/.requirements.sha256"
 BIRDNET_SERVICE="sensos-birdnet.service"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-DEFAULT_BIRDNET_BACKEND="tensorflow"
+DEFAULT_BIRDNET_BACKEND="litert"
 
 log() {
     printf '[libexec/setup-birdnet] %s\n' "$*"

@@ -58,8 +58,8 @@ Current exploratory contents:
 - `numpy`
 - `soundfile`
 
-The managed BirdNET path installs either `tensorflow` or `ai-edge-litert`
-based on the configured backend.
+The managed BirdNET path installs either `ai-edge-litert` or `tensorflow`
+based on the configured backend. The default backend is LiteRT.
 
 ## Download model files
 
@@ -89,10 +89,10 @@ Or, to download the model bundle first and then enable BirdNET:
 sudo -u sensos-admin config-birdnet --download-models
 ```
 
-To use LiteRT instead of TensorFlow:
+LiteRT is the default backend. To use TensorFlow instead:
 
 ```bash
-sudo -u sensos-admin config-birdnet --backend litert
+sudo -u sensos-admin config-birdnet --backend tensorflow
 ```
 
 That will:

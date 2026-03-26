@@ -75,7 +75,7 @@ ERROR_SLEEP_SEC = int(os.environ.get("BIRDNET_ERROR_SLEEP_SEC", "10"))
 
 
 def read_backend_preference(config_path: Path) -> str:
-    backend = "tensorflow"
+    backend = "litert"
     try:
         for line in config_path.read_text(encoding="utf-8").splitlines():
             if line.startswith("BIRDNET_BACKEND="):

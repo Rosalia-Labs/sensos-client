@@ -14,7 +14,7 @@ MODEL_ROOT = CLIENT_ROOT / "birdnet" / "BirdNET_v2.4_tflite"
 SERVICE_NAME = "sensos-birdnet.service"
 SETUP_HELPER = CLIENT_ROOT / "libexec" / "setup-birdnet.sh"
 INSTALL_MODELS_CMD = "install-birdnet-models"
-DEFAULT_BACKEND = "tensorflow"
+DEFAULT_BACKEND = "litert"
 BACKEND_ALIASES = {
     "tensorflow": "tensorflow",
     "litert": "litert",
@@ -67,7 +67,7 @@ def parse_args() -> argparse.Namespace:
         "--backend",
         choices=["tensorflow", "litert", "tflite"],
         default=DEFAULT_BACKEND,
-        help="BirdNET inference backend to install and require (default: tensorflow).",
+        help="BirdNET inference backend to install and require (default: litert).",
     )
     return parser.parse_args()
 
