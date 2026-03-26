@@ -9,6 +9,7 @@ iftop
 jq
 libffi-dev
 libgpiod-dev
+liblgpio-dev
 libssl-dev
 libusb-1.0-0
 libftdi1-2
