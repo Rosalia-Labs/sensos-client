@@ -36,10 +36,12 @@ usage() {
     cat <<EOF
 Usage:
   $(basename "$0") install
+  $(basename "$0") setup
   $(basename "$0") run
 
 Commands:
   install   Boot the Debian ARM64 installer ISO and write to the base disk image.
+  setup     Boot the installed base image without -snapshot so guest changes persist.
   run       Boot the installed base image with -snapshot, discarding changes on shutdown.
 
 Artifacts are kept under:
@@ -97,6 +99,16 @@ ensure_base_image() {
         log "creating base image ${BASE_IMAGE} (${DISK_SIZE})"
         qemu-img create -f qcow2 "${BASE_IMAGE}" "${DISK_SIZE}" >/dev/null
     fi
+}
+
+recreate_base_image() {
+    if [[ -f "${BASE_IMAGE}" ]]; then
+        log "removing existing base image ${BASE_IMAGE} for fresh install"
+        rm -f "${BASE_IMAGE}"
+    fi
+
+    log "creating base image ${BASE_IMAGE} (${DISK_SIZE})"
+    qemu-img create -f qcow2 "${BASE_IMAGE}" "${DISK_SIZE}" >/dev/null
 }
 
 ensure_data_image() {
@@ -159,13 +171,22 @@ run_qemu() {
 
 run_install() {
     require_installer_iso
-    ensure_base_image
+    recreate_base_image
     ensure_firmware_vars
 
     run_qemu install \
         -boot order=d \
         -drive "if=virtio,file=${BASE_IMAGE},format=qcow2" \
         -cdrom "${INSTALLER_ISO}"
+}
+
+run_setup() {
+    require_base_image
+    ensure_firmware_vars
+
+    run_qemu setup \
+        -boot order=c \
+        -drive "if=virtio,file=${BASE_IMAGE},format=qcow2"
 }
 
 run_snapshot() {
@@ -189,6 +210,11 @@ main() {
             ensure_artifact_dirs
             ensure_firmware_code
             run_install
+            ;;
+        setup)
+            ensure_artifact_dirs
+            ensure_firmware_code
+            run_setup
             ;;
         run)
             ensure_artifact_dirs

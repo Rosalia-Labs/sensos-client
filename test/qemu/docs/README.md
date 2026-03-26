@@ -38,11 +38,22 @@ test/qemu/artifacts/iso/debian-trixie-arm64-netinst.iso
 test/qemu/run-debian-trixie-arm64 install
 ```
 
-3. Boot that installed image in disposable mode:
+The `install` command recreates the base/system image first, so rerunning it
+starts a fresh Debian install instead of reusing the previous OS image.
+
+3. Boot that installed image in persistent setup mode to do guest bootstrap and host configuration before installing the SensOS client:
+
+```bash
+test/qemu/run-debian-trixie-arm64 setup
+```
+
+4. Boot that installed image in disposable mode when you want a non-sticky test run:
 
 ```bash
 test/qemu/run-debian-trixie-arm64 run
 ```
+
+The `setup` command boots the base image directly, so guest disk changes persist.
 
 The `run` command uses `-snapshot`, so guest disk changes are discarded when QEMU exits.
 
@@ -78,9 +89,9 @@ sudo usermod -aG sensos-data <bootstrap-user>
 
 Then log out and back in again so the new group membership takes effect.
 
-Because the QEMU helper runs the guest with `-snapshot`, you need to repeat
-this bootstrap on each disposable `run` boot unless you bake it into the base
-image during the `install` phase.
+Do that bootstrap during the sticky `setup` phase so it is available in later
+disposable `run` boots. Any additional changes made during `run` are still
+discarded on shutdown.
 
 ## Data disk
 
