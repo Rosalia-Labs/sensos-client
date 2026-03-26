@@ -1,0 +1,16 @@
+[Unit]
+Description=Read I2C sensors and store readings
+After=multi-user.target
+
+[Service]
+Type=simple
+User=sensos-runner
+ExecStart=/sensos/python/venv/bin/python /sensos/libexec/read-i2c-sensors.py
+WorkingDirectory=/sensos/data
+StandardOutput=journal
+StandardError=journal
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

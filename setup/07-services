@@ -12,6 +12,7 @@ PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
 OVERLAY_SYSTEMD_DIR="${CLIENT_ROOT}/overlay/systemd"
 
 HOST_BASELINE_UNITS=(
+    monitor-data-space.timer
     nftables.service
     ssh.service
     vnstat.service

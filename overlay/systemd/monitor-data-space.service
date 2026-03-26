@@ -1,0 +1,6 @@
+[Unit]
+Description=Stop data-producing services when /sensos/data is critically full
+
+[Service]
+Type=oneshot
+ExecStart=/sensos/libexec/monitor-data-space.sh
