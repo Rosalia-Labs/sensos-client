@@ -423,13 +423,11 @@ def location_coordinates() -> tuple[float | None, float | None]:
 
 
 def source_start_datetime(source_path: Path) -> datetime | None:
-    match = re.search(r"(\d{8}T\d{6})", source_path.stem)
+    match = re.search(r"(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z)", source_path.stem)
     if match is None:
         return None
     try:
-        return datetime.strptime(match.group(1), "%Y%m%dT%H%M%S").replace(
-            tzinfo=timezone.utc
-        )
+        return datetime.strptime(match.group(1), "%Y-%m-%dT%H-%M-%SZ").replace(tzinfo=timezone.utc)
     except ValueError:
         return None
 
@@ -439,7 +437,7 @@ def filename_time_token(source_path: Path, run: LabelRun, sample_rate: int) -> s
     if start_dt is None:
         return source_path.stem
     run_dt = start_dt + timedelta(seconds=(run.start_frame / sample_rate))
-    return run_dt.strftime("%Y%m%dT%H%M%SZ")
+    return run_dt.strftime("%Y-%m-%dT%H-%M-%SZ")
 
 
 def source_observation_date(source_path: Path) -> date:

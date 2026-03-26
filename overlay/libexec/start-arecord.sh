@@ -8,6 +8,7 @@ OVERLAY_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${OVERLAY_ROOT}}"
 
 CONFIG_FILE="${CLIENT_ROOT}/etc/arecord.conf"
+LOCATION_FILE="${CLIENT_ROOT}/etc/location.conf"
 
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "Error: Configuration file not found at $CONFIG_FILE"
@@ -26,7 +27,54 @@ if [ -z "$BASE_DIR" ]; then
     BASE_DIR="${CLIENT_ROOT}/data/audio_recordings"
 fi
 
-OUTPUT_PATTERN="${BASE_DIR}/queued/%Y/%m/%d/sensos_%Y%m%dT%H%M%S.wav"
+format_coord_token() {
+    local value="$1"
+    local positive="$2"
+    local negative="$3"
+    local abs_value scaled
+
+    [[ -n "${value}" ]] || {
+        printf '%s\n' "na"
+        return 0
+    }
+
+    if ! [[ "${value}" =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
+        printf '%s\n' "na"
+        return 0
+    fi
+
+    abs_value="${value#-}"
+    scaled="$(printf '%s' "${abs_value}" | awk '{printf "%07d", int(($1 * 10000) + 0.5)}')"
+    if [[ "${value}" == -* ]]; then
+        printf '%s%s\n' "${negative}" "${scaled}"
+    else
+        printf '%s%s\n' "${positive}" "${scaled}"
+    fi
+}
+
+location_token() {
+    local latitude longitude
+
+    [[ -f "${LOCATION_FILE}" ]] || {
+        printf '%s\n' ""
+        return 0
+    }
+
+    latitude="$(awk -F= '/^LATITUDE=/{print $2}' "${LOCATION_FILE}" | tail -n 1 | tr -d '[:space:]')"
+    longitude="$(awk -F= '/^LONGITUDE=/{print $2}' "${LOCATION_FILE}" | tail -n 1 | tr -d '[:space:]')"
+
+    if [[ -z "${latitude}" || -z "${longitude}" ]]; then
+        printf '%s\n' ""
+        return 0
+    fi
+
+    printf '_%s_%s\n' \
+        "$(format_coord_token "${latitude}" "N" "S")" \
+        "$(format_coord_token "${longitude}" "E" "W")"
+}
+
+LOCATION_TOKEN="$(location_token)"
+OUTPUT_PATTERN="${BASE_DIR}/queued/%Y/%m/%d/sensos_%Y-%m-%dT%H-%M-%SZ${LOCATION_TOKEN}.wav"
 
 mkdir -p "$BASE_DIR"
 sudo chown -R sensos-admin:sensos-data "$BASE_DIR"

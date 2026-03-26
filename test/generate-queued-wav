@@ -55,8 +55,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--start-time",
         type=str,
-        help="UTC start timestamp for first file in YYYYMMDDTHHMMSS format",
+        help="UTC start timestamp for first file in YYYY-MM-DDTHH-MM-SSZ format",
     )
+    parser.add_argument("--latitude", type=float, help="Optional latitude token for generated filenames")
+    parser.add_argument("--longitude", type=float, help="Optional longitude token for generated filenames")
     parser.add_argument(
         "--spacing-sec",
         type=int,
@@ -69,7 +71,15 @@ def parse_args() -> argparse.Namespace:
 def parse_start_time(raw: str | None) -> datetime:
     if raw is None:
         return datetime.now(UTC).replace(microsecond=0)
-    return datetime.strptime(raw, "%Y%m%dT%H%M%S").replace(tzinfo=UTC)
+    return datetime.strptime(raw, "%Y-%m-%dT%H-%M-%SZ").replace(tzinfo=UTC)
+
+
+def format_coord_token(value: float | None, positive: str, negative: str) -> str:
+    if value is None:
+        return ""
+    direction = positive if value >= 0 else negative
+    scaled = int(round(abs(value) * 10000))
+    return f"_{direction}{scaled:07d}"
 
 
 def clamp_pcm(sample: float) -> int:
@@ -145,10 +155,15 @@ def generate_samples(preset: str, duration_sec: float, sample_rate: int, rng: ra
     return bytes(frames)
 
 
-def output_path(root: Path, timestamp: datetime) -> Path:
+def output_path(root: Path, timestamp: datetime, latitude: float | None, longitude: float | None) -> Path:
     dated = root / timestamp.strftime("%Y/%m/%d")
     dated.mkdir(parents=True, exist_ok=True)
-    return dated / f"sensos_{timestamp.strftime('%Y%m%dT%H%M%S')}.wav"
+    location_token = (
+        f"{format_coord_token(latitude, 'N', 'S')}{format_coord_token(longitude, 'E', 'W')}"
+        if latitude is not None and longitude is not None
+        else ""
+    )
+    return dated / f"sensos_{timestamp.strftime('%Y-%m-%dT%H-%M-%SZ')}{location_token}.wav"
 
 
 def ensure_output_root_ready(root: Path) -> None:
@@ -195,7 +210,7 @@ def main() -> int:
 
     for index in range(args.count):
         timestamp = start + timedelta(seconds=index * args.spacing_sec)
-        path = output_path(args.output_root, timestamp)
+        path = output_path(args.output_root, timestamp, args.latitude, args.longitude)
         frames = generate_samples(args.preset, args.duration_sec, args.sample_rate, rng)
         write_wav(path, frames, args.sample_rate)
         print(path)
