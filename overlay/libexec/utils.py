@@ -243,7 +243,13 @@ def compute_api_server_wg_ip(client_wg_ip):
 class Tee:
     def __init__(self, log_file, mode="a"):
         self.terminal = sys.stdout
-        self.log = open(log_file, mode)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+        fd = os.open(log_file, flags, 0o664)
+        try:
+            os.chmod(log_file, 0o664)
+        except OSError:
+            pass
+        self.log = os.fdopen(fd, mode)
 
     def write(self, message):
         self.terminal.write(message)
