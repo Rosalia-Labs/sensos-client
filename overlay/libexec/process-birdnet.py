@@ -226,7 +226,10 @@ def ensure_runtime_dirs() -> None:
 def ensure_state_file_permissions() -> None:
     for path in (DB_PATH, DB_PATH.with_name(f"{DB_PATH.name}-wal"), DB_PATH.with_name(f"{DB_PATH.name}-shm")):
         if path.exists():
-            path.chmod(0o664)
+            try:
+                path.chmod(0o664)
+            except PermissionError:
+                pass
 
 
 def connect_db() -> sqlite3.Connection:
