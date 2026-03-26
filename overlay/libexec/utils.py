@@ -6,7 +6,6 @@ import sys
 import shlex
 import shutil
 import base64
-import requests
 import tempfile
 import subprocess
 import configparser
@@ -22,6 +21,14 @@ DEFAULTS_CONF = os.path.join(CLIENT_ROOT, "etc", "defaults.conf")
 NETWORK_CONF = os.path.join(CLIENT_ROOT, "etc", "network.conf")
 LOG_DIR = os.path.join(CLIENT_ROOT, "log")
 DEFAULT_PORT = "8765"
+
+
+def require_requests():
+    try:
+        import requests
+    except ImportError as exc:
+        sys.exit("Error: Python package 'requests' is required for this operation.")
+    return requests
 
 
 def require_dir(path: str, name: str):
@@ -161,6 +168,7 @@ def read_api_password():
 
 
 def validate_api_password(config_server, port, api_password):
+    requests = require_requests()
     url = f"http://{config_server}:{port}/"
     headers = {"Authorization": f"Basic {get_basic_auth(api_password)}"}
     try:
@@ -172,6 +180,8 @@ def validate_api_password(config_server, port, api_password):
 
 
 def get_api_password(config_server, port):
+    requests = require_requests()
+
     def check_server_reachable():
         try:
             url = f"http://{config_server}:{port}/"
