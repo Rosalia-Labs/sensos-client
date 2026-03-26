@@ -53,7 +53,7 @@ setup_logging = UTILS_MODULE.setup_logging
 create_dir = UTILS_MODULE.create_dir
 
 CLIENT_ROOT_PATH = Path(CLIENT_ROOT)
-INPUT_ROOT = CLIENT_ROOT_PATH / "data" / "audio_recordings" / "queued"
+INPUT_ROOT = CLIENT_ROOT_PATH / "data" / "audio_recordings" / "compressed"
 OUTPUT_ROOT = CLIENT_ROOT_PATH / "data" / "audio_recordings" / "processed"
 STATE_ROOT = CLIENT_ROOT_PATH / "data" / "birdnet"
 DB_PATH = STATE_ROOT / "birdnet.db"
@@ -335,12 +335,12 @@ def was_processed_successfully(conn: sqlite3.Connection, path: Path) -> bool:
     return row is not None and row[0] == "done"
 
 
-def find_next_wav(conn: sqlite3.Connection) -> Path | None:
+def find_next_audio(conn: sqlite3.Connection) -> Path | None:
     if not INPUT_ROOT.exists():
         return None
     now = time.time()
     candidates = []
-    for path in INPUT_ROOT.rglob("*.wav"):
+    for path in INPUT_ROOT.rglob("*.flac"):
         try:
             age = now - path.stat().st_mtime
         except FileNotFoundError:
@@ -611,7 +611,7 @@ def delete_source(path: Path) -> None:
         print(f"⚠️ Failed to delete source file {path}: {unlink_error}", file=sys.stderr)
 
 
-def process_wav(
+def process_audio(
     model: BirdNETModel,
     meta_model: BirdNETModel | None,
     conn: sqlite3.Connection,
@@ -732,7 +732,7 @@ def main() -> None:
     meta_model = None
 
     while True:
-        next_wav = None
+        next_audio = None
         try:
             if not MODEL_PATH.exists() or not LABELS_PATH.exists():
                 print(f"⚠️ BirdNET model files missing under {MODEL_ROOT}. Sleeping...")
@@ -750,29 +750,29 @@ def main() -> None:
                         f"⚠️ BirdNET meta-model missing at {META_MODEL_PATH}. Occupancy scores disabled."
                     )
 
-            next_wav = find_next_wav(conn)
-            if next_wav is None:
+            next_audio = find_next_audio(conn)
+            if next_audio is None:
                 time.sleep(IDLE_SLEEP_SEC)
                 continue
 
-            if not is_file_stable(next_wav):
-                print(f"⏳ Skipping active or recently changed file {next_wav}")
+            if not is_file_stable(next_audio):
+                print(f"⏳ Skipping active or recently changed file {next_audio}")
                 time.sleep(IDLE_SLEEP_SEC)
                 continue
 
-            print(f"🎧 Processing {next_wav}")
-            process_wav(model, meta_model, conn, next_wav)
-            print(f"✅ Finished {next_wav}")
+            print(f"🎧 Processing {next_audio}")
+            process_audio(model, meta_model, conn, next_audio)
+            print(f"✅ Finished {next_audio}")
         except Exception as exc:
-            if next_wav is not None and next_wav.exists():
-                source_key = relative_source(next_wav)
+            if next_audio is not None and next_audio.exists():
+                source_key = relative_source(next_audio)
                 try:
-                    record_failure(conn, source_key, sf.info(next_wav), str(exc))
+                    record_failure(conn, source_key, sf.info(next_audio), str(exc))
                 except Exception:
                     pass
-                delete_source(next_wav)
+                delete_source(next_audio)
                 try:
-                    update_deleted_source(conn, source_key, next_wav)
+                    update_deleted_source(conn, source_key, next_audio)
                 except Exception:
                     pass
             print(f"❌ BirdNET processing failure: {exc}", file=sys.stderr)

@@ -109,6 +109,16 @@ if systemctl is-active --quiet sensos-arecord.service; then
     fi
 fi
 
+if systemctl is-active --quiet sensos-compress-audio.service; then
+    read -p "sensos-compress-audio.service is currently running. Would you like to stop it? (y/n): " answer
+    if [[ "$answer" =~ ^[Yy] ]]; then
+        echo "Stopping sensos-compress-audio.service..."
+        sudo systemctl stop sensos-compress-audio.service
+    else
+        echo "Compression service is still running; queued files may be moved while you reconfigure."
+    fi
+fi
+
 if [ -n "$device" ]; then
     echo "Validating provided device string: $device"
     valid_devices=$(arecord -l | grep '^card ' | sed -n 's/^card \([0-9]\+\):.*device \([0-9]\+\):.*/hw:\1,\2\nplughw:\1,\2/p')
@@ -279,12 +289,16 @@ if [[ "$enable_service" == "true" ]]; then
     sudo systemctl daemon-reload
     echo "Enabling sensos-arecord.service..."
     sudo systemctl enable sensos-arecord.service
+    echo "Enabling sensos-compress-audio.service..."
+    sudo systemctl enable sensos-compress-audio.service
 fi
 
 if [[ "$start_service" == "true" ]]; then
     sudo systemctl daemon-reload
     echo "Starting sensos-arecord.service..."
     sudo systemctl start sensos-arecord.service
+    echo "Starting sensos-compress-audio.service..."
+    sudo systemctl start sensos-compress-audio.service
 fi
 
 warn_clock_and_location

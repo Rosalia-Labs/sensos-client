@@ -1,0 +1,18 @@
+[Unit]
+Description=Compress queued WAV files into archival FLAC
+After=multi-user.target sensos-arecord.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=sensos-runner
+ExecStart=/sensos/python/venv/bin/python /sensos/libexec/compress-queued-audio.py
+WorkingDirectory=/sensos/data
+StandardOutput=journal
+StandardError=journal
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

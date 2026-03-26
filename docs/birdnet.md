@@ -151,6 +151,15 @@ Useful presets:
 - `mixed`
 - `noise`
 
+The normal runtime flow moves stable queued WAVs into:
+
+```text
+/sensos/data/audio_recordings/compressed/
+```
+
+BirdNET reads from that compressed FLAC backlog rather than directly from the
+live queue.
+
 ## Start and inspect the service
 
 Start BirdNET manually:
@@ -179,10 +188,10 @@ systemctl cat sensos-birdnet.service
 
 ## Check outputs
 
-Input WAVs are read from:
+BirdNET inputs are read from:
 
 ```text
-/sensos/data/audio_recordings/queued/
+/sensos/data/audio_recordings/compressed/
 ```
 
 Processed FLAC outputs are written under:

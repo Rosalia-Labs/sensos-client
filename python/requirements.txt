@@ -1,1 +1,2 @@
 # Add runtime Python dependencies here.
+soundfile

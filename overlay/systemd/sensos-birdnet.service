@@ -1,6 +1,6 @@
 [Unit]
-Description=Run BirdNET over queued WAV files and emit FLAC label runs
-After=multi-user.target sensos-arecord.service
+Description=Run BirdNET over compressed FLAC inputs and emit FLAC label runs
+After=multi-user.target sensos-compress-audio.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
