@@ -180,7 +180,7 @@ run_qemu() {
         -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${SSH_FORWARD_PORT}-:22" \
         -drive "if=pflash,format=raw,readonly=on,file=${FIRMWARE_CODE}" \
         -drive "if=pflash,format=raw,file=${FIRMWARE_VARS}" \
-        "${extra_drives[@]}" \
+        ${extra_drives+"${extra_drives[@]}"} \
         "$@"
 }
 
