@@ -103,6 +103,7 @@ That will:
 - create `/sensos/python/birdnet-venv` if needed
 - install or refresh BirdNET Python dependencies lazily
 - enable `sensos-birdnet.service`
+- enable `thin-birdnet-flac.service`
 
 To enable and start immediately:
 
@@ -162,6 +163,12 @@ Follow logs:
 
 ```bash
 sudo journalctl -u sensos-birdnet.service -f
+```
+
+Or inspect the thinning worker separately:
+
+```bash
+sudo journalctl -u thin-birdnet-flac.service -f
 ```
 
 Inspect service definition:
