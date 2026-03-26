@@ -1,5 +1,5 @@
 [Unit]
-Description=Thin BirdNET FLAC directories when disk space is low
+Description=Thin retained data when disk space is low
 After=multi-user.target sensos-birdnet.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
@@ -7,7 +7,7 @@ StartLimitBurst=5
 [Service]
 Type=simple
 User=sensos-runner
-ExecStart=/sensos/python/birdnet-venv/bin/python /sensos/libexec/thin-birdnet-flac.py
+ExecStart=/sensos/python/birdnet-venv/bin/python /sensos/libexec/thin-data.py
 WorkingDirectory=/sensos/data
 StandardOutput=journal
 StandardError=journal

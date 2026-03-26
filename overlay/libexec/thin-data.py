@@ -201,7 +201,7 @@ def thin_once(conn: sqlite3.Connection) -> bool:
 
 
 def main() -> None:
-    setup_logging("thin_birdnet_flac.log")
+    setup_logging("thin_data.log")
     conn = connect_db()
 
     while True:
