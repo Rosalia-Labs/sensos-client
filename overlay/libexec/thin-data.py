@@ -65,14 +65,9 @@ def parse_args() -> argparse.Namespace:
         description="Thin retained data when disk space is low."
     )
     parser.add_argument(
-        "--test-all",
+        "--test",
         action="store_true",
         help="Ignore free-space thresholds, iteratively thin until no more candidates remain, then exit.",
-    )
-    parser.add_argument(
-        "--trace",
-        action="store_true",
-        help="Log thinning decision details for debugging.",
     )
     return parser.parse_args()
 
@@ -176,24 +171,31 @@ def mark_missing(conn: sqlite3.Connection, run_id: int) -> None:
 def choose_victim_dir(conn: sqlite3.Connection) -> str | None:
     rows = conn.execute(
         """
-        SELECT label_dir, COUNT(*) AS file_count
+        SELECT
+            label_dir,
+            COUNT(*) AS file_count,
+            COALESCE(SUM(end_sec - start_sec), 0) AS total_seconds
         FROM flac_runs
         WHERE deleted_at IS NULL
           AND label_dir IS NOT NULL
         GROUP BY label_dir
-        ORDER BY file_count DESC
+        ORDER BY total_seconds DESC, file_count DESC
         """
     ).fetchall()
     if not rows:
         trace("no labelled FLAC directories remain with undeleted files")
         return None
-    max_count = rows[0][1]
-    candidates = [label_dir for label_dir, count in rows if count == max_count]
-    chosen = random.choice(candidates)
+    max_seconds = rows[0][2]
+    candidates = [
+        (label_dir, file_count)
+        for label_dir, file_count, total_seconds in rows
+        if total_seconds == max_seconds
+    ]
+    chosen, chosen_file_count = random.choice(candidates)
     trace(
         "selected victim directory: "
-        f"{chosen} with {max_count} file(s); "
-        f"{len(candidates)} director{'y' if len(candidates) == 1 else 'ies'} tied for largest file count"
+        f"{chosen} with {max_seconds:.3f} retained second(s) across {chosen_file_count} file(s); "
+        f"{len(candidates)} director{'y' if len(candidates) == 1 else 'ies'} tied for largest retained duration"
     )
     return chosen
 
@@ -257,19 +259,19 @@ def main() -> None:
     global TRACE, INTERACTIVE_TEST_MODE
 
     args = parse_args()
-    TRACE = args.trace or args.test_all
-    INTERACTIVE_TEST_MODE = args.test_all
-    if not args.test_all:
+    TRACE = args.test
+    INTERACTIVE_TEST_MODE = args.test
+    if not args.test:
         setup_logging("thin_data.log")
     conn = connect_db()
     print(
         "thin-data starting: "
         f"root={DATA_ROOT} min_free_percent={MIN_FREE_PERCENT:.1f} "
         f"target_free_percent={TARGET_FREE_PERCENT:.1f} "
-        f"test_all={'yes' if args.test_all else 'no'} trace={'yes' if TRACE else 'no'}"
+        f"test={'yes' if args.test else 'no'} trace={'yes' if TRACE else 'no'}"
     )
 
-    if args.test_all:
+    if args.test:
         deleted_count = 0
         print(
             "Test mode: repeatedly pick the labelled FLAC directory with the most files, "
