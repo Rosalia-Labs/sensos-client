@@ -78,22 +78,28 @@ ensure_firmware_code() {
 
 ensure_firmware_vars() {
     if [[ ! -f "${FIRMWARE_VARS}" ]]; then
-        local candidate
-
-        for candidate in \
-            /opt/local/share/qemu/edk2-aarch64-vars.fd \
-            /opt/local/share/qemu/edk2-arm-vars.fd \
-            /opt/local/share/qemu/edk2-arm-vars-template.fd
-        do
-            if [[ -f "${candidate}" ]]; then
-                log "seeding writable firmware vars from ${candidate}"
-                cp "${candidate}" "${FIRMWARE_VARS}"
-                return
-            fi
-        done
-
-        die "unable to find an EDK2 vars template; set SENSOS_QEMU_FIRMWARE_VARS explicitly"
+        reset_firmware_vars
     fi
+}
+
+reset_firmware_vars() {
+    local candidate
+
+    rm -f "${FIRMWARE_VARS}"
+
+    for candidate in \
+        /opt/local/share/qemu/edk2-aarch64-vars.fd \
+        /opt/local/share/qemu/edk2-arm-vars.fd \
+        /opt/local/share/qemu/edk2-arm-vars-template.fd
+    do
+        if [[ -f "${candidate}" ]]; then
+            log "seeding writable firmware vars from ${candidate}"
+            cp "${candidate}" "${FIRMWARE_VARS}"
+            return
+        fi
+    done
+
+    die "unable to find an EDK2 vars template; set SENSOS_QEMU_FIRMWARE_VARS explicitly"
 }
 
 ensure_base_image() {
@@ -196,7 +202,7 @@ run_install() {
     require_installer_iso
     recreate_base_image
     remove_setup_image
-    ensure_firmware_vars
+    reset_firmware_vars
 
     run_qemu install \
         -boot order=d \

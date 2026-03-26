@@ -42,7 +42,8 @@ test/qemu/run-debian-trixie-arm64 install
 The `install` command recreates the base/system image first, so rerunning it
 starts a fresh Debian install instead of reusing the previous OS image. It also
 removes the durable `setup` overlay so the next `setup` boot starts cleanly from
-that fresh install.
+that fresh install. The writable UEFI vars file is also reset during `install`
+so stale boot entries do not skip the installer ISO.
 
 3. Boot that installed image in persistent setup mode to do guest bootstrap and host configuration before installing the SensOS client:
 
