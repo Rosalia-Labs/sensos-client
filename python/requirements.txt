@@ -1,2 +1,11 @@
-# Add runtime Python dependencies here.
+# Shared runtime Python dependencies.
 soundfile
+
+# I2C sensor runtime dependencies used by overlay/libexec/read-i2c-sensors.py
+adafruit-blinka
+adafruit-circuitpython-ads1x15
+adafruit-circuitpython-bme280
+adafruit-circuitpython-scd30
+adafruit-circuitpython-scd4x
+pynmea2
+smbus2
