@@ -121,7 +121,6 @@ def backfill_flac_run_columns(conn: sqlite3.Connection) -> None:
     if not rows:
         return
 
-    trace(f"backfilling label_dir for {len(rows)} flac_runs rows")
     conn.executemany(
         "UPDATE flac_runs SET label_dir = ? WHERE id = ?",
         [(Path(flac_path).parent.as_posix(), row_id) for row_id, flac_path in rows],
@@ -167,7 +166,6 @@ def connect_db() -> sqlite3.Connection:
 
 
 def mark_missing(conn: sqlite3.Connection, run_id: int) -> None:
-    trace(f"marking missing flac_run id={run_id}")
     conn.execute(
         "UPDATE flac_runs SET deleted_at = COALESCE(deleted_at, ?) WHERE id = ?",
         (now_iso(), run_id),
@@ -187,14 +185,15 @@ def choose_victim_dir(conn: sqlite3.Connection) -> str | None:
         """
     ).fetchall()
     if not rows:
-        trace("no active label directories available for thinning")
+        trace("no labelled FLAC directories remain with undeleted files")
         return None
     max_count = rows[0][1]
     candidates = [label_dir for label_dir, count in rows if count == max_count]
     chosen = random.choice(candidates)
     trace(
-        f"selected label_dir={chosen} from {len(candidates)} candidate(s) "
-        f"with file_count={max_count}"
+        "selected victim directory: "
+        f"{chosen} with {max_count} file(s); "
+        f"{len(candidates)} director{'y' if len(candidates) == 1 else 'ies'} tied for largest file count"
     )
     return chosen
 
@@ -213,11 +212,10 @@ def choose_victim_file(conn: sqlite3.Connection, label_dir: str) -> tuple[int, P
     for run_id, rel_path in rows:
         abs_path = AUDIO_ROOT / rel_path
         if abs_path.exists():
-            trace(f"selected victim run_id={run_id} path={abs_path}")
+            trace(f"selected random file from chosen directory: {abs_path}")
             return run_id, abs_path
-        trace(f"candidate missing on disk run_id={run_id} path={abs_path}")
         mark_missing(conn, run_id)
-    trace(f"no remaining files found under label_dir={label_dir}")
+    trace(f"chosen directory has no remaining files on disk: {label_dir}")
     return None
 
 
@@ -226,9 +224,7 @@ def prune_empty_dirs(start: Path) -> None:
     while current != OUTPUT_ROOT and current.exists():
         try:
             current.rmdir()
-            trace(f"removed empty directory {current}")
         except OSError:
-            trace(f"stopped pruning at non-empty directory {current}")
             break
         current = current.parent
 
@@ -275,6 +271,10 @@ def main() -> None:
 
     if args.test_all:
         deleted_count = 0
+        print(
+            "Test mode: repeatedly pick the labelled FLAC directory with the most files, "
+            "delete one random file from that directory, and repeat until no candidates remain."
+        )
         while thin_once(conn):
             deleted_count += 1
         print(f"Test thinning complete. Deleted {deleted_count} file(s).")
