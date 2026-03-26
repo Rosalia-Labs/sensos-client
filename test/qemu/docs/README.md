@@ -15,6 +15,7 @@ That path is gitignored.
 Layout:
 
 - `test/qemu/artifacts/images/debian-trixie-arm64-base.qcow2`
+- `test/qemu/artifacts/images/debian-trixie-arm64-setup.qcow2`
 - `test/qemu/artifacts/images/debian-trixie-arm64-data.qcow2`
 - `test/qemu/artifacts/images/edk2-arm64-vars.fd`
 - `test/qemu/artifacts/iso/debian-trixie-arm64-netinst.iso`
@@ -39,7 +40,9 @@ test/qemu/run-debian-trixie-arm64 install
 ```
 
 The `install` command recreates the base/system image first, so rerunning it
-starts a fresh Debian install instead of reusing the previous OS image.
+starts a fresh Debian install instead of reusing the previous OS image. It also
+removes the durable `setup` overlay so the next `setup` boot starts cleanly from
+that fresh install.
 
 3. Boot that installed image in persistent setup mode to do guest bootstrap and host configuration before installing the SensOS client:
 
@@ -53,9 +56,12 @@ test/qemu/run-debian-trixie-arm64 setup
 test/qemu/run-debian-trixie-arm64 run
 ```
 
-The `setup` command boots the base image directly, so guest disk changes persist.
+The `setup` command boots a durable qcow2 overlay backed by the installed base
+image, so guest changes persist across later `setup` and `run` boots.
 
-The `run` command uses `-snapshot`, so guest disk changes are discarded when QEMU exits.
+The `run` command boots a fresh temporary qcow2 overlay backed by the durable
+`setup` image, so guest disk changes are discarded when QEMU exits while still
+seeing everything you prepared during `setup`.
 
 ## Guest bootstrap
 
