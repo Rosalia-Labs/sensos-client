@@ -45,6 +45,7 @@ assert UTILS_SPEC.loader is not None
 UTILS_SPEC.loader.exec_module(UTILS_MODULE)
 
 setup_logging = UTILS_MODULE.setup_logging
+create_dir = UTILS_MODULE.create_dir
 
 DATA_ROOT = CLIENT_ROOT / "data"
 AUDIO_ROOT = DATA_ROOT / "audio_recordings"
@@ -128,7 +129,7 @@ def backfill_flac_run_columns(conn: sqlite3.Connection) -> None:
 
 
 def connect_db() -> sqlite3.Connection:
-    STATE_ROOT.mkdir(parents=True, exist_ok=True)
+    create_dir(str(STATE_ROOT), "sensos-admin", "sensos-data", 0o2775)
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
@@ -159,6 +160,9 @@ def connect_db() -> sqlite3.Connection:
         "CREATE INDEX IF NOT EXISTS idx_flac_runs_active_dir ON flac_runs (label_dir, deleted_at)"
     )
     conn.commit()
+    for path in (DB_PATH, DB_PATH.with_name(f"{DB_PATH.name}-wal"), DB_PATH.with_name(f"{DB_PATH.name}-shm")):
+        if path.exists():
+            path.chmod(0o664)
     return conn
 
 

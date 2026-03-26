@@ -50,6 +50,7 @@ UTILS_SPEC.loader.exec_module(UTILS_MODULE)
 
 read_kv_config = UTILS_MODULE.read_kv_config
 setup_logging = UTILS_MODULE.setup_logging
+create_dir = UTILS_MODULE.create_dir
 
 CLIENT_ROOT_PATH = Path(CLIENT_ROOT)
 INPUT_ROOT = CLIENT_ROOT_PATH / "data" / "audio_recordings" / "queued"
@@ -218,8 +219,14 @@ def invoke_birdnet_top_label(
 
 
 def ensure_runtime_dirs() -> None:
-    STATE_ROOT.mkdir(parents=True, exist_ok=True)
-    OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+    create_dir(str(STATE_ROOT), "sensos-admin", "sensos-data", 0o2775)
+    create_dir(str(OUTPUT_ROOT), "sensos-admin", "sensos-data", 0o2775)
+
+
+def ensure_state_file_permissions() -> None:
+    for path in (DB_PATH, DB_PATH.with_name(f"{DB_PATH.name}-wal"), DB_PATH.with_name(f"{DB_PATH.name}-shm")):
+        if path.exists():
+            path.chmod(0o664)
 
 
 def connect_db() -> sqlite3.Connection:
@@ -294,6 +301,7 @@ def connect_db() -> sqlite3.Connection:
         "CREATE INDEX IF NOT EXISTS idx_flac_runs_active_dir ON flac_runs (label_dir, deleted_at)"
     )
     conn.commit()
+    ensure_state_file_permissions()
     return conn
 
 
@@ -544,7 +552,7 @@ def write_flac_runs(source_path: Path, audio: np.ndarray, sample_rate: int, runs
         if is_human_label(run.label):
             continue
         out_dir = label_output_dir(source_path, run.label)
-        out_dir.mkdir(parents=True, exist_ok=True)
+        create_dir(str(out_dir), "sensos-admin", "sensos-data", 0o2775)
         start_sec = run.start_frame / sample_rate
         end_sec = run.end_frame / sample_rate
         filename = (
