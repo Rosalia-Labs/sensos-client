@@ -4,6 +4,8 @@ This document is for developers and maintainers. It is not an end-user deploymen
 
 The goal is to describe the actual security model of the current client/server design, especially where the design intentionally accepts risk or where the risk cannot be eliminated with the current architecture.
 
+If your use case requires a different security model or stronger security properties than the baseline described here, reach out to Rosalia Labs and let us know what you need.
+
 ## Core Constraint
 
 Without hardware-backed secret storage, the client cannot avoid holding a live server credential.
@@ -38,14 +40,16 @@ The current deployment does have an important containment property:
 
 - the server API is only reachable over WireGuard
 - the WireGuard network is not bridged onto the host network
+- there is a dedicated container for WireGuard orchestration
+- there is a separate WireGuard-facing reverse proxy container
 - API access dead-ends into Docker containers on the server host
-- the WireGuard-facing container is only a reverse proxy
 - the reverse proxy forwards to a separate API container
 - the API container talks to a separate database container
 - there is not intended to be a native direct path from the API container to the server host
 
 This means the exposed server-side path is segmented and relatively narrow:
 
+- WireGuard orchestration container
 - WireGuard-facing reverse proxy
 - API container
 - database container
@@ -155,6 +159,11 @@ Examples:
 - secure element integration
 - attested device identity
 - remote enrollment flows that avoid long-lived reusable shared credentials
+
+Note:
+
+- hardware-backed secret handling is possible, but it is not part of the current baseline design
+- if your use case requires stronger security properties, reach out and let us know what you need
 
 ## Non-Goals Of The Current Design
 
