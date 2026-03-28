@@ -1,353 +1,268 @@
 # Security Checklist
 
-This checklist is for operators bringing up or auditing a SensOS client. It is written as a set of questions to ask before deployment, with suggested mitigations when the answer increases risk.
+This is a simple operator checklist for deployment time. It is not a developer security design document.
 
-The goal is practical review, not theoretical completeness.
+The main question is:
+
+- what is the access policy for this device?
+
+Before deployment, make sure you have made deliberate choices about passwords, keys, hotspot access, and recovery access.
 
 ## How To Use This
 
-Ask each question before field deployment:
+For each question:
 
-- if the answer is `no`, move on
-- if the answer is `yes`, read the mitigation and decide whether that risk is acceptable for the deployment
+- answer it plainly
+- if the answer is not what you intended, fix it before deployment
+- if you are intentionally accepting a weaker access path for field operations, make sure the team knows that and knows how to use it
 
-## Identity And Admin Access
+## Access Policy
 
-### Are `sensos-admin` and `sensos-runner` password logins still usable?
+### Did you decide how this device should be accessed in the field?
+
+Expected answer:
+
+- `yes`
+
+Examples:
+
+- hotspot password plus user password
+- SSH keys only
+- hotspot disabled, VPN only
+- setup hotspot enabled temporarily, then removed
+
+If `no`:
+
+- stop and define the intended access policy before deployment
+- do not leave the device on whatever defaults happened to be present
+
+### Is this device going to a publicly accessible location?
+
+Expected answer:
+
+- you should know the answer
+
+Why it matters:
+
+- public or semi-public deployments need stricter choices
+- controlled internal deployments can justify some operational tradeoffs
+
+If `yes`:
+
+- avoid default hotspot credentials
+- prefer stronger passwords or SSH keys
+- remove temporary setup access if it is not required
+
+## Passwords
+
+### Did you keep any default passwords?
 
 Expected answer:
 
 - usually `no`
 
-Current repo behavior:
+Examples to think about:
 
-- setup locks both accounts with `passwd -l`
-- see [setup/02-users](../setup/02-users)
+- hotspot password
+- user password used for SSH or console login
 
-Why it matters:
+If `yes`:
 
-- unlocked local passwords make brute-force or reused-password compromise more likely
+- change them before deployment
+- do not rely on controlled location alone as the only safeguard
 
-Mitigation if `yes`:
-
-- relock them
-- prefer SSH keys over passwords
-- verify there is no unexpected PAM or console login path left open
-
-### Is the bootstrap user still present and still usable?
+### If you are using passwords, did you set them to strong values?
 
 Expected answer:
 
-- maybe
+- `yes`
 
-Current repo behavior:
+If `no`:
 
-- the install preserves the bootstrap user and leaves it otherwise unchanged
+- replace them with strong passwords or passphrases
+- avoid short, reused, guessable, or fleet-wide shared values unless you have explicitly accepted that risk
 
-Why it matters:
-
-- the bootstrap user may still have password login, sudo, or stale SSH keys
-
-Mitigation if `yes`:
-
-- decide whether the bootstrap user should remain on field devices
-- if not needed, disable or remove it
-- if needed, rotate its password, inspect its SSH keys, and verify sudo access is intentional
-
-### Are `authorized_keys` in place for the access you expect?
+### If you are using passwords, did you save them in a secure place for future access?
 
 Expected answer:
 
-- `yes`, intentionally
-
-Current repo behavior:
-
-- setup installs `keys/sensos_admin_authorized_keys` into `~sensos-admin/.ssh/authorized_keys` when present
-- `config-network` also generates an SSH keypair and appends the server public key to `sensos-admin` `authorized_keys`
+- `yes`
 
 Why it matters:
 
-- missing keys can lock you out if passwords are disabled
-- extra keys can leave unreviewed administrative access in place
+- field-friendly password access only works if the team can actually recover the credentials later
 
-Mitigation if `no` or `unknown`:
+If `no`:
 
-- inspect `~sensos-admin/.ssh/authorized_keys`
-- confirm every key owner and purpose
-- remove unused keys
-- keep at least one tested recovery path before disabling passwords
+- store them in the team password manager or other approved secure record
+- make sure the people who may need field access can retrieve them
 
-## SSH Exposure
+## SSH Access
 
-### Are SSH passwords enabled?
+### Did you decide whether SSH password login is part of the access policy?
 
 Expected answer:
 
-- ideally `no` for field deployment
-
-Current repo behavior:
-
-- `config-network` writes `PasswordAuthentication no`
-- unless `--disable-ssh-passwords` is used, it then enables password auth only from:
-  - loopback
-  - RFC1918/private IPv4 ranges
-  - local IPv6/private-local ranges
-  - the WireGuard subnet for the enrolled network
+- `yes`
 
 Why it matters:
 
-- even restricted password login increases attack surface if an attacker gains local-network or VPN adjacency
+- password SSH can be a reasonable operational choice
+- key-only SSH can be stronger, but it is not automatically the right answer for every field deployment
 
-Mitigation if `yes` and that is too permissive:
+If `no`:
 
-- rerun `config-network --disable-ssh-passwords ...`
-- confirm you have working SSH keys first
-- verify `/etc/ssh/sshd_config.d/sensos.conf` matches your intended policy
+- decide now whether password SSH is intentionally enabled or intentionally disabled
 
-### Are SSH keys the only planned admin path?
+### If you decided not to use passwords, did you install public keys and test access?
 
 Expected answer:
 
-- usually `yes`
+- `yes`
 
-Why it matters:
+If `no`:
 
-- mixed modes are often left in place accidentally
+- install the required public keys
+- test access from the laptop or admin path you expect to use
+- do not disable password access until key-based access is verified
 
-Mitigation if `no`:
+### If you decided to keep password SSH, did you test that login path before deployment?
 
-- document which paths are intentionally enabled
-- restrict them to a deployment-specific need and set an expiration/review point
+Expected answer:
 
-## Access Point And Local Wireless Exposure
+- `yes`
+
+If `no`:
+
+- test actual login with the intended user and password
+- make sure the team knows which account to use
+
+## Hotspot Access
 
 ### Is the hotspot enabled?
 
 Expected answer:
 
-- usually `no` in normal field deployment
+- it depends on the deployment
 
-Current repo behavior:
+If `yes`:
 
-- `config-hotspot` brings up an AP and sets `connection.autoconnect yes`
-- it uses a connection named `sensosap`
+- make sure that is intentional
+- if it was only needed for setup, disable or remove it before deployment
 
-Why it matters:
-
-- an active AP creates a local radio entry point near the device
-
-Mitigation if `yes`:
-
-- confirm it is truly required for the deployment
-- if it was only for setup, disable or delete the AP profile before deployment
-- verify there is no active AP with `nmcli connection show --active`
-
-### Is the hotspot using a default or guessable SSID?
+### If the hotspot is enabled, did you set a password-protected hotspot intentionally?
 
 Expected answer:
 
-- ideally `no`
+- `yes`
 
-Current repo behavior:
+If `no`:
 
-- `config-hotspot` defaults the SSID from `NETWORK_NAME` and `CLIENT_WG_IP`
+- run `config-hotspot --password '<strong-passphrase>'`
+- preferably also set `--ssid <deployment-specific-ssid>`
 
-Why it matters:
-
-- predictable SSIDs make devices easier to identify and target
-
-Mitigation if `yes`:
-
-- set a deployment-specific SSID instead of using the default
-- avoid names that disclose project, customer, or location details
-
-### Is the hotspot using a default, reused, or weak password?
+### Is the device still using the default automatic hotspot identity from the other repo?
 
 Expected answer:
 
 - `no`
 
-Current repo behavior:
+Operational note:
 
-- `config-hotspot` requires a password, but it does not generate one for you
+- in a related repo, some devices may come up with:
+  - SSID `sensos`
+  - password `sensossensos`
+- running `config-hotspot` with a password replaces that with a password-protected configured hotspot
 
-Why it matters:
+If `yes`:
 
-- reused setup passwords tend to spread across fleets
+- run `config-hotspot --password '<strong-unique-passphrase>'`
+- preferably also set a deployment-specific SSID with `--ssid`
+- if hotspot access is not needed, disable or remove the hotspot profile
 
-Mitigation if `yes`:
-
-- set a unique strong WPA2 passphrase
-- avoid shipping all devices with the same AP password
-- if the AP was temporary, remove it after setup
-
-## Network Enrollment And VPN
-
-### Was `config-network --network` explicitly set to the intended deployment network?
+### If the hotspot is enabled, did you save the hotspot credentials in a secure place?
 
 Expected answer:
 
 - `yes`
 
-Current repo behavior:
+If `no`:
 
-- `--network` is now required and must be provided explicitly
+- store the hotspot SSID and password in the same secure record used for device access details
 
-Why it matters:
+## Network And Enrollment
 
-- enrolling into the wrong network can expose the device to the wrong control plane or administrative population
-
-Mitigation if `no`:
-
-- rerun `config-network` with the correct network
-- replace the generated WireGuard config and keys if needed
-
-### Is the configured WireGuard endpoint the one the deployed device will actually be able to reach?
+### Did you explicitly set the intended network during enrollment?
 
 Expected answer:
 
 - `yes`
 
-Current repo behavior:
+Operational note:
 
-- `--config-server` is relative to the setup environment
-- the server returns a `wg_endpoint`
-- `config-network` allows overriding that with `--wg-endpoint`
+- `config-network` now requires `--network`
 
-Why it matters:
+If `no`:
 
-- setup-lab reachability and field reachability are often different
+- rerun enrollment with the correct `--network`
 
-Mitigation if `no` or `unknown`:
+### Did you verify that the WireGuard endpoint will work in the deployed environment?
+
+Expected answer:
+
+- `yes`
+
+Operational note:
+
+- `--config-server` is the address used during setup
+- the deployed device may need a different reachable endpoint
+- `config-network` allows override with `--wg-endpoint`
+
+If `no`:
 
 - rerun `config-network` with the correct `--wg-endpoint`
-- verify the endpoint is appropriate for the field network path, not just the enrollment environment
 
-## Secrets And Stored Credentials
+## Recovery
 
-### Is the API password present on disk?
-
-Expected answer:
-
-- `yes`, if the device needs to talk to the server API
-
-Current repo behavior:
-
-- stored at `/sensos/keys/api_password`
-- written with mode `0640` by the current helper code
-
-Why it matters:
-
-- this is a long-lived credential on disk
-
-Mitigation if `yes`:
-
-- treat the device as holding a live secret
-- restrict who can read `/sensos/keys`
-- rotate the API password if the device is lost, repurposed, or leaves controlled custody
-- consider tightening file ownership/mode if broader readability is unnecessary
-
-### Are there unexpected secrets or private keys under `/sensos/keys` or `/etc/wireguard`?
+### If the primary access method fails, do you still have a recovery path?
 
 Expected answer:
 
-- `no`
-
-Why it matters:
-
-- stale or copied credentials are easy to miss during reprovisioning
-
-Mitigation if `yes`:
-
-- inventory what is present
-- remove anything not required for the deployed role
-- rotate affected credentials if provenance is unclear
-
-## Services And Features
-
-### Are services enabled that are not needed for this deployment?
+- `yes`
 
 Examples:
 
-- hotspot
-- GPS
-- BirdNET
-- debug packet capture
+- hotspot plus password
+- alternate admin laptop with keys
+- console access plan
+- documented fallback credentials
+
+If `no`:
+
+- do not deploy until you have one
+
+### Has the actual access method been tested, not just configured?
 
 Expected answer:
 
-- `no`
+- `yes`
 
-Why it matters:
+If `no`:
 
-- unnecessary services add attack surface, local listeners, log volume, and operational complexity
+- test the real path now
+- for example:
+  - join the hotspot
+  - SSH with the expected account
+  - verify the saved credentials are correct
 
-Mitigation if `yes`:
+## Minimum Practical Standard
 
-- disable or stop the services you do not need
-- remove temporary setup configurations before shipping the device
+Before deployment, you should be able to say:
 
-### Is debug packet capture still present from troubleshooting?
-
-Expected answer:
-
-- `no`
-
-Current repo behavior:
-
-- debug captures are intended to be temporary and stored under `/sensos/log/network_capture`
-
-Why it matters:
-
-- retained packet captures can hold sensitive network metadata
-
-Mitigation if `yes`:
-
-- generate the reports you need
-- remove the raw capture files with `debug-network-capture report --latest --cleanup` or `debug-network-capture cleanup`
-
-## Physical And Deployment Questions
-
-### If someone gets local network proximity, what can they do?
-
-Ask:
-
-- can they reach an active hotspot?
-- can they SSH with a password?
-- can they pivot through the VPN subnet?
-
-Mitigation when risk is too high:
-
-- disable hotspot
-- disable SSH passwords
-- verify WireGuard and local firewall policy match the deployment model
-
-### If someone gets the device filesystem, what secrets do they obtain?
-
-Ask:
-
-- API password?
-- WireGuard private key?
-- SSH private key?
-- location metadata?
-
-Mitigation when risk is too high:
-
-- reduce stored secrets where possible
-- rotate credentials on loss or redeployment
-- scrub devices before reassignment
-
-## Minimum Recommended Posture
-
-For a typical field deployment, a good baseline is:
-
-- `sensos-admin` and `sensos-runner` passwords locked
-- bootstrap user reviewed or removed
-- SSH key access verified
-- SSH passwords disabled unless there is a clear operational need
-- hotspot disabled unless explicitly needed in the field
-- hotspot SSID and password not left at predictable or reused values
-- `config-network` run with explicit `--network`
-- `wg_endpoint` reviewed for field reachability
-- API password treated as a live secret
-- temporary debug captures removed after review
+- we decided how this device will be accessed
+- we did not leave unknown defaults in place
+- if we use passwords, they are strong enough and stored securely
+- if we use keys, they are installed and tested
+- if hotspot access is enabled, it is intentional and password-protected
+- we know the deployed network settings are correct
+- we have a tested recovery path
