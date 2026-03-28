@@ -63,6 +63,24 @@ require_cmd() {
     }
 }
 
+run_systemctl() {
+    sudo systemctl "$@"
+}
+
+service_state() {
+    if sudo systemctl is-active --quiet "${SERVICE_NAME}"; then
+        printf 'active\n'
+        return 0
+    fi
+
+    if sudo systemctl is-failed --quiet "${SERVICE_NAME}"; then
+        printf 'failed\n'
+        return 0
+    fi
+
+    printf 'inactive\n'
+}
+
 ensure_state_root() {
     install -d -m 2775 "${STATE_ROOT}"
     install -d -m 2775 "${SESSIONS_ROOT}"
@@ -115,7 +133,7 @@ EOF
 }
 
 cmd_start() {
-    local hours interface snaplen file_mb file_count buffer_kib session_root duration_sec
+    local hours interface snaplen file_mb file_count buffer_kib session_root duration_sec state
 
     register_option --hours hours "Capture duration in hours" "24"
     register_option --interface interface "Interface name to capture on" "any"
@@ -140,8 +158,18 @@ cmd_start() {
 
     write_active_env "${session_root}" "${interface}" "${duration_sec}" "${snaplen}" "${file_mb}" "${file_count}" "${buffer_kib}"
 
-    systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
-    systemctl start "${SERVICE_NAME}"
+    run_systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    run_systemctl start "${SERVICE_NAME}"
+    sleep 1
+    state="$(service_state)"
+
+    if [[ "${state}" != "active" ]]; then
+        echo "ERROR: ${SERVICE_NAME} did not remain active after start (state=${state})." >&2
+        echo "Inspect with:" >&2
+        echo "  sudo systemctl status ${SERVICE_NAME}" >&2
+        echo "  sudo journalctl -u ${SERVICE_NAME} -n 50 --no-pager" >&2
+        exit 1
+    fi
 
     echo "Started network capture session"
     echo "  session_root=${session_root}"
@@ -151,14 +179,13 @@ cmd_start() {
 }
 
 cmd_status() {
+    local state
+
     require_cmd systemctl
     ensure_state_root
 
-    if systemctl is-active --quiet "${SERVICE_NAME}"; then
-        echo "status=active"
-    else
-        echo "status=inactive"
-    fi
+    state="$(service_state)"
+    echo "status=${state}"
 
     if [[ -f "${ACTIVE_ENV_FILE}" ]]; then
         cat "${ACTIVE_ENV_FILE}"
@@ -167,7 +194,7 @@ cmd_status() {
 
 cmd_stop() {
     require_cmd systemctl
-    systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    run_systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
     echo "Stopped ${SERVICE_NAME}"
 }
 
