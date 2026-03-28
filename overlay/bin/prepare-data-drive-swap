@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+set -euo pipefail
+
+SCRIPT_FILE="$(realpath "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_FILE}")" && pwd)"
+resolve_overlay_root() {
+    local -a candidates=()
+    local candidate
+
+    if [[ -n "${SENSOS_CLIENT_ROOT:-}" ]]; then
+        candidates+=("${SENSOS_CLIENT_ROOT}")
+    fi
+
+    candidates+=(
+        "$(cd "${SCRIPT_DIR}/.." && pwd)"
+        "/sensos"
+    )
+
+    for candidate in "${candidates[@]}"; do
+        [[ -f "${candidate}/libexec/parse-switches.sh" ]] && {
+            printf '%s\n' "${candidate}"
+            return 0
+        }
+    done
+
+    printf '%s\n' "$(cd "${SCRIPT_DIR}/.." && pwd)"
+}
+
+OVERLAY_ROOT="$(resolve_overlay_root)"
+PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
+
+[[ -f "${PARSE_SWITCHES_LIB}" ]] || {
+    echo "ERROR: missing parse-switches library at ${PARSE_SWITCHES_LIB}" >&2
+    exit 1
+}
+source "${PARSE_SWITCHES_LIB}"
+
+DATA_MOUNT="/sensos/data"
+DATA_SERVICES=(
+    "sensos-arecord.service"
+    "sensos-compress-audio.service"
+    "sensos-read-i2c.service"
+    "sensos-birdnet.service"
+    "sensos-gps.service"
+    "thin-data.service"
+)
+DATA_TIMERS=(
+    "monitor-data-space.timer"
+)
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0")
+
+Stop services using ${DATA_MOUNT} and determine whether the data media can be
+swapped directly or whether data must be copied off the device instead.
+EOF
+}
+
+require_cmd() {
+    command -v "$1" >/dev/null 2>&1 || {
+        echo "ERROR: required command not found: $1" >&2
+        exit 1
+    }
+}
+
+run_systemctl() {
+    sudo systemctl "$@"
+}
+
+unit_exists() {
+    local unit_name="$1"
+    systemctl list-unit-files --type=service --type=timer 2>/dev/null | awk '{print $1}' | grep -Fxq "${unit_name}"
+}
+
+stop_unit_if_present() {
+    local unit_name="$1"
+
+    if unit_exists "${unit_name}"; then
+        run_systemctl stop "${unit_name}" >/dev/null 2>&1 || true
+        echo "Stopped ${unit_name}"
+    fi
+}
+
+mount_source_for() {
+    local target_path="$1"
+    findmnt -n -o SOURCE --target "${target_path}" 2>/dev/null || true
+}
+
+backing_device_for_source() {
+    local source_path="$1"
+    local pkname
+
+    [[ -n "${source_path}" ]] || return 0
+
+    if [[ -b "${source_path}" ]]; then
+        pkname="$(lsblk -no PKNAME "${source_path}" 2>/dev/null | head -n 1)"
+        if [[ -n "${pkname}" ]]; then
+            printf '/dev/%s\n' "${pkname}"
+            return 0
+        fi
+    fi
+
+    printf '%s\n' "${source_path}"
+}
+
+stop_data_units() {
+    local unit_name
+
+    for unit_name in "${DATA_TIMERS[@]}"; do
+        stop_unit_if_present "${unit_name}"
+    done
+
+    for unit_name in "${DATA_SERVICES[@]}"; do
+        stop_unit_if_present "${unit_name}"
+    done
+}
+
+main() {
+    local root_source root_device data_source data_device
+
+    if [[ "${1:-}" == "--help" || "${1:-}" == "-h" || "${1:-}" == "help" ]]; then
+        usage
+        return 0
+    fi
+
+    parse_switches "$(basename "$0")" "$@"
+
+    require_cmd findmnt
+    require_cmd lsblk
+    require_cmd mountpoint
+    require_cmd sync
+    require_cmd systemctl
+
+    [[ -d "${DATA_MOUNT}" ]] || {
+        echo "ERROR: data mount path not found: ${DATA_MOUNT}" >&2
+        exit 1
+    }
+
+    echo "Preparing ${DATA_MOUNT} for shutdown or media swap..."
+    stop_data_units
+    sync
+
+    root_source="$(mount_source_for /)"
+    root_device="$(backing_device_for_source "${root_source}")"
+
+    if ! mountpoint -q "${DATA_MOUNT}"; then
+        echo
+        echo "${DATA_MOUNT} is not a separate mountpoint."
+        echo "Storage mode: root filesystem"
+        echo "Root source: ${root_source:-unknown}"
+        echo "Data under ${DATA_MOUNT} cannot be removed independently."
+        echo "Copy data off the device instead of swapping media."
+        return 0
+    fi
+
+    data_source="$(mount_source_for "${DATA_MOUNT}")"
+    data_device="$(backing_device_for_source "${data_source}")"
+
+    echo
+    echo "Root source: ${root_source:-unknown}"
+    echo "Data source: ${data_source:-unknown}"
+
+    if [[ -z "${data_source}" || -z "${data_device}" ]]; then
+        echo "Could not determine a removable backing device for ${DATA_MOUNT}."
+        echo "Treat this as non-removable storage and copy data off the device instead."
+        return 0
+    fi
+
+    if [[ -n "${root_device}" && "${data_device}" == "${root_device}" ]]; then
+        echo "${DATA_MOUNT} shares the same backing device as / (${data_device})."
+        echo "This media cannot be swapped independently."
+        echo "Copy data off the device instead of removing storage."
+        return 0
+    fi
+
+    echo "Unmounting ${DATA_MOUNT} from ${data_source}..."
+    sudo umount "${DATA_MOUNT}"
+    sync
+
+    echo
+    echo "Unmount complete."
+    echo "Data device: ${data_device}"
+    echo "It is now safe to power down and swap the media backing ${DATA_MOUNT}."
+    echo "After swapping media, run config-storage to mount and prepare the replacement drive."
+}
+
+main "$@"
