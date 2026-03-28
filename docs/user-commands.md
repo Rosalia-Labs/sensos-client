@@ -381,7 +381,7 @@ install-birdnet-models --force
 
 ## Debug and Reporting Commands
 
-### `debug-network-capture`
+### `package-tracing`
 
 Runs a temporary bounded packet-capture session for debugging.
 
@@ -396,9 +396,9 @@ Subcommands:
 Typical use:
 
 ```sh
-debug-network-capture start --hours 24
-debug-network-capture status
-debug-network-capture report --latest --cleanup
+package-tracing start --hours 24
+package-tracing status
+package-tracing report --latest --cleanup
 ```
 
 Behavior:

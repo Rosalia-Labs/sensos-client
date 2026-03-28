@@ -134,6 +134,18 @@ def iter_capture_files(capture_root: Path, hours: float) -> list[Path]:
     return files
 
 
+def classify_pending_capture_error(exc: Exception) -> str | None:
+    message = str(exc)
+    if message in {
+        "pcap file is truncated",
+        "unsupported pcap magic number",
+        "truncated packet header",
+        "truncated packet payload",
+    }:
+        return message
+    return None
+
+
 def parse_pcap_header(handle) -> tuple[str, bool, int]:
     header = handle.read(24)
     if len(header) < 24:
@@ -312,8 +324,17 @@ def summarize(files: list[Path], local_ips: set[str]) -> dict:
 
     packet_count = 0
     skipped_files: dict[str, str] = {}
+    pending_files: dict[str, str] = {}
 
     for path in files:
+        try:
+            if path.stat().st_size == 0:
+                pending_files[str(path)] = "capture file exists but is still empty"
+                continue
+        except OSError as exc:
+            skipped_files[str(path)] = str(exc)
+            continue
+
         try:
             for packet in iter_packet_summaries(path, local_ips):
                 packet_count += 1
@@ -346,16 +367,22 @@ def summarize(files: list[Path], local_ips: set[str]) -> dict:
                     packet.bytes_on_wire,
                 )
         except Exception as exc:
-            skipped_files[str(path)] = str(exc)
+            pending_reason = classify_pending_capture_error(exc)
+            if pending_reason is not None:
+                pending_files[str(path)] = pending_reason
+            else:
+                skipped_files[str(path)] = str(exc)
 
     return {
         "meta": {
             "files_analyzed": len(files) - len(skipped_files),
             "files_skipped": len(skipped_files),
+            "files_pending": len(pending_files),
             "packets_analyzed": packet_count,
             "local_ip_count": len(local_ips),
             "local_ips": sorted(local_ips),
             "skipped_files": skipped_files,
+            "pending_files": pending_files,
         },
         "by_direction": flatten_table(by_direction, ["direction"]),
         "by_protocol": flatten_table(by_protocol, ["direction", "protocol"]),
@@ -420,10 +447,13 @@ def emit_text(summary: dict, args: argparse.Namespace) -> None:
     print("Network Capture Report")
     print(
         f"Files analyzed: {meta['files_analyzed']}  "
+        f"Files pending: {meta['files_pending']}  "
         f"Files skipped: {meta['files_skipped']}  "
         f"Packets analyzed: {meta['packets_analyzed']}"
     )
     print(f"Hours requested: {args.hours}  Top rows per table: {args.top}")
+    if meta["packets_analyzed"] == 0 and meta["files_pending"] > 0 and meta["files_skipped"] == 0:
+        print("No readable capture data is available yet. This is normal if the session just started or the current pcap file has not been fully written yet.")
     print()
     print_table("Traffic by direction", summary["by_direction"], ["direction"], args.top)
     print()
@@ -445,6 +475,11 @@ def emit_text(summary: dict, args: argparse.Namespace) -> None:
         print()
         print("Skipped files")
         for path, reason in meta["skipped_files"].items():
+            print(f"  {path}: {reason}")
+    if meta["pending_files"]:
+        print()
+        print("Pending files")
+        for path, reason in meta["pending_files"].items():
             print(f"  {path}: {reason}")
 
 

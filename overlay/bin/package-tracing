@@ -48,9 +48,9 @@ usage() {
 Usage: $(basename "$0") <command> [options]
 
 Commands:
-  start    Start a bounded debug capture session
-  status   Show active capture session state
-  stop     Stop the active capture session
+  start    Start a bounded packet tracing session
+  status   Show active packet tracing session state
+  stop     Stop the active packet tracing session
   report   Generate reports for a session
   cleanup  Remove retained capture data for a session
 EOF
@@ -91,7 +91,7 @@ latest_session_root() {
 
     latest="$(find "${SESSIONS_ROOT}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -n 1)"
     [[ -n "${latest}" ]] || {
-        echo "ERROR: no capture sessions found under ${SESSIONS_ROOT}" >&2
+        echo "ERROR: no tracing sessions found under ${SESSIONS_ROOT}" >&2
         exit 1
     }
     printf '%s\n' "${latest}"
@@ -171,7 +171,7 @@ cmd_start() {
         exit 1
     fi
 
-    echo "Started network capture session"
+    echo "Started packet tracing session"
     echo "  session_root=${session_root}"
     echo "  duration_hours=${hours}"
     echo "  interface=${interface}"
