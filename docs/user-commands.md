@@ -100,16 +100,21 @@ Important flags from the source:
 Typical use:
 
 ```sh
-config-network --config-server <server-ip-or-name>
+config-network --config-server <server-ip-or-name> --network <network-name>
 config-network --config-server <server-ip-or-name> --network sensos --subnet 1
 ```
+
+Main gotchas:
+
+- `--config-server` is only the server address reachable from the current setup environment.
+- the server will usually return a `wg_endpoint` suitable for the chosen network, but if the deployed device must reach a different public or routed endpoint, you need to override it with `--wg-endpoint`
+- `--network` is now required and must be supplied explicitly for every enrollment
 
 Run this before commands that need:
 
 - `CLIENT_WG_IP`
 - `SERVER_WG_IP`
 - API password
-- network policy from `network.conf`
 
 ### `config-location`
 
