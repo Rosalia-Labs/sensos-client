@@ -34,6 +34,7 @@ PROTO_TCP = 6
 PROTO_UDP = 17
 PROTO_ICMP = 1
 PROTO_ICMPV6 = 58
+EXIT_PENDING_ONLY = 3
 
 
 @dataclass
@@ -486,6 +487,13 @@ def emit_text(summary: dict, args: argparse.Namespace) -> None:
             print(f"  {path}: {reason}")
 
 
+def has_readable_data(summary: dict) -> bool:
+    meta = summary["meta"]
+    return meta["packets_analyzed"] > 0 or meta["files_skipped"] > 0 or (
+        meta["files_analyzed"] > 0 and meta["files_pending"] == 0
+    )
+
+
 def main() -> None:
     args = parse_args()
 
@@ -493,6 +501,9 @@ def main() -> None:
     files = iter_capture_files(capture_root, args.hours)
     local_ips = collect_local_ips()
     summary = summarize(files, local_ips)
+
+    if not has_readable_data(summary):
+        raise SystemExit(EXIT_PENDING_ONLY)
 
     if args.json:
         json.dump(summary, sys.stdout, indent=2, sort_keys=True)

@@ -201,6 +201,7 @@ cmd_stop() {
 cmd_report() {
     local session_root latest cleanup hours top
     local report_json_path report_text_path timestamp
+    local report_text_tmp report_json_tmp report_status
 
     register_option --session-root session_root "Session root directory to report on" ""
     register_option --latest latest "Use the latest session when --session-root is omitted" "true"
@@ -221,19 +222,36 @@ cmd_report() {
     timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
     report_text_path="${session_root}/reports/report-${timestamp}.txt"
     report_json_path="${session_root}/reports/report-${timestamp}.json"
+    report_text_tmp="$(mktemp)"
+    report_json_tmp="$(mktemp)"
+    trap 'rm -f "${report_text_tmp}" "${report_json_tmp}"' RETURN
 
+    set +e
     python3 /sensos/libexec/network-capture-report.py \
         --capture-root "${session_root}" \
         --hours "${hours}" \
         --top "${top}" \
-        >"${report_text_path}"
+        >"${report_text_tmp}"
+    report_status=$?
+    set -e
+
+    if [[ "${report_status}" -eq 3 ]]; then
+        echo "No readable capture data is available yet."
+        echo "This is normal if the session just started or the current pcap file has not been fully written yet."
+        return 0
+    fi
+
+    [[ "${report_status}" -eq 0 ]] || exit "${report_status}"
 
     python3 /sensos/libexec/network-capture-report.py \
         --capture-root "${session_root}" \
         --hours "${hours}" \
         --top "${top}" \
         --json \
-        >"${report_json_path}"
+        >"${report_json_tmp}"
+
+    mv "${report_text_tmp}" "${report_text_path}"
+    mv "${report_json_tmp}" "${report_json_path}"
 
     cat "${report_text_path}"
     echo
