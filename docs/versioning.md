@@ -4,7 +4,7 @@ This repo should use an explicit repo version as the install and migration key.
 
 ## Source Of Truth
 
-The current desired client version lives in [`VERSION`](/Users/tkeitt/Projects/sensos-client/VERSION).
+The current desired client version lives in [`VERSION`](../VERSION).
 
 Format:
 
@@ -63,7 +63,7 @@ the repo's source of truth.
 Before a release:
 
 - decide whether the change is `MAJOR`, `MINOR`, or `PATCH`
-- bump [`VERSION`](/Users/keittth/Projects/sensos-client/VERSION) intentionally
+- bump [`VERSION`](../VERSION) intentionally
 - if the release changes persisted state or setup behavior, add or update migration logic
 
 During `0.x`, prefer `MINOR` bumps for meaningful deployment-model or setup-contract changes, even when they are not backward-compatible.
@@ -107,16 +107,16 @@ When updating with `git fetch` or `git pull`:
 - run any needed migrations in order
 - update install-state only after the update succeeds
 
-The repo includes a top-level [`upgrade`](/Users/tkeitt/Projects/sensos-client/upgrade)
+The repo includes a top-level [`upgrade`](../upgrade)
 script for this flow. It:
 
 - requires a clean git worktree before pulling
 - uses `git pull --ff-only`
-- runs version-aware migrations from [`migrations/versions`](/Users/tkeitt/Projects/sensos-client/migrations/versions)
+- runs version-aware migrations from [`migrations/versions`](../migrations/versions)
 - redeploys `overlay/` into `/sensos` and reruns setup
 - records install-state only after success
 
-The repo also includes a top-level [`install`](/Users/tkeitt/Projects/sensos-client/install)
+The repo also includes a top-level [`install`](../install)
 script for first-time deployment. It prompts with a `[y/N]` warning, then runs
 the repo's setup scripts and deploys the live overlay into the host plus `/sensos`.
 

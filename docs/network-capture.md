@@ -18,7 +18,7 @@ Start a 24-hour debug session on the device:
 debug-network-capture start --hours 24
 ```
 
-That creates a session under `/sensos/log/network_capture/sessions/<timestamp>` and starts [sensos-network-capture.service](/Users/tkeitt/Projects/sensos-client/overlay/systemd/sensos-network-capture.service) manually for that session only. The service is not enabled during normal install.
+That creates a session under `/sensos/log/network_capture/sessions/<timestamp>` and starts [sensos-network-capture.service](../overlay/systemd/sensos-network-capture.service) manually for that session only. The service is not enabled during normal install.
 
 Check status:
 
@@ -64,7 +64,7 @@ The exact values can be overridden through `debug-network-capture start` or by s
 
 ## Reports
 
-Use [debug-network-capture](/Users/tkeitt/Projects/sensos-client/overlay/bin/debug-network-capture) for the full session workflow, or call [report-network-capture](/Users/tkeitt/Projects/sensos-client/overlay/bin/report-network-capture) directly against a session root:
+Use [debug-network-capture](../overlay/bin/debug-network-capture) for the full session workflow, or call [report-network-capture](../overlay/bin/report-network-capture) directly against a session root:
 
 ```sh
 report-network-capture --capture-root /sensos/log/network_capture/sessions/<timestamp> --hours 0 --top 20

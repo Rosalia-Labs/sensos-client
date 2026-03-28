@@ -51,7 +51,7 @@ Optional:
 
 The exploratory dependency file is:
 
-[`python/requirements-birdnet.txt`](/Users/tkeitt/Projects/sensos-client/python/requirements-birdnet.txt)
+[`python/requirements-birdnet.txt`](../python/requirements-birdnet.txt)
 
 Current exploratory contents:
 
@@ -224,4 +224,4 @@ not force BirdNET runtime installation unless BirdNET has been opted in via:
 
 Once BirdNET is enabled, `setup/08-birdnet` lazily reconciles the BirdNET venv
 based on the contents of
-[`python/requirements-birdnet.txt`](/Users/tkeitt/Projects/sensos-client/python/requirements-birdnet.txt).
+[`python/requirements-birdnet.txt`](../python/requirements-birdnet.txt).

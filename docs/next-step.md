@@ -19,7 +19,7 @@ In the old client, the first stage did more than install packages and create use
 - linked unit files into `/etc/systemd/system`
 - linked `/sensos/etc/nftables.conf` into `/etc/nftables.conf`
 
-Reference: [SensOS/client/sensos/stage-base/00-sensos/00-run.sh](/Users/tkeitt/Projects/sensos-client/SensOS/client/sensos/stage-base/00-sensos/00-run.sh#L21)
+Reference: [SensOS/client/sensos/stage-base/00-sensos/00-run.sh](../SensOS/client/sensos/stage-base/00-sensos/00-run.sh#L21)
 
 The rewrite currently has no equivalent runtime asset tree and no setup step that installs it. That means a cloned repo can prepare a host, but it cannot yet provide the actual configuration commands or managed services that make the device useful.
 
@@ -91,9 +91,9 @@ Once overlay assets exist in the new repo, the next setup scripts should be:
 
 References from the old client:
 
-- hardware enablement: [SensOS/client/sensos/stage-base/00-sensos/05-run.sh](/Users/tkeitt/Projects/sensos-client/SensOS/client/sensos/stage-base/00-sensos/05-run.sh)
-- baseline service enablement: [SensOS/client/sensos/stage-base/00-sensos/06-run.sh](/Users/tkeitt/Projects/sensos-client/SensOS/client/sensos/stage-base/00-sensos/06-run.sh)
-- journald persistence: [SensOS/client/sensos/stage-base/00-sensos/08-run.sh](/Users/tkeitt/Projects/sensos-client/SensOS/client/sensos/stage-base/00-sensos/08-run.sh)
+- hardware enablement: [SensOS/client/sensos/stage-base/00-sensos/05-run.sh](../SensOS/client/sensos/stage-base/00-sensos/05-run.sh)
+- baseline service enablement: [SensOS/client/sensos/stage-base/00-sensos/06-run.sh](../SensOS/client/sensos/stage-base/00-sensos/06-run.sh)
+- journald persistence: [SensOS/client/sensos/stage-base/00-sensos/08-run.sh](../SensOS/client/sensos/stage-base/00-sensos/08-run.sh)
 
 ## Practical conclusion
 
