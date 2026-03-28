@@ -32,6 +32,12 @@ Generate reports from the latest session and remove the raw packet captures afte
 package-tracing report --latest --cleanup
 ```
 
+If you also want to save text and JSON report files under the session directory:
+
+```sh
+package-tracing report --latest --save
+```
+
 If you want to remove the generated summary reports too:
 
 ```sh

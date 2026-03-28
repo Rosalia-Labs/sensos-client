@@ -423,6 +423,7 @@ Typical use:
 package-tracing start --duration 24
 package-tracing status
 package-tracing report --latest --cleanup
+package-tracing report --latest --save
 package-tracing cleanup --all
 ```
 
@@ -430,6 +431,8 @@ Behavior:
 
 - stores temporary capture sessions under `/sensos/log/network_capture/sessions`
 - uses bounded rotating `pcap` files
+- prints reports to stdout by default
+- only writes `report-*.txt` and `report-*.json` files when `--save` is used
 - is intended for debugging, not permanent collection
 
 ### `report-network-capture`
