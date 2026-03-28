@@ -438,7 +438,8 @@ def render_size(byte_count: int) -> str:
 
 
 def print_table(title: str, rows: list[dict], columns: list[str], top_n: int) -> None:
-    print(title)
+    if title:
+        print(title)
     if not rows:
         print("  (no data)")
         return
@@ -463,6 +464,39 @@ def print_table(title: str, rows: list[dict], columns: list[str], top_n: int) ->
         )
 
 
+def print_table_by_direction(title: str, rows: list[dict], columns: list[str], top_n: int) -> None:
+    print(title)
+    if not rows:
+        print("  (no data)")
+        return
+
+    grouped_rows: dict[str, list[dict]] = {}
+    for row in rows:
+        direction = str(row.get("direction", "unknown"))
+        grouped_rows.setdefault(direction, []).append(row)
+
+    displayed_any = False
+    for direction in ("inbound", "outbound", "local", "external"):
+        direction_rows = grouped_rows.get(direction, [])
+        if not direction_rows:
+            continue
+        displayed_any = True
+        print(f"  {direction}")
+        print_table("", direction_rows, [column for column in columns if column != "direction"], top_n)
+        print()
+
+    for direction in sorted(grouped_rows.keys()):
+        if direction in DIRECTION_SORT_ORDER:
+            continue
+        displayed_any = True
+        print(f"  {direction}")
+        print_table("", grouped_rows[direction], [column for column in columns if column != "direction"], top_n)
+        print()
+
+    if not displayed_any:
+        print("  (no data)")
+
+
 def emit_text(summary: dict, args: argparse.Namespace) -> None:
     meta = summary["meta"]
     print("Network Capture Report")
@@ -478,15 +512,15 @@ def emit_text(summary: dict, args: argparse.Namespace) -> None:
     print()
     print_table("Traffic by direction", summary["by_direction"], ["direction"], args.top)
     print()
-    print_table("Traffic by direction and protocol", summary["by_protocol"], ["direction", "protocol"], args.top)
+    print_table_by_direction("Traffic by protocol", summary["by_protocol"], ["direction", "protocol"], args.top)
     print()
-    print_table("Top remote peers", summary["by_remote"], ["direction", "remote_ip"], args.top)
+    print_table_by_direction("Top remote peers", summary["by_remote"], ["direction", "remote_ip"], args.top)
     print()
-    print_table("Top local ports", summary["by_local_port"], ["direction", "protocol", "local_port"], args.top)
+    print_table_by_direction("Top local ports", summary["by_local_port"], ["direction", "protocol", "local_port"], args.top)
     print()
-    print_table("Top remote ports", summary["by_remote_port"], ["direction", "protocol", "remote_port"], args.top)
+    print_table_by_direction("Top remote ports", summary["by_remote_port"], ["direction", "protocol", "remote_port"], args.top)
     print()
-    print_table(
+    print_table_by_direction(
         "Top flows",
         summary["by_flow"],
         ["direction", "protocol", "local_ip", "local_port", "remote_ip", "remote_port"],

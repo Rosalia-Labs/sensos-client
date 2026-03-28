@@ -173,6 +173,7 @@ Enters or exits a temporary archival state for `/sensos/data`.
 Typical use:
 
 ```sh
+archive-mode --status
 archive-mode --enter
 archive-mode --exit
 archive-mode --exit --clear-data
@@ -180,6 +181,7 @@ archive-mode --exit --clear-data
 
 Behavior:
 
+- `--status` reports whether archive mode is active, whether `/sensos/data` is mounted, and whether the main data writers are active
 - `--enter` stops the main `/sensos/data` writers, checkpoints SQLite databases, and syncs storage
 - entering archive mode writes a state marker so exit/clear operations are tied to a real prepared archive window
 - `--exit` remounts `/sensos/data` if needed and restarts the stopped services

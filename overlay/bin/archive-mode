@@ -54,6 +54,7 @@ Usage: $(basename "$0") [options]
 Enter or exit archive mode for /sensos/data.
 
 Options:
+  --status      Show archive mode and data-service status
   --enter       Stop writers, checkpoint SQLite, and sync storage
   --exit        Return to normal operation
   --clear-data  When exiting, clear /sensos/data in place first
@@ -77,11 +78,13 @@ archive_mode_is_active() {
 }
 
 main() {
-    local enter exit_mode clear_data
+    local enter exit_mode clear_data status
+    local archive_state mount_state writers_state
 
     enter="false"
     exit_mode="false"
     clear_data="false"
+    status="false"
 
     if [[ "${1:-}" == "--help" || "${1:-}" == "-h" || "${1:-}" == "help" ]]; then
         usage
@@ -92,6 +95,9 @@ main() {
         case "$1" in
             --enter)
                 enter="true"
+                ;;
+            --status)
+                status="true"
                 ;;
             --exit)
                 exit_mode="true"
@@ -107,6 +113,37 @@ main() {
         esac
         shift
     done
+
+    if [[ "${status}" == "true" ]]; then
+        if [[ "${enter}" == "true" || "${exit_mode}" == "true" || "${clear_data}" == "true" ]]; then
+            echo "ERROR: --status cannot be combined with other options." >&2
+            exit 1
+        fi
+
+        if archive_mode_is_active; then
+            archive_state="active"
+        else
+            archive_state="inactive"
+        fi
+
+        if mountpoint -q "${DATA_MOUNT}"; then
+            mount_state="mounted"
+        else
+            mount_state="unmounted"
+        fi
+
+        if data_ops_any_data_unit_active; then
+            writers_state="active"
+        else
+            writers_state="inactive"
+        fi
+
+        echo "archive_mode=${archive_state}"
+        echo "data_mount=${mount_state}"
+        echo "data_writers=${writers_state}"
+        echo "state_file=${STATE_FILE}"
+        return 0
+    fi
 
     if [[ "${enter}" == "${exit_mode}" ]]; then
         echo "ERROR: specify exactly one of --enter or --exit." >&2
