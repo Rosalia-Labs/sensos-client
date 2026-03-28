@@ -166,26 +166,6 @@ Behavior:
 - can prepare `/sensos/data` on the current filesystem without a separate disk
 - can partition, format, mount, and persist a selected block device
 
-### `prepare-data-drive-swap`
-
-Stops the services that write under `/sensos/data` and checks whether that storage can actually be swapped.
-
-Typical use:
-
-```sh
-prepare-data-drive-swap
-prepare-data-drive-swap --undo true
-```
-
-Behavior:
-
-- stops the main data-writing services before shutdown
-- detects whether `/sensos/data` is a separate removable mount or part of the root device
-- if the data storage is separate, unmounts it so it can be swapped safely after power-down
-- after a successful swap, `config-storage` is usually needed to mount and prepare the replacement drive
-- if the data storage is part of `/`, tells you to copy data off the device instead
-- `--undo true` remounts `/sensos/data` when needed and restarts the stopped services
-
 ### `archive-mode`
 
 Enters or exits a temporary archival state for `/sensos/data`.
@@ -204,26 +184,9 @@ Behavior:
 - entering archive mode writes a state marker so exit/clear operations are tied to a real prepared archive window
 - `--exit` remounts `/sensos/data` if needed and restarts the stopped services
 - `--exit --clear-data` clears `/sensos/data` in place before restarting services, which is useful after copying an entire epoch off-device
+- use it for both copy-off and media-swap workflows
+- after `--enter`, either copy data off the device or swap media, then use `--exit`
 - this provides a non-interactive alternative to using `config-storage` only to clear `/sensos/data`
-
-### `prepare-data-copy`
-
-Quiesces `/sensos/data` for a consistent copy off the device.
-
-Typical use:
-
-```sh
-prepare-data-copy
-prepare-data-copy --resume true
-```
-
-Behavior:
-
-- stops the main data-writing services before the copy window
-- checkpoints SQLite databases under `/sensos/data` and syncs storage
-- leaves the data tree ready to copy via `rsync`, `scp`, or another transfer method
-- by default leaves data services stopped until you restart them or reboot
-- see [Data Copy](data-copy.md) for the full workflow and caveats
 
 ### `config-arecord`
 

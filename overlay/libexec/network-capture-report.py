@@ -35,6 +35,12 @@ PROTO_UDP = 17
 PROTO_ICMP = 1
 PROTO_ICMPV6 = 58
 EXIT_PENDING_ONLY = 3
+DIRECTION_SORT_ORDER = {
+    "inbound": 0,
+    "outbound": 1,
+    "local": 2,
+    "external": 3,
+}
 
 
 @dataclass
@@ -406,7 +412,18 @@ def flatten_table(counter_map, key_names: list[str]) -> list[dict]:
         row = {name: value for name, value in zip(key_names, key)}
         row.update(totals)
         rows.append(row)
-    rows.sort(key=lambda row: (-row["bytes"], -row["packets"]))
+    rows.sort(
+        key=lambda row: (
+            DIRECTION_SORT_ORDER.get(str(row.get("direction", "")), 999),
+            -row["bytes"],
+            -row["packets"],
+            *[
+                "" if row.get(name) is None else str(row.get(name))
+                for name in key_names
+                if name != "direction"
+            ],
+        )
+    )
     return rows
 
 
