@@ -38,6 +38,12 @@ If you want to remove the generated summary reports too:
 package-tracing cleanup --latest --remove-reports
 ```
 
+If you want to clear all retained tracing sessions and start fresh:
+
+```sh
+package-tracing cleanup --all
+```
+
 ## Storage bounds
 
 - default file size: 8 MiB

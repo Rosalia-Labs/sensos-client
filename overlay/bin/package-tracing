@@ -86,6 +86,21 @@ ensure_state_root() {
     install -d -m 2775 "${SESSIONS_ROOT}"
 }
 
+remove_if_empty_dir() {
+    local target_dir="$1"
+
+    [[ -d "${target_dir}" ]] || return 0
+    rmdir "${target_dir}" 2>/dev/null || true
+}
+
+prune_session_dir_if_empty() {
+    local session_root="$1"
+
+    remove_if_empty_dir "${session_root}/pcap"
+    remove_if_empty_dir "${session_root}/reports"
+    remove_if_empty_dir "${session_root}"
+}
+
 latest_session_root() {
     local latest
 
@@ -224,8 +239,6 @@ cmd_report() {
     report_json_path="${session_root}/reports/report-${timestamp}.json"
     report_text_tmp="$(mktemp)"
     report_json_tmp="$(mktemp)"
-    trap 'rm -f "${report_text_tmp}" "${report_json_tmp}"' RETURN
-
     set +e
     python3 /sensos/libexec/network-capture-report.py \
         --capture-root "${session_root}" \
@@ -236,12 +249,16 @@ cmd_report() {
     set -e
 
     if [[ "${report_status}" -eq 3 ]]; then
+        rm -f "${report_text_tmp}" "${report_json_tmp}"
         echo "No readable capture data is available yet."
         echo "This is normal if the session just started or the current pcap file has not been fully written yet."
         return 0
     fi
 
-    [[ "${report_status}" -eq 0 ]] || exit "${report_status}"
+    if [[ "${report_status}" -ne 0 ]]; then
+        rm -f "${report_text_tmp}" "${report_json_tmp}"
+        exit "${report_status}"
+    fi
 
     python3 /sensos/libexec/network-capture-report.py \
         --capture-root "${session_root}" \
@@ -266,12 +283,21 @@ cmd_report() {
 }
 
 cmd_cleanup() {
-    local session_root latest remove_reports
+    local session_root latest remove_reports all
 
     register_option --session-root session_root "Session root directory to clean" ""
     register_option --latest latest "Use the latest session when --session-root is omitted" "true"
     register_option --remove-reports remove_reports "Also remove generated report files" "false"
+    register_option --all all "Remove all retained tracing sessions, including reports" "false"
     parse_switches "$(basename "$0") cleanup" "$@"
+
+    if [[ "${all}" == "true" ]]; then
+        rm -rf "${SESSIONS_ROOT}"
+        install -d -m 2775 "${SESSIONS_ROOT}"
+        echo "Cleaned all tracing sessions under ${SESSIONS_ROOT}"
+        echo "  removed=all-session-data"
+        return 0
+    fi
 
     if [[ -z "${session_root}" ]]; then
         if [[ "${latest}" == "true" ]]; then
@@ -285,6 +311,7 @@ cmd_cleanup() {
     if [[ "${remove_reports}" == "true" ]]; then
         rm -rf "${session_root}/reports"
     fi
+    prune_session_dir_if_empty "${session_root}"
 
     echo "Cleaned session ${session_root}"
     if [[ "${remove_reports}" == "true" ]]; then

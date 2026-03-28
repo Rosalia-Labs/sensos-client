@@ -399,6 +399,7 @@ Typical use:
 package-tracing start --hours 24
 package-tracing status
 package-tracing report --latest --cleanup
+package-tracing cleanup --all
 ```
 
 Behavior:
