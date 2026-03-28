@@ -193,17 +193,17 @@ Enters or exits a temporary archival state for `/sensos/data`.
 Typical use:
 
 ```sh
-archive-mode --enter true
-archive-mode --exit true
-archive-mode --exit true --clear-data true
+archive-mode --enter
+archive-mode --exit
+archive-mode --exit --clear-data
 ```
 
 Behavior:
 
-- `--enter true` stops the main `/sensos/data` writers, checkpoints SQLite databases, and syncs storage
+- `--enter` stops the main `/sensos/data` writers, checkpoints SQLite databases, and syncs storage
 - entering archive mode writes a state marker so exit/clear operations are tied to a real prepared archive window
-- `--exit true` remounts `/sensos/data` if needed and restarts the stopped services
-- `--exit true --clear-data true` clears `/sensos/data` in place before restarting services, which is useful after copying an entire epoch off-device
+- `--exit` remounts `/sensos/data` if needed and restarts the stopped services
+- `--exit --clear-data` clears `/sensos/data` in place before restarting services, which is useful after copying an entire epoch off-device
 - this provides a non-interactive alternative to using `config-storage` only to clear `/sensos/data`
 
 ### `prepare-data-copy`
