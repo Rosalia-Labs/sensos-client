@@ -22,6 +22,25 @@ Notes:
 - `config-storage` can be run earlier. In practice it is often run after network and location are set, but before recording runs for long.
 - Commands that change system state usually expect `sensos-admin` or use `sudo` internally.
 
+## SSH Over Cellular
+
+When SSHing to cellular-connected devices, disable OpenSSH keystroke-obscuring traffic on the client you are typing from.
+
+Use:
+
+```sh
+ssh -o ObscureKeystrokeTiming=no <host>
+```
+
+or add this to your local `~/.ssh/config`:
+
+```sshconfig
+Host *
+    ObscureKeystrokeTiming no
+```
+
+This is recommended for IoT cellular devices because OpenSSH may otherwise send extra fake keystroke packets, which can create unnecessary background traffic on metered links.
+
 ## Top-Level Repo Commands
 
 ### `./install`
