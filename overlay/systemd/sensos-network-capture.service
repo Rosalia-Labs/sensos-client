@@ -1,0 +1,19 @@
+[Unit]
+Description=Capture bounded packet headers for network traffic analysis
+After=multi-user.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+EnvironmentFile=-/sensos/log/network_capture/active.env
+ExecStart=/sensos/libexec/start-network-capture.sh
+SuccessExitStatus=124 143
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/sensos/log/network_capture
+StandardOutput=journal
+StandardError=journal

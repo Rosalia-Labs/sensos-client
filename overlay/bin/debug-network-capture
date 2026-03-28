@@ -1,0 +1,255 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+set -euo pipefail
+
+SCRIPT_FILE="$(realpath "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_FILE}")" && pwd)"
+OVERLAY_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
+
+[[ -f "${PARSE_SWITCHES_LIB}" ]] || {
+    echo "ERROR: missing parse-switches library at ${PARSE_SWITCHES_LIB}" >&2
+    exit 1
+}
+source "${PARSE_SWITCHES_LIB}"
+
+STATE_ROOT="${SENSOS_NETWORK_CAPTURE_STATE_ROOT:-/sensos/log/network_capture}"
+SESSIONS_ROOT="${STATE_ROOT}/sessions"
+ACTIVE_ENV_FILE="${STATE_ROOT}/active.env"
+SERVICE_NAME="sensos-network-capture.service"
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") <command> [options]
+
+Commands:
+  start    Start a bounded debug capture session
+  status   Show active capture session state
+  stop     Stop the active capture session
+  report   Generate reports for a session
+  cleanup  Remove retained capture data for a session
+EOF
+}
+
+require_cmd() {
+    command -v "$1" >/dev/null 2>&1 || {
+        echo "ERROR: required command not found: $1" >&2
+        exit 1
+    }
+}
+
+ensure_state_root() {
+    install -d -m 2775 "${STATE_ROOT}"
+    install -d -m 2775 "${SESSIONS_ROOT}"
+}
+
+latest_session_root() {
+    local latest
+
+    latest="$(find "${SESSIONS_ROOT}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -n 1)"
+    [[ -n "${latest}" ]] || {
+        echo "ERROR: no capture sessions found under ${SESSIONS_ROOT}" >&2
+        exit 1
+    }
+    printf '%s\n' "${latest}"
+}
+
+active_session_root() {
+    [[ -f "${ACTIVE_ENV_FILE}" ]] || {
+        echo "ERROR: active session file not found: ${ACTIVE_ENV_FILE}" >&2
+        exit 1
+    }
+
+    # shellcheck disable=SC1090
+    source "${ACTIVE_ENV_FILE}"
+    [[ -n "${SENSOS_NETWORK_CAPTURE_ROOT:-}" ]] || {
+        echo "ERROR: active session file does not define SENSOS_NETWORK_CAPTURE_ROOT" >&2
+        exit 1
+    }
+    printf '%s\n' "${SENSOS_NETWORK_CAPTURE_ROOT}"
+}
+
+write_active_env() {
+    local capture_root="$1"
+    local iface="$2"
+    local duration_sec="$3"
+    local snaplen="$4"
+    local file_mb="$5"
+    local file_count="$6"
+    local buffer_kib="$7"
+
+    cat >"${ACTIVE_ENV_FILE}" <<EOF
+SENSOS_NETWORK_CAPTURE_ROOT=${capture_root}
+SENSOS_NETWORK_CAPTURE_IFACE=${iface}
+SENSOS_NETWORK_CAPTURE_DURATION_SEC=${duration_sec}
+SENSOS_NETWORK_CAPTURE_SNAPLEN=${snaplen}
+SENSOS_NETWORK_CAPTURE_FILE_MB=${file_mb}
+SENSOS_NETWORK_CAPTURE_FILE_COUNT=${file_count}
+SENSOS_NETWORK_CAPTURE_BUFFER_KIB=${buffer_kib}
+EOF
+}
+
+cmd_start() {
+    local hours interface snaplen file_mb file_count buffer_kib session_root duration_sec
+
+    register_option --hours hours "Capture duration in hours" "24"
+    register_option --interface interface "Interface name to capture on" "any"
+    register_option --snaplen snaplen "Per-packet snap length in bytes" "128"
+    register_option --file-mb file_mb "Per-file rotation size in MiB" "8"
+    register_option --file-count file_count "Number of rotated pcap files to keep in the session ring" "48"
+    register_option --buffer-kib buffer_kib "tcpdump capture buffer in KiB" "4096"
+    register_option --session-root session_root "Explicit session root directory" ""
+    parse_switches "$(basename "$0") start" "$@"
+
+    require_cmd systemctl
+    ensure_state_root
+
+    if [[ -z "${session_root}" ]]; then
+        session_root="${SESSIONS_ROOT}/$(date -u +%Y%m%dT%H%M%SZ)"
+    fi
+
+    duration_sec="$(python3 -c 'import sys; print(int(float(sys.argv[1]) * 3600))' "${hours}")"
+    install -d -m 2775 "${session_root}"
+    install -d -m 2775 "${session_root}/pcap"
+    install -d -m 2775 "${session_root}/reports"
+
+    write_active_env "${session_root}" "${interface}" "${duration_sec}" "${snaplen}" "${file_mb}" "${file_count}" "${buffer_kib}"
+
+    systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    systemctl start "${SERVICE_NAME}"
+
+    echo "Started network capture session"
+    echo "  session_root=${session_root}"
+    echo "  duration_hours=${hours}"
+    echo "  interface=${interface}"
+    echo "  rotation=${file_count}x${file_mb}MiB"
+}
+
+cmd_status() {
+    require_cmd systemctl
+    ensure_state_root
+
+    if systemctl is-active --quiet "${SERVICE_NAME}"; then
+        echo "status=active"
+    else
+        echo "status=inactive"
+    fi
+
+    if [[ -f "${ACTIVE_ENV_FILE}" ]]; then
+        cat "${ACTIVE_ENV_FILE}"
+    fi
+}
+
+cmd_stop() {
+    require_cmd systemctl
+    systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    echo "Stopped ${SERVICE_NAME}"
+}
+
+cmd_report() {
+    local session_root latest cleanup hours top
+    local report_json_path report_text_path timestamp
+
+    register_option --session-root session_root "Session root directory to report on" ""
+    register_option --latest latest "Use the latest session when --session-root is omitted" "true"
+    register_option --cleanup cleanup "Delete raw pcap files after generating reports" "false"
+    register_option --hours hours "Only include files modified within the last N hours (0 means all retained files)" "0"
+    register_option --top top "Top-N rows to include in each report table" "20"
+    parse_switches "$(basename "$0") report" "$@"
+
+    if [[ -z "${session_root}" ]]; then
+        if [[ "${latest}" == "true" ]]; then
+            session_root="$(latest_session_root)"
+        else
+            session_root="$(active_session_root)"
+        fi
+    fi
+
+    install -d -m 2775 "${session_root}/reports"
+    timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    report_text_path="${session_root}/reports/report-${timestamp}.txt"
+    report_json_path="${session_root}/reports/report-${timestamp}.json"
+
+    python3 /sensos/libexec/network-capture-report.py \
+        --capture-root "${session_root}" \
+        --hours "${hours}" \
+        --top "${top}" \
+        >"${report_text_path}"
+
+    python3 /sensos/libexec/network-capture-report.py \
+        --capture-root "${session_root}" \
+        --hours "${hours}" \
+        --top "${top}" \
+        --json \
+        >"${report_json_path}"
+
+    cat "${report_text_path}"
+    echo
+    echo "Saved reports:"
+    echo "  ${report_text_path}"
+    echo "  ${report_json_path}"
+
+    if [[ "${cleanup}" == "true" ]]; then
+        rm -rf "${session_root}/pcap"
+        echo "Removed raw capture data under ${session_root}/pcap"
+    fi
+}
+
+cmd_cleanup() {
+    local session_root latest remove_reports
+
+    register_option --session-root session_root "Session root directory to clean" ""
+    register_option --latest latest "Use the latest session when --session-root is omitted" "true"
+    register_option --remove-reports remove_reports "Also remove generated report files" "false"
+    parse_switches "$(basename "$0") cleanup" "$@"
+
+    if [[ -z "${session_root}" ]]; then
+        if [[ "${latest}" == "true" ]]; then
+            session_root="$(latest_session_root)"
+        else
+            session_root="$(active_session_root)"
+        fi
+    fi
+
+    rm -rf "${session_root}/pcap"
+    if [[ "${remove_reports}" == "true" ]]; then
+        rm -rf "${session_root}/reports"
+    fi
+
+    echo "Cleaned session ${session_root}"
+    if [[ "${remove_reports}" == "true" ]]; then
+        echo "  removed=pcap,reports"
+    else
+        echo "  removed=pcap"
+    fi
+}
+
+main() {
+    local command="${1:-}"
+
+    [[ -n "${command}" ]] || {
+        usage
+        exit 1
+    }
+    shift || true
+
+    case "${command}" in
+        start) cmd_start "$@" ;;
+        status) cmd_status "$@" ;;
+        stop) cmd_stop "$@" ;;
+        report) cmd_report "$@" ;;
+        cleanup) cmd_cleanup "$@" ;;
+        --help|-h|help)
+            usage
+            ;;
+        *)
+            echo "ERROR: unknown command '${command}'" >&2
+            usage
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
