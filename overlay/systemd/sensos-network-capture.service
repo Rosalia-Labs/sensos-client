@@ -14,6 +14,6 @@ AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 NoNewPrivileges=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/sensos/log/network_capture
+ReadWritePaths=/sensos/log
 StandardOutput=journal
 StandardError=journal
