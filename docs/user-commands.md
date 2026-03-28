@@ -184,6 +184,9 @@ Behavior:
 - if no device is supplied, prompts interactively
 - can prepare `/sensos/data` on the current filesystem without a separate disk
 - can partition, format, mount, and persist a selected block device
+- this is the provisioning step for data storage; it is not a replacement for `archive-mode`
+- use `config-storage` when you are setting up or changing where `/sensos/data` lives
+- use `archive-mode` when storage is already configured and you need a safe temporary archive window to copy data off, swap media, or clear `/sensos/data`
 
 ### `archive-mode`
 
@@ -207,7 +210,7 @@ Behavior:
 - `--exit --clear-data` clears `/sensos/data` in place before restarting services, which is useful after copying an entire epoch off-device
 - use it for both copy-off and media-swap workflows
 - after `--enter`, either copy data off the device or swap media, then use `--exit`
-- this provides a non-interactive alternative to using `config-storage` only to clear `/sensos/data`
+- `archive-mode --exit --clear-data` is the normal non-interactive way to clear an already configured `/sensos/data` after an archive window
 
 ### `config-arecord`
 
@@ -287,11 +290,15 @@ Important flags:
 Typical use:
 
 ```sh
-config-wifi --ssid MySSID --password 'secretpass' --start true
+config-wifi --ssid MySSID --password 'secretpass' --iface wlan1 --start true
 ```
 
 Behavior:
 
+- usually used on `wlan1` when the device also exposes an AP on `wlan0`
+- Wi-Fi client mode and AP mode are mutually exclusive on the same interface
+- do not run `config-wifi` and `config-hotspot` against the same NIC unless you intend one to replace the other
+- if the device has only one Wi-Fi NIC and that NIC must join an upstream Wi-Fi network, the device cannot also host a local AP at the same time
 - optionally applies traffic caps with `tc`
 - registers the interface with `vnstat` when available
 
@@ -344,6 +351,9 @@ Behavior:
 
 - requires `NETWORK_NAME` and `CLIENT_WG_IP` from `network.conf`
 - derives a default SSID from the network name and WG IP when `--ssid` is not supplied
+- usually used on `wlan0` when Wi‑Fi client mode is handled separately on `wlan1`
+- AP mode and Wi‑Fi client mode are mutually exclusive on the same interface
+- if the device has only one Wi-Fi NIC and that NIC is needed for `config-wifi`, you cannot keep the AP active on that same NIC
 - configures AP mode with NetworkManager
 
 ## Optional Feature Commands
@@ -461,7 +471,7 @@ Generates a report from a capture session.
 Typical use:
 
 ```sh
-report-network-capture --capture-root /sensos/log/network_capture/sessions/<timestamp> --hours 0 --top 20
+report-network-capture --hours 0 --top 20
 report-network-capture --capture-root /sensos/log/network_capture/sessions/<timestamp> --json
 ```
 
