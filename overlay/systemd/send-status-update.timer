@@ -1,0 +1,10 @@
+[Unit]
+Description=Send status at a random time each day
+
+[Timer]
+OnCalendar=*-*-* 00:00:00
+RandomizedDelaySec=86399
+Persistent=true
+
+[Install]
+WantedBy=timers.target

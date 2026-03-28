@@ -1,0 +1,6 @@
+[Unit]
+Description=Send device status update
+
+[Service]
+Type=oneshot
+ExecStart=/sensos/libexec/send-status-update.sh

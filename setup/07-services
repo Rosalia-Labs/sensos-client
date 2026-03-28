@@ -13,6 +13,7 @@ OVERLAY_SYSTEMD_DIR="${CLIENT_ROOT}/overlay/systemd"
 
 HOST_BASELINE_UNITS=(
     monitor-data-space.timer
+    send-status-update.timer
     sensos-compress-audio.service
     thin-data.service
     nftables.service
