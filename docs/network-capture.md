@@ -15,7 +15,7 @@ This is enough to identify sustained traffic sources and destinations, common po
 Start a 24-hour debug session on the device:
 
 ```sh
-package-tracing start --hours 24
+package-tracing start --duration 24
 ```
 
 That creates a session under `/sensos/log/network_capture/sessions/<timestamp>` and starts [sensos-network-capture.service](../overlay/systemd/sensos-network-capture.service) manually for that session only. The service is not enabled during normal install.

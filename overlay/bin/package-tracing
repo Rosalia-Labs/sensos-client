@@ -148,9 +148,9 @@ EOF
 }
 
 cmd_start() {
-    local hours interface snaplen file_mb file_count buffer_kib session_root duration_sec state
+    local duration interface snaplen file_mb file_count buffer_kib session_root duration_sec state
 
-    register_option --hours hours "Capture duration in hours" "24"
+    register_option --duration duration "Capture duration in hours" "24"
     register_option --interface interface "Interface name to capture on" "any"
     register_option --snaplen snaplen "Per-packet snap length in bytes" "128"
     register_option --file-mb file_mb "Per-file rotation size in MiB" "8"
@@ -166,7 +166,7 @@ cmd_start() {
         session_root="${SESSIONS_ROOT}/$(date -u +%Y%m%dT%H%M%SZ)"
     fi
 
-    duration_sec="$(python3 -c 'import sys; print(int(float(sys.argv[1]) * 3600))' "${hours}")"
+    duration_sec="$(python3 -c 'import sys; print(int(float(sys.argv[1]) * 3600))' "${duration}")"
     install -d -m 2775 "${session_root}"
     install -d -m 2775 "${session_root}/pcap"
     install -d -m 2775 "${session_root}/reports"
@@ -188,7 +188,7 @@ cmd_start() {
 
     echo "Started packet tracing session"
     echo "  session_root=${session_root}"
-    echo "  duration_hours=${hours}"
+    echo "  duration_hours=${duration}"
     echo "  interface=${interface}"
     echo "  rotation=${file_count}x${file_mb}MiB"
 }
