@@ -10,6 +10,7 @@ CLIENT_ROOT="${SENSOS_REPO_ROOT:-${REPO_ROOT}}"
 DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
 PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
 OVERLAY_SYSTEMD_DIR="${CLIENT_ROOT}/overlay/systemd"
+INSTALL_STATE_FILE="${DEPLOY_ROOT}/etc/install-state.env"
 
 HOST_BASELINE_UNITS=(
     monitor-data-space.timer
@@ -71,6 +72,24 @@ enable_host_unit_if_present() {
     fi
 }
 
+describe_host_unit_state() {
+    local unit_name="$1"
+    local enabled_state="unknown"
+    local active_state="inactive"
+
+    if ! systemctl list-unit-files --type=service --type=timer 2>/dev/null | awk '{print $1}' | grep -Fxq "${unit_name}"; then
+        log "host unit not present; skipped ${unit_name}"
+        return 0
+    fi
+
+    enabled_state="$(systemctl is-enabled "${unit_name}" 2>/dev/null || printf 'unknown')"
+    if systemctl is-active --quiet "${unit_name}"; then
+        active_state="active"
+    fi
+
+    log "preserved host unit ${unit_name}: enabled=${enabled_state} active=${active_state}"
+}
+
 main() {
     local unit_name
 
@@ -82,9 +101,16 @@ main() {
     systemctl daemon-reload
     log "reloaded systemd unit files"
 
-    for unit_name in "${HOST_BASELINE_UNITS[@]}"; do
-        enable_host_unit_if_present "${unit_name}"
-    done
+    if [[ -f "${INSTALL_STATE_FILE}" ]]; then
+        log "existing install detected at ${INSTALL_STATE_FILE}; preserving host unit state"
+        for unit_name in "${HOST_BASELINE_UNITS[@]}"; do
+            describe_host_unit_state "${unit_name}"
+        done
+    else
+        for unit_name in "${HOST_BASELINE_UNITS[@]}"; do
+            enable_host_unit_if_present "${unit_name}"
+        done
+    fi
 }
 
 main "$@"
