@@ -76,7 +76,7 @@ While the repo is still in a high-churn bug-swatting phase, use a rolling
 Example:
 
 ```text
-0.3.0-dev
+0.4.0-dev
 ```
 
 In this mode:

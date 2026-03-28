@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-CAPTURE_ROOT="${SENSOS_NETWORK_CAPTURE_ROOT:-/sensos/log/network_capture/session}"
+CAPTURE_ROOT="${SENSOS_NETWORK_CAPTURE_ROOT:-}"
 PCAP_DIR="${CAPTURE_ROOT}/pcap"
 INTERFACE_NAME="${SENSOS_NETWORK_CAPTURE_IFACE:-any}"
 SNAPLEN_BYTES="${SENSOS_NETWORK_CAPTURE_SNAPLEN:-128}"
@@ -37,6 +37,7 @@ require_positive_int() {
 main() {
     require_cmd tcpdump
     require_cmd timeout
+    [[ -n "${CAPTURE_ROOT}" ]] || die "SENSOS_NETWORK_CAPTURE_ROOT must be set"
     require_positive_int "${SNAPLEN_BYTES}" "SENSOS_NETWORK_CAPTURE_SNAPLEN"
     require_positive_int "${ROTATE_FILE_MB}" "SENSOS_NETWORK_CAPTURE_FILE_MB"
     require_positive_int "${ROTATE_FILE_COUNT}" "SENSOS_NETWORK_CAPTURE_FILE_COUNT"

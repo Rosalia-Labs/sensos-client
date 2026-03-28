@@ -54,7 +54,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--capture-root",
-        default=os.environ.get("SENSOS_NETWORK_CAPTURE_ROOT", "/sensos/log/network_capture/session"),
+        default=os.environ.get("SENSOS_NETWORK_CAPTURE_ROOT"),
         help="Capture root directory containing the pcap ring buffer.",
     )
     parser.add_argument(
@@ -74,7 +74,10 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Emit structured JSON instead of human-readable tables.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.capture_root:
+        parser.error("--capture-root is required unless SENSOS_NETWORK_CAPTURE_ROOT is set")
+    return args
 
 
 def shutil_which(cmd: str) -> str | None:

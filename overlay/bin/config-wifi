@@ -30,10 +30,7 @@ resolve_overlay_root() {
 }
 
 OVERLAY_ROOT="$(resolve_overlay_root)"
-CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${OVERLAY_ROOT}}"
-
 SCRIPT_NAME="$(basename "$0")"
-NETWORK_CONF="${CLIENT_ROOT}/etc/network.conf"
 PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
 
 [[ -f "${PARSE_SWITCHES_LIB}" ]] || {
@@ -52,21 +49,6 @@ require_command() {
         echo "ERROR: missing required command: $1" >&2
         exit 1
     }
-}
-
-read_network_value() {
-    local wanted_key="$1"
-    local key value
-
-    [[ -f "${NETWORK_CONF}" ]] || return 0
-
-    while IFS='=' read -r key value; do
-        [[ -n "${key}" ]] || continue
-        if [[ "${key}" == "${wanted_key}" ]]; then
-            printf '%s\n' "${value}"
-            return 0
-        fi
-    done < <(grep -Ev '^\s*(#|$)' "${NETWORK_CONF}" || true)
 }
 
 clear_tc_limits() {
@@ -112,11 +94,6 @@ parse_switches "${SCRIPT_NAME}" "$@"
 
 require_command nmcli
 
-CONNECTIVITY_MODE="$(read_network_value CONNECTIVITY_MODE)"
-BANDWIDTH_POLICY="$(read_network_value BANDWIDTH_POLICY)"
-CONNECTIVITY_MODE="${CONNECTIVITY_MODE:-manual}"
-BANDWIDTH_POLICY="${BANDWIDTH_POLICY:-open}"
-
 NM_CON_NAME="sensos-wifi-${ssid}"
 
 if nmcli -t -f NAME con show | grep -Fxq "${NM_CON_NAME}"; then
@@ -142,25 +119,14 @@ fi
 sudo nmcli con mod "${NM_CON_NAME}" ipv4.method auto || true
 sudo nmcli con mod "${NM_CON_NAME}" ipv6.method ignore || true
 
-if [[ "${CONNECTIVITY_MODE}" == "always" ]]; then
-    sudo nmcli con mod "${NM_CON_NAME}" connection.autoconnect yes
-    echo "Autoconnect enabled (CONNECTIVITY_MODE=always)."
-else
-    sudo nmcli con mod "${NM_CON_NAME}" connection.autoconnect no
-    echo "Autoconnect disabled (CONNECTIVITY_MODE=${CONNECTIVITY_MODE})."
-fi
+sudo nmcli con mod "${NM_CON_NAME}" connection.autoconnect yes
+echo "Autoconnect enabled."
 
 if [[ -z "${limit_up_kbit}" && -z "${limit_down_kbit}" ]]; then
-    if [[ "${BANDWIDTH_POLICY}" == "restricted" ]]; then
-        limit_up_kbit="32"
-        limit_down_kbit="256"
-        echo "BANDWIDTH_POLICY=restricted -> applying defaults: up=${limit_up_kbit} kbit, down=${limit_down_kbit} kbit"
-    else
-        echo "BANDWIDTH_POLICY=${BANDWIDTH_POLICY} -> clearing any existing traffic caps on ${iface}"
-        clear_tc_limits "${iface}"
-    fi
+    echo "No traffic caps requested; clearing any existing traffic caps on ${iface}"
+    clear_tc_limits "${iface}"
 else
-    echo "CLI limits provided -> overriding policy (up='${limit_up_kbit}', down='${limit_down_kbit}')."
+    echo "Applying CLI traffic caps (up='${limit_up_kbit}', down='${limit_down_kbit}')."
 fi
 
 if [[ -n "${limit_up_kbit}" || -n "${limit_down_kbit}" ]]; then

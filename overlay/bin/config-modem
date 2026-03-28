@@ -30,10 +30,7 @@ resolve_overlay_root() {
 }
 
 OVERLAY_ROOT="$(resolve_overlay_root)"
-CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${OVERLAY_ROOT}}"
-
 SCRIPT_NAME="$(basename "$0")"
-NETWORK_CONF="${CLIENT_ROOT}/etc/network.conf"
 PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
 
 [[ -f "${PARSE_SWITCHES_LIB}" ]] || {
@@ -52,21 +49,6 @@ require_command() {
         echo "ERROR: missing required command: $1" >&2
         exit 1
     }
-}
-
-read_network_value() {
-    local wanted_key="$1"
-    local key value
-
-    [[ -f "${NETWORK_CONF}" ]] || return 0
-
-    while IFS='=' read -r key value; do
-        [[ -n "${key}" ]] || continue
-        if [[ "${key}" == "${wanted_key}" ]]; then
-            printf '%s\n' "${value}"
-            return 0
-        fi
-    done < <(grep -Ev '^\s*(#|$)' "${NETWORK_CONF}" || true)
 }
 
 clear_tc_limits() {
@@ -163,21 +145,6 @@ parse_switches "${SCRIPT_NAME}" "$@"
 
 require_command nmcli
 
-CONNECTIVITY_MODE="$(read_network_value CONNECTIVITY_MODE)"
-BANDWIDTH_POLICY="$(read_network_value BANDWIDTH_POLICY)"
-NETWORK_NAME="$(read_network_value NETWORK_NAME)"
-CONNECTIVITY_MODE="${CONNECTIVITY_MODE:-manual}"
-BANDWIDTH_POLICY="${BANDWIDTH_POLICY:-open}"
-
-[[ -n "${NETWORK_NAME}" ]] || {
-    echo "ERROR: NETWORK_NAME is missing in ${NETWORK_CONF}." >&2
-    exit 1
-}
-
-WG_IFACE="${NETWORK_NAME//$'\r'/}"
-WG_IFACE="${WG_IFACE#"${WG_IFACE%%[![:space:]]*}"}"
-WG_IFACE="${WG_IFACE%"${WG_IFACE##*[![:space:]]}"}"
-
 case "${service,,}" in
     1nce) apn="iot.1nce.net" ;;
     soracom) apn="soracom.io" ;;
@@ -212,25 +179,14 @@ sudo nmcli con mod "${NM_CON_NAME}" connection.interface-name "${device}" || tru
 sudo nmcli con mod "${NM_CON_NAME}" ipv4.method auto || true
 sudo nmcli con mod "${NM_CON_NAME}" ipv6.method ignore || true
 
-if [[ "${CONNECTIVITY_MODE}" == "always" ]]; then
-    sudo nmcli con mod "${NM_CON_NAME}" connection.autoconnect yes
-    echo "Autoconnect enabled (CONNECTIVITY_MODE=always)."
-else
-    sudo nmcli con mod "${NM_CON_NAME}" connection.autoconnect no
-    echo "Autoconnect disabled (CONNECTIVITY_MODE=${CONNECTIVITY_MODE})."
-fi
+sudo nmcli con mod "${NM_CON_NAME}" connection.autoconnect yes
+echo "Autoconnect enabled."
 
 if [[ -z "${limit_up_kbit}" && -z "${limit_down_kbit}" ]]; then
-    if [[ "${BANDWIDTH_POLICY}" == "restricted" ]]; then
-        limit_up_kbit="32"
-        limit_down_kbit="256"
-        echo "BANDWIDTH_POLICY=restricted -> applying defaults: up=${limit_up_kbit} kbit, down=${limit_down_kbit} kbit"
-    else
-        echo "BANDWIDTH_POLICY=${BANDWIDTH_POLICY} -> clearing any existing traffic caps on ${data_iface}"
-        clear_tc_limits "${data_iface}"
-    fi
+    echo "No traffic caps requested; clearing any existing traffic caps on ${data_iface}"
+    clear_tc_limits "${data_iface}"
 else
-    echo "CLI limits provided -> overriding policy (up='${limit_up_kbit}', down='${limit_down_kbit}')."
+    echo "Applying CLI traffic caps (up='${limit_up_kbit}', down='${limit_down_kbit}')."
 fi
 
 if [[ -n "${limit_up_kbit}" || -n "${limit_down_kbit}" ]]; then
@@ -246,8 +202,17 @@ if [[ "${service,,}" == "1nce" ]]; then
     if ip link show "${data_iface}" >/dev/null 2>&1; then
         sudo ip link set dev "${data_iface}" mtu 1200 || true
     fi
-    require_command wg-quick
-    set_wireguard_mtu_for_1nce "${WG_IFACE}"
+    if [[ -f "/sensos/etc/network.conf" ]]; then
+        WG_IFACE="$(awk -F= '/^NETWORK_NAME=/{print $2}' /sensos/etc/network.conf | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+        if [[ -n "${WG_IFACE}" ]]; then
+            require_command wg-quick
+            set_wireguard_mtu_for_1nce "${WG_IFACE}"
+        else
+            echo "WARNING: NETWORK_NAME missing in /sensos/etc/network.conf; skipping WireGuard MTU update." >&2
+        fi
+    else
+        echo "WARNING: /sensos/etc/network.conf not found; skipping WireGuard MTU update." >&2
+    fi
 fi
 
 register_vnstat_iface "${data_iface}"

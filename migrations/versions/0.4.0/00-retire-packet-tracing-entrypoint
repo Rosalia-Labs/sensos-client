@@ -1,0 +1,25 @@
+#!/bin/bash
+
+set -euo pipefail
+
+HOST_BIN_DIR="/usr/local/bin"
+OLD_TRACE_CMD="${HOST_BIN_DIR}/debug-network-capture"
+
+log() {
+    printf '[migrations/0.4.0/00-retire-packet-tracing-entrypoint] %s\n' "$*"
+}
+
+remove_if_present() {
+    local target_path="$1"
+
+    if [[ -e "${target_path}" || -L "${target_path}" ]]; then
+        rm -f "${target_path}"
+        log "removed retired path ${target_path}"
+    fi
+}
+
+main() {
+    remove_if_present "${OLD_TRACE_CMD}"
+}
+
+main "$@"
