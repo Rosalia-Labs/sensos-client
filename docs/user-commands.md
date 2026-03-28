@@ -174,6 +174,7 @@ Typical use:
 
 ```sh
 prepare-data-drive-swap
+prepare-data-drive-swap --undo true
 ```
 
 Behavior:
@@ -183,6 +184,25 @@ Behavior:
 - if the data storage is separate, unmounts it so it can be swapped safely after power-down
 - after a successful swap, `config-storage` is usually needed to mount and prepare the replacement drive
 - if the data storage is part of `/`, tells you to copy data off the device instead
+- `--undo true` remounts `/sensos/data` when needed and restarts the stopped services
+
+### `prepare-data-copy`
+
+Quiesces `/sensos/data` for a consistent copy off the device.
+
+Typical use:
+
+```sh
+prepare-data-copy
+prepare-data-copy --resume true
+```
+
+Behavior:
+
+- stops the main data-writing services before the copy window
+- checkpoints SQLite databases under `/sensos/data` and syncs storage
+- leaves the data tree ready to copy via `rsync`, `scp`, or another transfer method
+- by default leaves data services stopped until you restart them or reboot
 
 ### `config-arecord`
 
