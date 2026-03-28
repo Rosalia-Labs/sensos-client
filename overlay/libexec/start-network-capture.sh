@@ -57,6 +57,7 @@ main() {
             -i "${INTERFACE_NAME}" \
             -nn \
             -p \
+            -Z root \
             -B "${BUFFER_KIB}" \
             -s "${SNAPLEN_BYTES}" \
             -y LINUX_SLL \
