@@ -19,7 +19,6 @@ Typical order on a newly configured device:
 Notes:
 
 - `config-storage` can be run earlier. In practice it is often run after network and location are set, but before recording runs for long.
-- The command name is `config-i2c-sensors`, not `config-i2-sensors`.
 - Commands that change system state usually expect `sensos-admin` or use `sudo` internally.
 
 ## Top-Level Repo Commands
