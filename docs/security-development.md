@@ -6,6 +6,8 @@ The goal is to describe the actual security model of the current client/server d
 
 If your use case requires a different security model or stronger security properties than the baseline described here, reach out to Rosalia Labs and let us know what you need.
 
+Deployment context matters. Devices in publicly accessible locations face a meaningfully different risk profile than devices on private land or in other controlled-access areas, and that context is often relevant in institutional reviews.
+
 ## Core Constraint
 
 Without hardware-backed secret storage, the client cannot avoid holding a live server credential.
