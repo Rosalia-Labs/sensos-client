@@ -14,7 +14,8 @@ Typical order on a newly configured device:
 4. `config-storage`
 5. `config-arecord`
 6. `config-i2c-sensors`
-7. other feature-specific commands as needed
+7. `config-birdnet`
+8. other feature-specific commands as needed
 
 Notes:
 
@@ -47,17 +48,19 @@ Typical use:
 
 ```sh
 ./upgrade
-./upgrade --refresh
-./upgrade --refresh-apt
-./upgrade --refresh-pip
+./upgrade --offline
+./upgrade --force-package-updates
 ```
 
 Behavior:
 
-- must be run from a clean git worktree
-- requires the current branch to have an upstream
+- in normal mode, it must be run from a clean git worktree
+- in normal mode, the current branch must have an upstream
 - runs migrations between installed and repo versions
 - reruns setup after pull
+- `--force-package-updates` forces both APT metadata/package reconciliation and Python dependency reinstall
+- `--offline` skips `git pull` and upgrades from the repo contents already on disk; this is useful when files were copied from a laptop to a client without internet access
+- even in offline mode, the run can still fail if package or Python dependency changes require network access
 
 ## Core Bring-Up Commands
 
@@ -108,7 +111,9 @@ Main gotchas:
 - `--config-server` is only the server address reachable from the current setup environment.
 - the server will usually return a `wg_endpoint` suitable for the chosen network, but if the deployed device must reach a different public or routed endpoint, you need to override it with `--wg-endpoint`
 - `--network` is now required and must be supplied explicitly for every enrollment
-- subnet `0` is reserved for admin containers and computers, so device enrollments should use a different subnet value
+- `--subnet` is normally not required for device enrollment
+- in the current server implementation, the server searches for the first available host IP starting at the requested subnet offset; with the normal default of `1`, allocation starts at `x.x.1.1`
+- subnet `0` is reserved for admin containers and computers, so normal device enrollments should start at subnet `1` or later
 
 Run this before commands that need:
 
@@ -244,7 +249,6 @@ config-wifi --ssid MySSID --password 'secretpass' --start true
 
 Behavior:
 
-- sets autoconnect based on `CONNECTIVITY_MODE` from `network.conf`
 - optionally applies traffic caps with `tc`
 - registers the interface with `vnstat` when available
 
@@ -270,7 +274,6 @@ config-modem --service soracom --device cdc-wdm0
 Behavior:
 
 - currently supports `1nce` and `soracom`
-- sets autoconnect from `CONNECTIVITY_MODE`
 - can apply traffic caps
 - registers the modem interface with `vnstat`
 - applies a WireGuard MTU adjustment for 1NCE
@@ -431,6 +434,7 @@ config-location --latitude <lat> --longitude <lon>
 config-storage
 config-arecord --device plughw:1,0 --start-service true
 config-i2c-sensors --start-service true
+config-birdnet --start-service
 ```
 
 Then add optional features as needed:

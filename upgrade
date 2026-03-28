@@ -10,8 +10,8 @@ DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
 PREFLIGHT_SCRIPT="${REPO_ROOT}/setup/00-preflight"
 MIGRATIONS_SCRIPT="${REPO_ROOT}/migrations/run"
 SETUP_SCRIPT="${REPO_ROOT}/setup/install"
-REFRESH_APT=0
-REFRESH_PIP=0
+FORCE_PACKAGE_UPDATES=0
+OFFLINE=0
 INSTALL_STATE_FILE="${DEPLOY_ROOT}/etc/install-state.env"
 
 log() {
@@ -34,9 +34,9 @@ Defaults:
   Python requirements refresh is lazy.
 
 Options:
-  --refresh          Equivalent to --refresh-apt --refresh-pip
-  --refresh-apt      Force APT metadata refresh and reapply declared packages
-  --refresh-pip      Force Python requirements refresh
+  --force-package-updates
+                     Force APT metadata refresh and Python dependency reinstall
+  --offline          Skip git pull and use the repo contents already on disk
   --help             Show this help and exit
 EOF
 }
@@ -44,15 +44,11 @@ EOF
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --refresh)
-                REFRESH_APT=1
-                REFRESH_PIP=1
+            --force-package-updates)
+                FORCE_PACKAGE_UPDATES=1
                 ;;
-            --refresh-apt)
-                REFRESH_APT=1
-                ;;
-            --refresh-pip)
-                REFRESH_PIP=1
+            --offline)
+                OFFLINE=1
                 ;;
             --help|-h)
                 print_usage
@@ -119,11 +115,8 @@ sudo_run() {
         "SENSOS_PREFLIGHT_QUIET=1"
     )
 
-    if [[ "${REFRESH_APT}" == "1" ]]; then
+    if [[ "${FORCE_PACKAGE_UPDATES}" == "1" ]]; then
         env_args+=("SENSOS_EAGER_APT=1")
-    fi
-
-    if [[ "${REFRESH_PIP}" == "1" ]]; then
         env_args+=("SENSOS_EAGER_PIP=1")
     fi
 
@@ -143,14 +136,16 @@ verify_install_state() {
 
 main() {
     local old_version
-    local pre_pull_version
+    local source_version
     local new_version
 
     parse_args "$@"
     ensure_not_root
-    ensure_git_repo
-    ensure_clean_repo
-    ensure_upstream
+    if [[ "${OFFLINE}" != "1" ]]; then
+        ensure_git_repo
+        ensure_clean_repo
+        ensure_upstream
+    fi
 
     [[ -x "${PREFLIGHT_SCRIPT}" ]] || die "missing or non-executable preflight script: ${PREFLIGHT_SCRIPT}"
     [[ -x "${MIGRATIONS_SCRIPT}" ]] || die "missing or non-executable migrations script: ${MIGRATIONS_SCRIPT}"
@@ -165,17 +160,21 @@ main() {
         die "no deployed client install-state found at ${INSTALL_STATE_FILE}; use ./install for first-time deployment"
     fi
 
-    pre_pull_version="$(read_repo_version)"
+    source_version="$(read_repo_version)"
     old_version="$(sudo_run awk -F= '/^INSTALLED_VERSION=/{print $2}' "${INSTALL_STATE_FILE}" 2>/dev/null || true)"
     if [[ -z "${old_version}" ]]; then
-        old_version="${pre_pull_version}"
+        old_version="${source_version}"
     fi
 
-    log "pulling the latest changes"
-    git -C "${REPO_ROOT}" pull --ff-only
+    if [[ "${OFFLINE}" == "1" ]]; then
+        log "offline mode enabled; skipping git pull and using repo contents already on disk"
+    else
+        log "pulling the latest changes"
+        git -C "${REPO_ROOT}" pull --ff-only
+    fi
 
     new_version="$(read_repo_version)"
-    if version_lt "${new_version}" "${old_version}"; then
+    if [[ "${OFFLINE}" != "1" ]] && version_lt "${new_version}" "${old_version}"; then
         die "pulled revision moved repo version backward: ${old_version} -> ${new_version}"
     fi
 

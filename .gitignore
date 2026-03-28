@@ -218,3 +218,9 @@ test/qemu/artifacts/
 /keys/
 /log/
 /python/venv/
+
+# Quarto preview/render artifacts for docs authored in Markdown
+/docs/*.html
+/docs/*_files/
+/docs/.quarto/
+/docs/.quarto-preview/
