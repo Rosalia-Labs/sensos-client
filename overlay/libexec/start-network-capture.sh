@@ -58,6 +58,7 @@ main() {
             -i "${INTERFACE_NAME}" \
             -nn \
             -p \
+            -U \
             -Z root \
             -B "${BUFFER_KIB}" \
             -s "${SNAPLEN_BYTES}" \

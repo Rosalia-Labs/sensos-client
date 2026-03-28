@@ -49,7 +49,7 @@ The capture ring is bounded inside the session directory. Each session also has 
 The service runs `/sensos/libexec/start-network-capture.sh`, which starts a bounded `tcpdump` session similar to:
 
 ```sh
-timeout 86400 tcpdump -i any -nn -p -s 128 -y LINUX_SLL -C 8 -W 48 -w /sensos/log/network_capture/sessions/<timestamp>/pcap/capture.pcap
+timeout 86400 tcpdump -i any -nn -p -U -s 128 -y LINUX_SLL -C 8 -W 48 -w /sensos/log/network_capture/sessions/<timestamp>/pcap/capture.pcap
 ```
 
 The exact values can be overridden through `package-tracing start` or by setting environment values before starting the service:
