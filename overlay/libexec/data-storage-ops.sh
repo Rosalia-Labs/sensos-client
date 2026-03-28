@@ -14,6 +14,7 @@ DATA_SERVICES=(
 DATA_TIMERS=(
     "monitor-data-space.timer"
 )
+DATA_ARCHIVE_MODE_STATE_FILE="${SENSOS_DATA_ARCHIVE_MODE_STATE_FILE:-/sensos/log/archive-mode.state}"
 
 data_ops_require_cmd() {
     command -v "$1" >/dev/null 2>&1 || {
@@ -73,6 +74,22 @@ data_ops_start_data_units() {
     done
 }
 
+data_ops_any_data_unit_active() {
+    local unit_name
+
+    for unit_name in "${DATA_SERVICES[@]}" "${DATA_TIMERS[@]}"; do
+        if data_ops_unit_exists "${unit_name}" && systemctl is-active --quiet "${unit_name}"; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+data_ops_archive_mode_is_active() {
+    sudo test -f "${DATA_ARCHIVE_MODE_STATE_FILE}"
+}
+
 data_ops_mount_source_for() {
     local target_path="$1"
     findmnt -n -o SOURCE --target "${target_path}" 2>/dev/null || true
@@ -128,4 +145,16 @@ data_ops_try_mount_data() {
     fi
 
     return 1
+}
+
+data_ops_reset_data_root() {
+    [[ -d "${DATA_MOUNT}" ]] || {
+        echo "ERROR: data mount path not found: ${DATA_MOUNT}" >&2
+        return 1
+    }
+
+    sudo find "${DATA_MOUNT}" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+    sudo chown sensos-admin:sensos-data "${DATA_MOUNT}"
+    sudo chmod 2775 "${DATA_MOUNT}"
+    echo "Cleared ${DATA_MOUNT}"
 }

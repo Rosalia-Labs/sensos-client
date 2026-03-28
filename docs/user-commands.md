@@ -186,6 +186,26 @@ Behavior:
 - if the data storage is part of `/`, tells you to copy data off the device instead
 - `--undo true` remounts `/sensos/data` when needed and restarts the stopped services
 
+### `archive-mode`
+
+Enters or exits a temporary archival state for `/sensos/data`.
+
+Typical use:
+
+```sh
+archive-mode --enter true
+archive-mode --exit true
+archive-mode --exit true --clear-data true
+```
+
+Behavior:
+
+- `--enter true` stops the main `/sensos/data` writers, checkpoints SQLite databases, and syncs storage
+- entering archive mode writes a state marker so exit/clear operations are tied to a real prepared archive window
+- `--exit true` remounts `/sensos/data` if needed and restarts the stopped services
+- `--exit true --clear-data true` clears `/sensos/data` in place before restarting services, which is useful after copying an entire epoch off-device
+- this provides a non-interactive alternative to using `config-storage` only to clear `/sensos/data`
+
 ### `prepare-data-copy`
 
 Quiesces `/sensos/data` for a consistent copy off the device.
@@ -203,6 +223,7 @@ Behavior:
 - checkpoints SQLite databases under `/sensos/data` and syncs storage
 - leaves the data tree ready to copy via `rsync`, `scp`, or another transfer method
 - by default leaves data services stopped until you restart them or reboot
+- see [Data Copy](data-copy.md) for the full workflow and caveats
 
 ### `config-arecord`
 

@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+set -euo pipefail
+
+SCRIPT_FILE="$(realpath "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_FILE}")" && pwd)"
+resolve_overlay_root() {
+    local -a candidates=()
+    local candidate
+
+    if [[ -n "${SENSOS_CLIENT_ROOT:-}" ]]; then
+        candidates+=("${SENSOS_CLIENT_ROOT}")
+    fi
+
+    candidates+=(
+        "$(cd "${SCRIPT_DIR}/.." && pwd)"
+        "/sensos"
+    )
+
+    for candidate in "${candidates[@]}"; do
+        [[ -f "${candidate}/libexec/parse-switches.sh" ]] && {
+            printf '%s\n' "${candidate}"
+            return 0
+        }
+    done
+
+    printf '%s\n' "$(cd "${SCRIPT_DIR}/.." && pwd)"
+}
+
+OVERLAY_ROOT="$(resolve_overlay_root)"
+PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
+DATA_STORAGE_OPS_LIB="${OVERLAY_ROOT}/libexec/data-storage-ops.sh"
+
+[[ -f "${PARSE_SWITCHES_LIB}" ]] || {
+    echo "ERROR: missing parse-switches library at ${PARSE_SWITCHES_LIB}" >&2
+    exit 1
+}
+source "${PARSE_SWITCHES_LIB}"
+[[ -f "${DATA_STORAGE_OPS_LIB}" ]] || {
+    echo "ERROR: missing data storage ops library at ${DATA_STORAGE_OPS_LIB}" >&2
+    exit 1
+}
+source "${DATA_STORAGE_OPS_LIB}"
+
+STATE_DIR="/sensos/log"
+STATE_FILE="${DATA_ARCHIVE_MODE_STATE_FILE}"
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [options]
+
+Enter or exit archive mode for /sensos/data.
+
+Options:
+  --enter true|false       Stop writers, checkpoint SQLite, and sync storage
+  --exit true|false        Return to normal operation
+  --clear-data true|false  When exiting, clear /sensos/data in place first
+EOF
+}
+
+write_state_marker() {
+    sudo install -d -m 2775 "${STATE_DIR}"
+    sudo sh -c "cat >'${STATE_FILE}'" <<EOF
+ARCHIVE_MODE_ACTIVE=1
+ARCHIVE_MODE_ENTERED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+EOF
+}
+
+clear_state_marker() {
+    sudo rm -f "${STATE_FILE}"
+}
+
+archive_mode_is_active() {
+    sudo test -f "${STATE_FILE}"
+}
+
+main() {
+    local enter exit_mode clear_data
+
+    if [[ "${1:-}" == "--help" || "${1:-}" == "-h" || "${1:-}" == "help" ]]; then
+        usage
+        return 0
+    fi
+
+    register_option --enter enter "Enter archive mode" "false"
+    register_option --exit exit_mode "Exit archive mode" "false"
+    register_option --clear-data clear_data "Clear /sensos/data while exiting archive mode" "false"
+    parse_switches "$(basename "$0")" "$@"
+
+    if [[ "${enter}" == "${exit_mode}" ]]; then
+        echo "ERROR: specify exactly one of --enter true or --exit true." >&2
+        exit 1
+    fi
+
+    data_ops_require_cmd mountpoint
+    data_ops_require_cmd sqlite3
+    data_ops_require_cmd sync
+    data_ops_require_cmd systemctl
+
+    [[ -d "${DATA_MOUNT}" ]] || {
+        echo "ERROR: data mount path not found: ${DATA_MOUNT}" >&2
+        exit 1
+    }
+
+    if [[ "${enter}" == "true" ]]; then
+        if archive_mode_is_active; then
+            echo "Archive mode is already active (${STATE_FILE})." >&2
+            echo "Use archive-mode --exit true to return to normal operation first." >&2
+            exit 1
+        fi
+        echo "Entering archive mode for ${DATA_MOUNT}..."
+        data_ops_stop_data_units
+        data_ops_checkpoint_sqlite_dbs
+        data_ops_sync_storage
+        write_state_marker
+        echo "Archive mode active."
+        echo "Data under ${DATA_MOUNT} is now quiesced and ready for copy or media swap."
+        return 0
+    fi
+
+    if ! archive_mode_is_active; then
+        echo "ERROR: archive mode is not active." >&2
+        echo "Run archive-mode --enter true before using archive-mode --exit true." >&2
+        exit 1
+    fi
+
+    echo "Exiting archive mode for ${DATA_MOUNT}..."
+    if ! mountpoint -q "${DATA_MOUNT}"; then
+        if ! data_ops_try_mount_data; then
+            echo "ERROR: ${DATA_MOUNT} is not mounted and could not be remounted automatically." >&2
+            echo "Run config-storage or mount ${DATA_MOUNT} manually, then retry archive-mode --exit true." >&2
+            exit 1
+        fi
+    fi
+
+    if [[ "${clear_data}" == "true" ]]; then
+        data_ops_reset_data_root
+    elif sudo find "${DATA_MOUNT}" -mindepth 1 -maxdepth 1 | read -r; then
+        echo "WARNING: ${DATA_MOUNT} still contains data."
+        echo "If you intend to start a fresh epoch, either:"
+        echo "  archive-mode --exit true --clear-data true"
+        echo "or rerun config-storage and choose to clear ${DATA_MOUNT}."
+    fi
+
+    data_ops_sync_storage
+    data_ops_start_data_units
+    clear_state_marker
+    echo "Archive mode exited."
+}
+
+main "$@"

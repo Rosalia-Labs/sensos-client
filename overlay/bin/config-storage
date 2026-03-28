@@ -35,17 +35,31 @@ DATA_MOUNT="${CLIENT_ROOT}/data"
 LOCATION_FILE="${CLIENT_ROOT}/etc/location.conf"
 PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
 CACHE_SYS_INFO_SCRIPT="${OVERLAY_ROOT}/libexec/cache-sys-info.sh"
+DATA_STORAGE_OPS_LIB="${OVERLAY_ROOT}/libexec/data-storage-ops.sh"
 
 [[ -f "${PARSE_SWITCHES_LIB}" ]] || {
     echo "❌ Missing parse-switches library at ${PARSE_SWITCHES_LIB}"
     exit 1
 }
 source "${PARSE_SWITCHES_LIB}"
+[[ -f "${DATA_STORAGE_OPS_LIB}" ]] || {
+    echo "❌ Missing data storage ops library at ${DATA_STORAGE_OPS_LIB}"
+    exit 1
+}
+source "${DATA_STORAGE_OPS_LIB}"
 
 register_option --device device "Block device to format/mount" ""
 register_option --no-fstab no_fstab "Skip adding fstab entry (non-persistent mount)" "false"
 
 parse_switches "$script_name" "$@"
+
+if data_ops_any_data_unit_active && ! data_ops_archive_mode_is_active; then
+    echo "❌ Refusing to run ${script_name} while /sensos/data writers are active."
+    echo "Enter archive mode first:"
+    echo "  archive-mode --enter true"
+    echo "Then rerun ${script_name}."
+    exit 1
+fi
 
 ensure_data_layout() {
     local dir_path
