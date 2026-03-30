@@ -1,0 +1,161 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_FILE="$(realpath "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_FILE}")" && pwd)"
+
+resolve_overlay_root() {
+    local -a candidates=()
+    local candidate
+
+    if [[ -n "${SENSOS_CLIENT_ROOT:-}" ]]; then
+        candidates+=("${SENSOS_CLIENT_ROOT}")
+    fi
+
+    candidates+=(
+        "$(cd "${SCRIPT_DIR}/.." && pwd)"
+        "/sensos"
+    )
+
+    for candidate in "${candidates[@]}"; do
+        [[ -d "${candidate}/etc" && -d "${candidate}/libexec" ]] && {
+            printf '%s\n' "${candidate}"
+            return 0
+        }
+    done
+
+    printf '%s\n' "$(cd "${SCRIPT_DIR}/.." && pwd)"
+}
+
+CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-$(resolve_overlay_root)}"
+SERVICE_NAME="sensos-read-i2c.service"
+CONFIG_FILE="${CLIENT_ROOT}/etc/i2c-sensors.conf"
+VENV_PYTHON="${CLIENT_ROOT}/python/venv/bin/python"
+BOOT_CONFIG_FILE="/boot/firmware/config.txt"
+MODULES_FILE="/etc/modules"
+
+section() {
+    printf '\n== %s ==\n' "$1"
+}
+
+have_cmd() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+show_file_match() {
+    local file_path="$1"
+    local pattern="$2"
+
+    if [[ -f "${file_path}" ]]; then
+        rg -n "${pattern}" "${file_path}" || true
+    else
+        printf 'missing: %s\n' "${file_path}"
+    fi
+}
+
+show_systemctl_state() {
+    if ! have_cmd systemctl; then
+        printf 'systemctl not found\n'
+        return
+    fi
+
+    systemctl is-enabled "${SERVICE_NAME}" 2>/dev/null || true
+    systemctl is-active "${SERVICE_NAME}" 2>/dev/null || true
+    systemctl status "${SERVICE_NAME}" --no-pager -n 20 2>/dev/null || true
+}
+
+show_runner_access() {
+    if id sensos-runner >/dev/null 2>&1; then
+        id sensos-runner
+    else
+        printf 'missing user: sensos-runner\n'
+    fi
+
+    if [[ -e /dev/i2c-1 ]]; then
+        ls -l /dev/i2c-1
+    else
+        printf '/dev/i2c-1 not present\n'
+    fi
+}
+
+show_python_runtime() {
+    if [[ ! -x "${VENV_PYTHON}" ]]; then
+        printf 'missing venv python: %s\n' "${VENV_PYTHON}"
+        return
+    fi
+
+    "${VENV_PYTHON}" - <<'PY'
+import importlib
+modules = ["board", "busio", "smbus2", "adafruit_bme280", "adafruit_ads1x15", "adafruit_scd30", "adafruit_scd4x"]
+for name in modules:
+    try:
+        importlib.import_module(name)
+        print(f"import ok: {name}")
+    except Exception as exc:
+        print(f"import FAIL: {name}: {exc}")
+PY
+}
+
+show_i2c_scan() {
+    if ! have_cmd i2cdetect; then
+        printf 'i2cdetect not found\n'
+        return
+    fi
+
+    if [[ ! -e /dev/i2c-1 ]]; then
+        printf 'skipping i2cdetect: /dev/i2c-1 not present\n'
+        return
+    fi
+
+    sudo i2cdetect -y 1 || true
+}
+
+show_recent_logs() {
+    if have_cmd journalctl; then
+        journalctl -u "${SERVICE_NAME}" -n 50 --no-pager 2>/dev/null || true
+    else
+        printf 'journalctl not found\n'
+    fi
+}
+
+main() {
+    section "Client Root"
+    printf '%s\n' "${CLIENT_ROOT}"
+
+    section "I2C Config"
+    if [[ -f "${CONFIG_FILE}" ]]; then
+        cat "${CONFIG_FILE}"
+    else
+        printf 'missing: %s\n' "${CONFIG_FILE}"
+    fi
+
+    section "Boot Config"
+    show_file_match "${BOOT_CONFIG_FILE}" 'i2c|spi|w1'
+
+    section "Persistent Modules"
+    show_file_match "${MODULES_FILE}" 'i2c|spi|w1'
+
+    section "Loaded Modules"
+    lsmod | rg '(^Module|i2c|spi|w1)' || true
+
+    section "Device Nodes"
+    ls -l /dev/i2c* 2>/dev/null || printf 'no /dev/i2c* nodes found\n'
+
+    section "Runner Access"
+    show_runner_access
+
+    section "Service State"
+    show_systemctl_state
+
+    section "Python Runtime"
+    show_python_runtime
+
+    section "Bus Scan"
+    show_i2c_scan
+
+    section "Recent Logs"
+    show_recent_logs
+}
+
+main "$@"

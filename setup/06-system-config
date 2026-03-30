@@ -11,6 +11,7 @@ DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
 PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
 OVERLAY_CHRONY_CONF="${DEPLOY_ROOT}/etc/chrony.conf"
 OVERLAY_NFTABLES_CONF="${DEPLOY_ROOT}/etc/nftables.conf"
+SYSTEM_CONFIG_STATE_FILE="${DEPLOY_ROOT}/etc/system-config-state.env"
 
 BOOT_CONFIG_FILE="/boot/firmware/config.txt"
 MODULES_FILE="/etc/modules"
@@ -75,6 +76,22 @@ install_managed_file() {
     log "installed ${target_path} from ${source_path}"
 }
 
+write_system_config_state() {
+    local reboot_required="$1"
+    local target_dir
+    local temp_file
+
+    target_dir="$(dirname "${SYSTEM_CONFIG_STATE_FILE}")"
+    install -d -m 2775 "${target_dir}"
+
+    temp_file="$(mktemp "${target_dir}/system-config-state.env.XXXXXX")"
+    cat >"${temp_file}" <<EOF
+REBOOT_REQUIRED=${reboot_required}
+EOF
+    chmod 0664 "${temp_file}"
+    mv "${temp_file}" "${SYSTEM_CONFIG_STATE_FILE}"
+}
+
 is_raspberry_pi_host() {
     local model_file="/proc/device-tree/model"
 
@@ -85,13 +102,52 @@ is_raspberry_pi_host() {
     return 1
 }
 
+module_loaded() {
+    local module_name="$1"
+
+    lsmod | awk '{print $1}' | grep -Fxq "${module_name}"
+}
+
+load_module_if_needed() {
+    local module_name="$1"
+
+    if module_loaded "${module_name}"; then
+        log "kernel module already loaded: ${module_name}"
+        return 0
+    fi
+
+    if command -v modprobe >/dev/null 2>&1; then
+        if modprobe "${module_name}"; then
+            log "loaded kernel module ${module_name}"
+            return 0
+        fi
+        log "unable to load kernel module ${module_name} immediately"
+        return 1
+    fi
+
+    log "modprobe not found; cannot load ${module_name} immediately"
+    return 1
+}
+
 configure_pi_hardware() {
+    local reboot_required=0
+
     if ! is_raspberry_pi_host; then
         log "host does not appear to be Raspberry Pi hardware; skipping I2C/1-wire/SPI boot configuration"
+        write_system_config_state 0
         return
     fi
 
     log "configuring Raspberry Pi hardware interfaces"
+
+    if command -v raspi-config >/dev/null 2>&1; then
+        if raspi-config nonint do_i2c 0; then
+            log "enabled Raspberry Pi I2C support with raspi-config"
+        else
+            reboot_required=1
+            log "raspi-config could not fully enable Raspberry Pi I2C support"
+        fi
+    fi
 
     ensure_line_present "${MODULES_FILE}" "i2c_bcm2835"
     ensure_line_present "${BOOT_CONFIG_FILE}" "dtparam=i2c_arm=on"
@@ -103,6 +159,23 @@ configure_pi_hardware() {
 
     ensure_line_present "${BOOT_CONFIG_FILE}" "dtparam=spi=on"
     ensure_line_present "${MODULES_FILE}" "spi-dev"
+
+    load_module_if_needed "i2c-dev" || reboot_required=1
+    load_module_if_needed "i2c_bcm2835" || reboot_required=1
+    load_module_if_needed "w1-gpio" || reboot_required=1
+    load_module_if_needed "w1-therm" || reboot_required=1
+    load_module_if_needed "spi-dev" || reboot_required=1
+
+    if [[ ! -e /dev/i2c-1 ]]; then
+        reboot_required=1
+        log "I2C device /dev/i2c-1 is not present after configuration"
+    fi
+
+    if [[ "${reboot_required}" == "1" ]]; then
+        log "hardware configuration may require a reboot before I2C/1-wire/SPI devices appear"
+    fi
+
+    write_system_config_state "${reboot_required}"
 }
 
 configure_journald() {

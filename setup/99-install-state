@@ -9,6 +9,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CLIENT_ROOT="${SENSOS_REPO_ROOT:-${REPO_ROOT}}"
 DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
 INSTALL_STATE_FILE="${DEPLOY_ROOT}/etc/install-state.env"
+SYSTEM_CONFIG_STATE_FILE="${DEPLOY_ROOT}/etc/system-config-state.env"
 OS_RELEASE_FILE="/etc/os-release"
 SENSOS_ADMIN_USER="sensos-admin"
 SENSOS_DATA_GROUP="sensos-data"
@@ -59,6 +60,16 @@ read_os_release() {
     OS_VERSION_ID="${VERSION_ID:-unknown}"
 }
 
+read_system_config_state() {
+    REBOOT_REQUIRED="0"
+
+    [[ -f "${SYSTEM_CONFIG_STATE_FILE}" ]] || return 0
+
+    # shellcheck disable=SC1090
+    source "${SYSTEM_CONFIG_STATE_FILE}"
+    REBOOT_REQUIRED="${REBOOT_REQUIRED:-0}"
+}
+
 write_install_state() {
     local target_dir
     local temp_file
@@ -74,6 +85,7 @@ INSTALL_STATUS=complete
 INSTALL_REVISION=${CLIENT_REVISION}
 OS_ID=${OS_ID}
 OS_VERSION_ID=${OS_VERSION_ID}
+REBOOT_REQUIRED=${REBOOT_REQUIRED}
 EOF
 
     chmod 0664 "${temp_file}"
@@ -92,6 +104,7 @@ main() {
     CLIENT_REVISION="$(read_repo_revision)"
     INSTALLED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     read_os_release
+    read_system_config_state
     write_install_state
 }
 

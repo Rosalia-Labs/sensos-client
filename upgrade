@@ -134,6 +134,12 @@ verify_install_state() {
         die "setup completed without writing ${INSTALL_STATE_FILE}"
 }
 
+read_install_flag() {
+    local flag_name="$1"
+
+    sudo_run awk -F= -v key="${flag_name}" '$1 == key { print $2 }' "${INSTALL_STATE_FILE}" 2>/dev/null || true
+}
+
 main() {
     local old_version
     local source_version
@@ -186,6 +192,9 @@ main() {
     verify_install_state
 
     log "upgrade complete at version ${new_version}"
+    if [[ "$(read_install_flag REBOOT_REQUIRED)" == "1" ]]; then
+        log "REBOOT REQUIRED: Raspberry Pi hardware changes were applied but are not fully active yet"
+    fi
 }
 
 main "$@"
