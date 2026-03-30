@@ -448,7 +448,7 @@ Important flags:
 - `--sync-time`
 - `--update-location`
 - `--location-drift-m`
-- `--time-drift-sec`
+- `--time-conflict-sec`
 - `--enable-service`
 - `--start-service`
 
@@ -456,13 +456,16 @@ Typical use:
 
 ```sh
 config-gps --start-service true
-config-gps --interval 60 --location-drift-m 50 --time-drift-sec 30
+config-gps --interval 60 --location-drift-m 50
+config-gps --time-conflict-sec 300
 ```
 
 Behavior:
 
 - writes `/sensos/etc/gps.conf`
 - can update time and location automatically from GPS
+- when NTP does not appear healthy, a valid GPS fix becomes the active time source
+- reports a GPS/NTP time conflict instead of overriding a synchronized clock when the difference is too large
 - controls `sensos-gps.service`
 
 ### `config-birdnet`

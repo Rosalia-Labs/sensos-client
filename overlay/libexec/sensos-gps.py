@@ -56,8 +56,12 @@ DEFAULT_INTERVAL_SEC = 60
 DEFAULT_ADDR = "0x10"
 DEFAULT_BUS = 1
 DEFAULT_LOCATION_DRIFT_M = 50.0
-DEFAULT_TIME_DRIFT_SEC = 30.0
+DEFAULT_TIME_CONFLICT_SEC = 300.0
 ERROR_SLEEP_SEC = 15
+
+
+class TimeConflictError(RuntimeError):
+    pass
 
 
 def config_value(config: dict[str, str], key: str, default: str = "") -> str:
@@ -240,16 +244,34 @@ def parse_i2c_gps(bus_num: int, addr_str: str) -> dict[str, object] | None:
     }
 
 
-def maybe_update_time(fix: dict[str, object], threshold_sec: float, allow_sync: bool) -> None:
+def maybe_update_time(fix: dict[str, object], allow_sync: bool) -> None:
     if not allow_sync:
         return
     gps_time = fix.get("gps_time")
     if not isinstance(gps_time, datetime.datetime):
         return
-    drift_sec = abs((current_utc() - gps_time).total_seconds())
-    if system_time_synchronized() and drift_sec <= threshold_sec:
+    if system_time_synchronized():
         return
     set_system_time(gps_time)
+
+
+def maybe_validate_time_source(
+    fix: dict[str, object],
+    conflict_threshold_sec: float,
+    allow_sync: bool,
+) -> None:
+    if not allow_sync or not system_time_synchronized():
+        return
+    gps_time = fix.get("gps_time")
+    if not isinstance(gps_time, datetime.datetime):
+        return
+    drift_sec = abs((current_utc() - gps_time).total_seconds())
+    if drift_sec < conflict_threshold_sec:
+        return
+    raise TimeConflictError(
+        "GPS time differs from the synchronized system clock by "
+        f"{drift_sec:.1f}s, above the {conflict_threshold_sec:.1f}s conflict threshold"
+    )
 
 
 def maybe_update_location(fix: dict[str, object], threshold_m: float, allow_update: bool) -> None:
@@ -285,7 +307,7 @@ def main() -> int:
     allow_sync = config_bool(config, "GPS_SYNC_TIME", True)
     allow_location = config_bool(config, "GPS_UPDATE_LOCATION", True)
     location_threshold_m = max(0.0, config_float(config, "GPS_LOCATION_DRIFT_M", DEFAULT_LOCATION_DRIFT_M))
-    time_threshold_sec = max(0.0, config_float(config, "GPS_TIME_DRIFT_SEC", DEFAULT_TIME_DRIFT_SEC))
+    conflict_threshold_sec = max(0.0, config_float(config, "GPS_TIME_CONFLICT_SEC", DEFAULT_TIME_CONFLICT_SEC))
 
     print(
         f"sensos-gps starting: backend={backend} interval={interval_sec}s "
@@ -315,9 +337,15 @@ def main() -> int:
                 continue
             message = f"GPS fix: lat={fix['latitude']:.6f} lon={fix['longitude']:.6f} source={fix['source']}"
             print(message)
-            maybe_update_time(fix, time_threshold_sec, allow_sync)
+            maybe_validate_time_source(fix, conflict_threshold_sec, allow_sync)
+            maybe_update_time(fix, allow_sync)
             maybe_update_location(fix, location_threshold_m, allow_location)
             write_state("fix", message, fix)
+            time.sleep(interval_sec)
+        except TimeConflictError as exc:
+            message = f"GPS time conflict: {exc}"
+            print(message, file=sys.stderr)
+            write_state("time_conflict", message)
             time.sleep(interval_sec)
         except Exception as exc:
             message = f"GPS service failure: {exc}"

@@ -74,7 +74,7 @@ def main() -> int:
         (["--sync-time"], {"dest": "sync_time", "default": "true", "help": "Update system time from GPS if needed."}),
         (["--update-location"], {"dest": "update_location", "default": "true", "help": "Update location.conf from GPS if needed."}),
         (["--location-drift-m"], {"dest": "location_drift_m", "type": float, "default": 50.0, "help": "Minimum movement before location.conf is updated."}),
-        (["--time-drift-sec"], {"dest": "time_drift_sec", "type": float, "default": 30.0, "help": "Minimum time drift before clock is corrected."}),
+        (["--time-conflict-sec"], {"dest": "time_conflict_sec", "type": float, "default": 300.0, "help": "If GPS and an already synchronized system clock differ by at least this many seconds, report a conflict instead of correcting time."}),
         (["--enable-service"], {"dest": "enable_service", "default": "true", "help": "Enable the systemd service."}),
         (["--start-service"], {"dest": "start_service", "default": "false", "help": "Start the systemd service now."}),
     ]
@@ -103,7 +103,7 @@ def main() -> int:
         f"GPS_SYNC_TIME={args.sync_time}\n"
         f"GPS_UPDATE_LOCATION={args.update_location}\n"
         f"GPS_LOCATION_DRIFT_M={args.location_drift_m}\n"
-        f"GPS_TIME_DRIFT_SEC={args.time_drift_sec}\n"
+        f"GPS_TIME_CONFLICT_SEC={args.time_conflict_sec}\n"
     )
     write_file(CONFIG_PATH, content, mode=0o664, user="sensos-admin", group="sensos-data")
     print(f"Wrote GPS config to {CONFIG_PATH}")
