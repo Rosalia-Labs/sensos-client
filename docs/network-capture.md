@@ -15,7 +15,7 @@ This is enough to identify sustained traffic sources and destinations, common po
 Start a 24-hour debug session on the device:
 
 ```sh
-package-tracing start --duration 24
+packet-tracing start --duration 24
 ```
 
 That creates a session under `/sensos/log/network_capture/sessions/<timestamp>` and starts [sensos-network-capture.service](../overlay/systemd/sensos-network-capture.service) manually for that session only. The service is not enabled during normal install.
@@ -23,31 +23,31 @@ That creates a session under `/sensos/log/network_capture/sessions/<timestamp>` 
 Check status:
 
 ```sh
-package-tracing status
+packet-tracing status
 ```
 
 Generate reports from the latest session and remove the raw packet captures after reporting:
 
 ```sh
-package-tracing report --latest --cleanup
+packet-tracing report --latest --cleanup
 ```
 
 If you also want to save text and JSON report files under the session directory:
 
 ```sh
-package-tracing report --latest --save
+packet-tracing report --latest --save
 ```
 
 If you want to remove the generated summary reports too:
 
 ```sh
-package-tracing cleanup --latest --remove-reports
+packet-tracing cleanup --latest --remove-reports
 ```
 
 If you want to clear all retained tracing sessions and start fresh:
 
 ```sh
-package-tracing cleanup --all
+packet-tracing cleanup --all
 ```
 
 ## Storage bounds
@@ -64,7 +64,7 @@ The service runs `/sensos/libexec/start-network-capture.sh`, which starts a boun
 timeout 86400 tcpdump -i any -nn -p -U -s 128 -y LINUX_SLL -C 8 -W 48 -w /sensos/log/network_capture/sessions/<timestamp>/pcap/capture.pcap
 ```
 
-The exact values can be overridden through `package-tracing start` or by setting environment values before starting the service:
+The exact values can be overridden through `packet-tracing start` or by setting environment values before starting the service:
 
 - `SENSOS_NETWORK_CAPTURE_ROOT`
 - `SENSOS_NETWORK_CAPTURE_IFACE`
@@ -76,7 +76,7 @@ The exact values can be overridden through `package-tracing start` or by setting
 
 ## Reports
 
-Use [package-tracing](../overlay/bin/package-tracing) for the full session workflow, or call [report-network-capture](../overlay/bin/report-network-capture) directly against a session root:
+Use [packet-tracing](../overlay/bin/packet-tracing) for the full session workflow, or call [report-network-capture](../overlay/bin/report-network-capture) directly against a session root:
 
 ```sh
 report-network-capture --capture-root /sensos/log/network_capture/sessions/<timestamp> --hours 0 --top 20

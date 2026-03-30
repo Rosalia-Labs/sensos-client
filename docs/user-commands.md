@@ -510,9 +510,11 @@ install-birdnet-models --force
 
 ## Debug and Reporting Commands
 
-### `package-tracing`
+### `packet-tracing`
 
 Runs a temporary bounded packet-capture session for debugging.
+
+This command was previously documented as `package-tracing`. The installed command name is `packet-tracing`.
 
 Subcommands:
 
@@ -525,11 +527,11 @@ Subcommands:
 Typical use:
 
 ```sh
-package-tracing start --duration 24
-package-tracing status
-package-tracing report --latest --cleanup
-package-tracing report --latest --save
-package-tracing cleanup --all
+packet-tracing start --duration 24
+packet-tracing status
+packet-tracing report --latest --cleanup
+packet-tracing report --latest --save
+packet-tracing cleanup --all
 ```
 
 Behavior:
@@ -539,6 +541,25 @@ Behavior:
 - prints reports to stdout by default
 - only writes `report-*.txt` and `report-*.json` files when `--save` is used
 - is intended for debugging, not permanent collection
+
+### `debug-i2c`
+
+Prints a compact hardware and runtime diagnostic report for I2C bring-up.
+
+Typical use:
+
+```sh
+debug-i2c
+```
+
+Behavior:
+
+- shows the resolved client root and I2C config path
+- shows Raspberry Pi boot config and persistent module config for I2C, SPI, and 1-wire
+- shows loaded modules, `/dev/i2c-*` nodes, and `sensos-runner` device access
+- shows `sensos-read-i2c.service` status and recent logs
+- runs `i2cdetect -y 1` when the I2C device node is present
+- is intended for field debugging on deployed clients
 
 ### `report-network-capture`
 
