@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError as exc:
+    raise SystemExit(f"tomllib is required: {exc}") from exc
+
+
+SCRIPT_FILE = Path(__file__).resolve()
+SCRIPT_DIR = SCRIPT_FILE.parent
+
+
+def resolve_overlay_root() -> Path:
+    candidates: list[Path] = []
+    env_text = os.environ.get("SENSOS_CLIENT_ROOT")
+
+    if env_text:
+        candidates.append(Path(env_text))
+
+    candidates.extend([SCRIPT_DIR.parent, Path("/sensos")])
+
+    for candidate in candidates:
+        if (candidate / "profiles").is_dir():
+            return candidate
+
+    return SCRIPT_DIR.parent
+
+
+OVERLAY_ROOT = resolve_overlay_root()
+PROFILES_DIR = OVERLAY_ROOT / "profiles"
+STATE_FILE = OVERLAY_ROOT / "etc" / "hardware-profile-state.json"
+CONFIG_RPI_EEPROM = SCRIPT_DIR / "config-rpi-eeprom"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog=SCRIPT_FILE.name,
+        description="List, inspect, and apply hardware profiles.",
+    )
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--list", action="store_true", help="List available hardware profiles.")
+    group.add_argument("--show", metavar="NAME", help="Show the parsed contents of a profile.")
+    group.add_argument("--status", action="store_true", help="Show applied hardware profile state.")
+    group.add_argument("--apply", metavar="NAME", help="Apply a hardware profile.")
+    group.add_argument("--unapply", metavar="NAME", help="Unapply a hardware profile.")
+    return parser.parse_args()
+
+
+def profile_path(name: str) -> Path:
+    return PROFILES_DIR / f"{name}.toml"
+
+
+def load_profile(name: str) -> dict:
+    path = profile_path(name)
+    if not path.is_file():
+        raise SystemExit(f"profile not found: {path}")
+    with path.open("rb") as handle:
+        data = tomllib.load(handle)
+    return data
+
+
+def profile_names() -> list[str]:
+    if not PROFILES_DIR.is_dir():
+        return []
+    return sorted(path.stem for path in PROFILES_DIR.glob("*.toml"))
+
+
+def cmd_list() -> int:
+    names = profile_names()
+    if not names:
+        print(f"no profiles found under {PROFILES_DIR}")
+        return 1
+
+    for name in names:
+        profile = load_profile(name)
+        description = str(profile.get("description", "")).strip()
+        if description:
+            print(f"{name}: {description}")
+        else:
+            print(name)
+    return 0
+
+
+def cmd_show(name: str) -> int:
+    profile = load_profile(name)
+    print(json.dumps(profile, indent=2, sort_keys=True))
+    return 0
+
+
+def load_state() -> dict:
+    if not STATE_FILE.is_file():
+        return {"applied_profiles": []}
+
+    with STATE_FILE.open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+
+    if not isinstance(data, dict):
+        raise SystemExit(f"invalid hardware profile state file: {STATE_FILE}")
+
+    profiles = data.get("applied_profiles", [])
+    if not isinstance(profiles, list) or not all(isinstance(item, str) for item in profiles):
+        raise SystemExit(f"invalid applied_profiles in state file: {STATE_FILE}")
+
+    return data
+
+
+def write_state(state: dict) -> None:
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = STATE_FILE.with_suffix(".json.tmp")
+    with temp_path.open("w", encoding="utf-8") as handle:
+        json.dump(state, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    temp_path.replace(STATE_FILE)
+
+
+def update_state_applied(name: str, applied: bool) -> None:
+    state = load_state()
+    profiles = list(dict.fromkeys(str(item) for item in state.get("applied_profiles", [])))
+
+    if applied:
+        if name not in profiles:
+            profiles.append(name)
+    else:
+        profiles = [item for item in profiles if item != name]
+
+    state["applied_profiles"] = profiles
+    state["updated_at"] = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    write_state(state)
+
+
+def cmd_status() -> int:
+    state = load_state()
+    print(json.dumps(state, indent=2, sort_keys=True))
+    return 0
+
+
+def run_checked(cmd: list[str]) -> None:
+    result = subprocess.run(cmd, check=False)
+    if result.returncode != 0:
+        raise SystemExit(result.returncode)
+
+
+def apply_profile_settings(name: str, profile: dict) -> bool:
+    applied_any = False
+    eeprom = profile.get("eeprom", {})
+
+    if not isinstance(eeprom, dict):
+        raise SystemExit(f"profile {name} has invalid [eeprom] section")
+
+    psu_max_current = eeprom.get("psu_max_current")
+    if psu_max_current is not None:
+        run_checked([str(CONFIG_RPI_EEPROM), "--set-psu-max-current", str(psu_max_current)])
+        applied_any = True
+
+    return applied_any
+
+
+def unapply_profile_settings(name: str, profile: dict) -> bool:
+    unapplied_any = False
+    eeprom = profile.get("eeprom", {})
+
+    if not isinstance(eeprom, dict):
+        raise SystemExit(f"profile {name} has invalid [eeprom] section")
+
+    psu_max_current = eeprom.get("psu_max_current")
+    if psu_max_current is not None:
+        run_checked([str(CONFIG_RPI_EEPROM), "--unset-psu-max-current"])
+        unapplied_any = True
+
+    return unapplied_any
+
+
+def cmd_apply(name: str) -> int:
+    profile = load_profile(name)
+    applied_any = apply_profile_settings(name, profile)
+
+    if not applied_any:
+        print(f"profile {name} has no actionable settings yet")
+        return 0
+
+    update_state_applied(name, True)
+    print(f"applied hardware profile: {name}")
+    return 0
+
+
+def cmd_unapply(name: str) -> int:
+    profile = load_profile(name)
+    unapplied_any = unapply_profile_settings(name, profile)
+
+    if not unapplied_any:
+        print(f"profile {name} has no reversible settings yet")
+        update_state_applied(name, False)
+        return 0
+
+    update_state_applied(name, False)
+    print(f"unapplied hardware profile: {name}")
+    return 0
+
+
+def main() -> int:
+    args = parse_args()
+
+    if args.list:
+        return cmd_list()
+    if args.show:
+        return cmd_show(args.show)
+    if args.status:
+        return cmd_status()
+    if args.apply:
+        return cmd_apply(args.apply)
+    if args.unapply:
+        return cmd_unapply(args.unapply)
+
+    raise AssertionError("unreachable")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

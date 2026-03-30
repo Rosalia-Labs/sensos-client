@@ -1,0 +1,8 @@
+name = "geekworm-ups"
+description = "Raspberry Pi with a Geekworm UPS that requires the EEPROM PSU current limit."
+
+[match]
+platform = "raspberry-pi"
+
+[eeprom]
+psu_max_current = 5000

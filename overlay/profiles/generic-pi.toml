@@ -1,0 +1,5 @@
+name = "generic-pi"
+description = "Baseline Raspberry Pi host with no additional hardware-specific overrides."
+
+[match]
+platform = "raspberry-pi"

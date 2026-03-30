@@ -289,6 +289,62 @@ Behavior:
 - ensures `/sensos/data/microenv` exists with shared permissions
 - warns if time sync or location is missing
 
+### `config-rpi-eeprom`
+
+Reads and updates Raspberry Pi bootloader EEPROM settings related to board power policy.
+
+Important flags:
+
+- `--show`
+- `--set-psu-max-current`
+- `--unset-psu-max-current`
+
+Typical use:
+
+```sh
+config-rpi-eeprom --show
+config-rpi-eeprom --set-psu-max-current 5000
+config-rpi-eeprom --unset-psu-max-current
+```
+
+Behavior:
+
+- preserves unrelated EEPROM settings
+- sets or removes `PSU_MAX_CURRENT`
+- requires `rpi-eeprom-config`
+- prints a reboot-required message after applying changes
+
+### `config-hardware-profile`
+
+Lists, shows, and applies named hardware profiles shipped with the client.
+
+Important flags:
+
+- `--list`
+- `--show`
+- `--status`
+- `--apply`
+- `--unapply`
+
+Typical use:
+
+```sh
+config-hardware-profile --list
+config-hardware-profile --show geekworm-ups
+config-hardware-profile --status
+config-hardware-profile --apply geekworm-ups
+config-hardware-profile --unapply geekworm-ups
+```
+
+Behavior:
+
+- reads profile TOML files from `/sensos/profiles`
+- tracks applied profile names in `/sensos/etc/hardware-profile-state.json`
+- applies only the settings supported by the current client version
+- can reverse only the settings supported by the current client version
+- currently supports EEPROM `PSU_MAX_CURRENT` through `config-rpi-eeprom`
+- keeps the profile model intentionally simple; there is no profile inheritance yet
+
 ## Connectivity-Specific Commands
 
 These are usually run after `config-network`.

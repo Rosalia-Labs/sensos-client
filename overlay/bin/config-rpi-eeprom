@@ -1,0 +1,188 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+
+set -euo pipefail
+
+SCRIPT_FILE="$(realpath "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_FILE}")" && pwd)"
+
+resolve_overlay_root() {
+    local -a candidates=()
+    local candidate
+
+    if [[ -n "${SENSOS_CLIENT_ROOT:-}" ]]; then
+        candidates+=("${SENSOS_CLIENT_ROOT}")
+    fi
+
+    candidates+=(
+        "$(cd "${SCRIPT_DIR}/.." && pwd)"
+        "/sensos"
+    )
+
+    for candidate in "${candidates[@]}"; do
+        [[ -f "${candidate}/libexec/parse-switches.sh" ]] && {
+            printf '%s\n' "${candidate}"
+            return 0
+        }
+    done
+
+    printf '%s\n' "$(cd "${SCRIPT_DIR}/.." && pwd)"
+}
+
+OVERLAY_ROOT="$(resolve_overlay_root)"
+PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
+script_name="$(basename "$0")"
+
+[[ -f "${PARSE_SWITCHES_LIB}" ]] || {
+    echo "Missing parse-switches library at ${PARSE_SWITCHES_LIB}"
+    exit 1
+}
+source "${PARSE_SWITCHES_LIB}"
+
+register_option --show show "Show current PSU_MAX_CURRENT state only" "false"
+register_option --set-psu-max-current set_psu_max_current "Set PSU_MAX_CURRENT to the given mA value" "5000"
+register_option --unset-psu-max-current unset_psu_max_current "Remove PSU_MAX_CURRENT from EEPROM config" "false"
+
+parse_switches "$script_name" "$@"
+
+err() {
+    echo "[ERROR] $*" >&2
+    exit 1
+}
+
+log() {
+    echo "[INFO] $*"
+}
+
+require_cmd() {
+    command -v "$1" >/dev/null 2>&1 || err "$1 not found"
+}
+
+read_current_config() {
+    sudo rpi-eeprom-config 2>/dev/null
+}
+
+current_psu_max_current() {
+    read_current_config | awk -F= '/^[[:space:]]*PSU_MAX_CURRENT=/{gsub(/[[:space:]]/, "", $2); print $2; exit}'
+}
+
+show_status() {
+    local current_value
+    current_value="$(current_psu_max_current)"
+
+    if [[ -n "${current_value}" ]]; then
+        printf 'PSU_MAX_CURRENT=%s\n' "${current_value}"
+    else
+        printf 'PSU_MAX_CURRENT is not set\n'
+    fi
+}
+
+validate_psu_max_current() {
+    [[ "$1" =~ ^[0-9]+$ ]] || err "PSU max current must be an integer number of mA"
+}
+
+build_updated_config() {
+    local new_value="${1:-}"
+    local current_config
+    local output_written=0
+
+    current_config="$(read_current_config)"
+
+    awk -v new_value="${new_value}" '
+        BEGIN {
+            replaced = 0
+            in_all = 0
+            saw_all = 0
+        }
+        /^\[all\][[:space:]]*$/ {
+            print
+            in_all = 1
+            saw_all = 1
+            next
+        }
+        /^\[[^]]+\][[:space:]]*$/ {
+            if (in_all && !replaced && new_value != "") {
+                print "PSU_MAX_CURRENT=" new_value
+                replaced = 1
+            }
+            print
+            in_all = 0
+            next
+        }
+        /^[[:space:]]*PSU_MAX_CURRENT=/ {
+            if (in_all && !replaced && new_value != "") {
+                print "PSU_MAX_CURRENT=" new_value
+                replaced = 1
+            }
+            next
+        }
+        {
+            print
+        }
+        END {
+            if (!saw_all) {
+                print "[all]"
+                if (new_value != "") {
+                    print "PSU_MAX_CURRENT=" new_value
+                }
+            } else if (in_all && !replaced && new_value != "") {
+                print "PSU_MAX_CURRENT=" new_value
+            }
+        }
+    ' <<<"${current_config}"
+}
+
+apply_config() {
+    local new_value="${1:-}"
+    local temp_file
+    local updated_config
+
+    updated_config="$(build_updated_config "${new_value}")"
+    temp_file="$(mktemp /tmp/rpi-eeprom-config.XXXXXX)"
+    printf '%s\n' "${updated_config}" >"${temp_file}"
+
+    if ! sudo rpi-eeprom-config --apply "${temp_file}"; then
+        rm -f "${temp_file}"
+        err "Failed to apply EEPROM config"
+    fi
+
+    rm -f "${temp_file}"
+}
+
+main() {
+    local current_value
+
+    require_cmd sudo
+    require_cmd rpi-eeprom-config
+
+    if [[ "${show}" == "true" ]]; then
+        show_status
+        return
+    fi
+
+    if [[ "${unset_psu_max_current}" == "true" ]]; then
+        current_value="$(current_psu_max_current)"
+        if [[ -z "${current_value}" ]]; then
+            log "PSU_MAX_CURRENT is already unset"
+            return
+        fi
+
+        log "Removing PSU_MAX_CURRENT from EEPROM config"
+        apply_config ""
+        log "EEPROM update scheduled. Reboot required for changes to take effect."
+        return
+    fi
+
+    validate_psu_max_current "${set_psu_max_current}"
+    current_value="$(current_psu_max_current)"
+    if [[ "${current_value}" == "${set_psu_max_current}" ]]; then
+        log "PSU_MAX_CURRENT is already set to ${set_psu_max_current}"
+        return
+    fi
+
+    log "Setting PSU_MAX_CURRENT=${set_psu_max_current}"
+    apply_config "${set_psu_max_current}"
+    log "EEPROM update scheduled. Reboot required for changes to take effect."
+}
+
+main "$@"
