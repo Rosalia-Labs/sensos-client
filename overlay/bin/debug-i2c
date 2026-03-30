@@ -14,12 +14,12 @@ resolve_overlay_root() {
     fi
 
     candidates+=(
-        "$(cd "${SCRIPT_DIR}/.." && pwd)"
         "/sensos"
+        "$(cd "${SCRIPT_DIR}/.." && pwd)"
     )
 
     for candidate in "${candidates[@]}"; do
-        [[ -d "${candidate}/etc" && -d "${candidate}/libexec" ]] && {
+        [[ -f "${candidate}/libexec/read-i2c-sensors.py" ]] && {
             printf '%s\n' "${candidate}"
             return 0
         }
@@ -48,7 +48,11 @@ show_file_match() {
     local pattern="$2"
 
     if [[ -f "${file_path}" ]]; then
-        rg -n "${pattern}" "${file_path}" || true
+        if have_cmd rg; then
+            rg -n "${pattern}" "${file_path}" || true
+        else
+            grep -En "${pattern}" "${file_path}" || true
+        fi
     else
         printf 'missing: %s\n' "${file_path}"
     fi
@@ -120,6 +124,8 @@ show_recent_logs() {
 }
 
 main() {
+    local module_pattern='(^Module|i2c|spi|w1)'
+
     section "Client Root"
     printf '%s\n' "${CLIENT_ROOT}"
 
@@ -137,7 +143,11 @@ main() {
     show_file_match "${MODULES_FILE}" 'i2c|spi|w1'
 
     section "Loaded Modules"
-    lsmod | rg '(^Module|i2c|spi|w1)' || true
+    if have_cmd rg; then
+        lsmod | rg "${module_pattern}" || true
+    else
+        lsmod | grep -E "${module_pattern}" || true
+    fi
 
     section "Device Nodes"
     ls -l /dev/i2c* 2>/dev/null || printf 'no /dev/i2c* nodes found\n'
