@@ -212,6 +212,26 @@ Behavior:
 - after `--enter`, either copy data off the device or swap media, then use `--exit`
 - `archive-mode --exit --clear-data` is the normal non-interactive way to clear an already configured `/sensos/data` after an archive window
 
+### `summarize-data-dir`
+
+Prints a bounded summary of a data tree without dumping a full recursive listing over SSH.
+
+Typical use:
+
+```sh
+summarize-data-dir
+summarize-data-dir --top 20
+summarize-data-dir --path /sensos/data/audio
+```
+
+Behavior:
+
+- defaults to `/sensos/data`
+- reports total directory size, file and directory counts, and filesystem usage
+- shows the largest top-level entries by size
+- shows the largest files and most recently modified files
+- keeps output compact even when the tree is very large, though it still scans the tree locally on the device
+
 ### `config-arecord`
 
 Configures raw audio recording and optionally enables/starts the recording service.

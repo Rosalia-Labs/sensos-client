@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+set -euo pipefail
+
+SCRIPT_FILE="$(realpath "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_FILE}")" && pwd)"
+
+resolve_overlay_root() {
+    local -a candidates=()
+    local candidate
+
+    if [[ -n "${SENSOS_CLIENT_ROOT:-}" ]]; then
+        candidates+=("${SENSOS_CLIENT_ROOT}")
+    fi
+
+    candidates+=(
+        "$(cd "${SCRIPT_DIR}/.." && pwd)"
+        "/sensos"
+    )
+
+    for candidate in "${candidates[@]}"; do
+        [[ -f "${candidate}/libexec/data-storage-ops.sh" ]] && {
+            printf '%s\n' "${candidate}"
+            return 0
+        }
+    done
+
+    printf '%s\n' "$(cd "${SCRIPT_DIR}/.." && pwd)"
+}
+
+OVERLAY_ROOT="$(resolve_overlay_root)"
+DATA_STORAGE_OPS_LIB="${OVERLAY_ROOT}/libexec/data-storage-ops.sh"
+
+[[ -f "${DATA_STORAGE_OPS_LIB}" ]] || {
+    echo "ERROR: missing data storage ops library at ${DATA_STORAGE_OPS_LIB}" >&2
+    exit 1
+}
+source "${DATA_STORAGE_OPS_LIB}"
+
+TOP_N=10
+TARGET_PATH="${DATA_MOUNT}"
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [options]
+
+Summarize a data directory without printing a full recursive listing.
+
+Options:
+  --path PATH   Directory to summarize (default: ${DATA_MOUNT})
+  --top N       Number of rows for bounded sections (default: ${TOP_N})
+  -h, --help    Show this help text
+
+Notes:
+  - This command is intended for Linux targets with GNU find/stat support.
+  - Output is bounded, but the scan still walks the directory tree.
+EOF
+}
+
+require_dir() {
+    [[ -d "$1" ]] || {
+        echo "ERROR: directory not found: $1" >&2
+        exit 1
+    }
+}
+
+print_header() {
+    printf '%s\n' "$1"
+}
+
+print_simple_metric() {
+    printf '%-18s %s\n' "$1" "$2"
+}
+
+collect_counts() {
+    local target_path="$1"
+    local files dirs symlinks others
+
+    files="$(find "${target_path}" -type f 2>/dev/null | wc -l | tr -d ' ')"
+    dirs="$(find "${target_path}" -type d 2>/dev/null | wc -l | tr -d ' ')"
+    symlinks="$(find "${target_path}" -type l 2>/dev/null | wc -l | tr -d ' ')"
+    others="$(find "${target_path}" \( ! -type f -a ! -type d -a ! -type l \) 2>/dev/null | wc -l | tr -d ' ')"
+
+    print_simple_metric "files" "${files}"
+    print_simple_metric "directories" "${dirs}"
+    print_simple_metric "symlinks" "${symlinks}"
+    print_simple_metric "other entries" "${others}"
+}
+
+print_filesystem_summary() {
+    local target_path="$1"
+    local total_size
+
+    print_header "Directory Summary"
+    print_simple_metric "path" "${target_path}"
+    if mountpoint -q "${target_path}"; then
+        print_simple_metric "mountpoint" "yes"
+    else
+        print_simple_metric "mountpoint" "no"
+    fi
+    total_size="$(du -sh "${target_path}" 2>/dev/null | awk '{print $1}')"
+    print_simple_metric "total size" "${total_size}"
+    collect_counts "${target_path}"
+
+    printf '\n'
+    print_header "Filesystem Usage"
+    df -h "${target_path}" | sed 's/^/  /'
+}
+
+print_top_level_sizes() {
+    local target_path="$1"
+    local top_n="$2"
+
+    printf '\n'
+    print_header "Top-Level Usage"
+    if find "${target_path}" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+        du -sh "${target_path}"/* 2>/dev/null | sort -hr | head -n "${top_n}" | sed 's/^/  /'
+    else
+        printf '  %s\n' "(empty)"
+    fi
+}
+
+print_largest_files() {
+    local target_path="$1"
+    local top_n="$2"
+
+    printf '\n'
+    print_header "Largest Files"
+    if find "${target_path}" -type f -print -quit 2>/dev/null | grep -q .; then
+        find "${target_path}" -type f -printf '%s\t%TY-%Tm-%Td %TH:%TM\t%p\n' 2>/dev/null \
+            | sort -nr \
+            | head -n "${top_n}" \
+            | awk -F '\t' '{printf "  %.1f MiB\t%s\t%s\n", $1/1048576, $2, $3}'
+    else
+        printf '  %s\n' "(no files)"
+    fi
+}
+
+print_recent_files() {
+    local target_path="$1"
+    local top_n="$2"
+
+    printf '\n'
+    print_header "Most Recent Files"
+    if find "${target_path}" -type f -print -quit 2>/dev/null | grep -q .; then
+        find "${target_path}" -type f -printf '%T@\t%TY-%Tm-%Td %TH:%TM\t%p\n' 2>/dev/null \
+            | sort -nr \
+            | head -n "${top_n}" \
+            | cut -f2- \
+            | sed 's/^/  /'
+    else
+        printf '  %s\n' "(no files)"
+    fi
+}
+
+main() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --path)
+                [[ $# -ge 2 ]] || {
+                    echo "ERROR: --path requires an argument." >&2
+                    exit 1
+                }
+                TARGET_PATH="$2"
+                shift
+                ;;
+            --top)
+                [[ $# -ge 2 ]] || {
+                    echo "ERROR: --top requires an argument." >&2
+                    exit 1
+                }
+                [[ "$2" =~ ^[1-9][0-9]*$ ]] || {
+                    echo "ERROR: --top must be a positive integer." >&2
+                    exit 1
+                }
+                TOP_N="$2"
+                shift
+                ;;
+            --help|-h)
+                usage
+                exit 0
+                ;;
+            *)
+                echo "ERROR: unknown option: $1" >&2
+                usage
+                exit 1
+                ;;
+        esac
+        shift
+    done
+
+    data_ops_require_cmd find
+    data_ops_require_cmd du
+    data_ops_require_cmd df
+    data_ops_require_cmd sort
+    data_ops_require_cmd head
+    data_ops_require_cmd awk
+    data_ops_require_cmd mountpoint
+
+    require_dir "${TARGET_PATH}"
+
+    print_filesystem_summary "${TARGET_PATH}"
+    print_top_level_sizes "${TARGET_PATH}" "${TOP_N}"
+    print_largest_files "${TARGET_PATH}" "${TOP_N}"
+    print_recent_files "${TARGET_PATH}" "${TOP_N}"
+}
+
+main "$@"
