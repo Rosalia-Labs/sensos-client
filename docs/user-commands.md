@@ -477,12 +477,14 @@ Important flags:
 - `--download-models`
 - `--models-url`
 - `--backend`
+- `--input-mode`
 
 Typical use:
 
 ```sh
 config-birdnet --download-models --start-service
 config-birdnet --backend litert --start-service
+config-birdnet --input-mode split-channels --start-service
 config-birdnet --disable
 ```
 
@@ -490,6 +492,7 @@ Behavior:
 
 - writes `/sensos/etc/birdnet.env`
 - can download BirdNET models before enabling
+- supports `mono` and `split-channels` multichannel input handling
 - controls `sensos-birdnet.service`
 
 ### `install-birdnet-models`

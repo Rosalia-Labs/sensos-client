@@ -75,17 +75,25 @@ IDLE_SLEEP_SEC = int(os.environ.get("BIRDNET_IDLE_SLEEP_SEC", "60"))
 ERROR_SLEEP_SEC = int(os.environ.get("BIRDNET_ERROR_SLEEP_SEC", "10"))
 
 
-def read_backend_preference(config_path: Path) -> str:
-    backend = "litert"
+def read_birdnet_config(config_path: Path) -> dict[str, str]:
+    config: dict[str, str] = {}
     try:
         for line in config_path.read_text(encoding="utf-8").splitlines():
-            if line.startswith("BIRDNET_BACKEND="):
-                candidate = line.split("=", 1)[1].strip()
-                if candidate:
-                    backend = candidate
-                break
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            config[key.strip()] = value.strip()
     except FileNotFoundError:
-        return backend
+        return config
+    return config
+
+
+def read_backend_preference(config_path: Path) -> str:
+    backend = "litert"
+    config = read_birdnet_config(config_path)
+    candidate = config.get("BIRDNET_BACKEND")
+    if candidate:
+        backend = candidate
 
     if backend == "tflite":
         backend = "litert"
@@ -94,7 +102,16 @@ def read_backend_preference(config_path: Path) -> str:
     return backend
 
 
+def read_input_mode(config_path: Path) -> str:
+    config = read_birdnet_config(config_path)
+    mode = config.get("BIRDNET_INPUT_MODE", "mono")
+    if mode not in {"mono", "split-channels"}:
+        raise RuntimeError(f"Unsupported BIRDNET_INPUT_MODE='{mode}' in {config_path}")
+    return mode
+
+
 BACKEND_PREFERENCE = read_backend_preference(BIRDNET_CONFIG)
+INPUT_MODE = read_input_mode(BIRDNET_CONFIG)
 if BACKEND_PREFERENCE == "litert":
     try:
         from ai_edge_litert.interpreter import Interpreter
@@ -133,6 +150,7 @@ class BirdNETModel:
 
 @dataclass
 class Detection:
+    channel_index: int
     window_index: int
     start_frame: int
     end_frame: int
@@ -143,6 +161,7 @@ class Detection:
 
 @dataclass
 class LabelRun:
+    channel_index: int
     run_index: int
     start_frame: int
     end_frame: int
@@ -257,6 +276,7 @@ def connect_db() -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS detections (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source_path TEXT NOT NULL,
+            channel_index INTEGER NOT NULL DEFAULT 0,
             window_index INTEGER NOT NULL,
             start_frame INTEGER NOT NULL,
             end_frame INTEGER NOT NULL,
@@ -265,7 +285,7 @@ def connect_db() -> sqlite3.Connection:
             top_label TEXT NOT NULL,
             top_score REAL NOT NULL,
             top_likely_score REAL,
-            UNIQUE (source_path, window_index)
+            UNIQUE (source_path, channel_index, window_index)
         )
         """
     )
@@ -274,6 +294,7 @@ def connect_db() -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS flac_runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source_path TEXT NOT NULL,
+            channel_index INTEGER NOT NULL DEFAULT 0,
             run_index INTEGER NOT NULL,
             label TEXT NOT NULL,
             label_dir TEXT,
@@ -285,11 +306,13 @@ def connect_db() -> sqlite3.Connection:
             peak_likely_score REAL,
             flac_path TEXT NOT NULL,
             deleted_at TEXT,
-            UNIQUE (source_path, run_index)
+            UNIQUE (source_path, channel_index, run_index)
         )
         """
     )
+    ensure_column(conn, "detections", "channel_index", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "detections", "top_likely_score", "REAL")
+    ensure_column(conn, "flac_runs", "channel_index", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "flac_runs", "label_dir", "TEXT")
     ensure_column(conn, "flac_runs", "peak_likely_score", "REAL")
     ensure_column(conn, "flac_runs", "deleted_at", "TEXT")
@@ -462,7 +485,16 @@ def to_mono(audio: np.ndarray) -> np.ndarray:
     return audio.astype(np.float32).mean(axis=1)
 
 
+def audio_channels(audio: np.ndarray, input_mode: str) -> list[tuple[int, np.ndarray]]:
+    if audio.ndim == 1:
+        return [(0, audio.astype(np.float32))]
+    if input_mode == "split-channels":
+        return [(idx, audio[:, idx].astype(np.float32)) for idx in range(audio.shape[1])]
+    return [(0, to_mono(audio))]
+
+
 def collect_detections(
+    channel_index: int,
     audio_mono: np.ndarray,
     frames: int,
     model: BirdNETModel,
@@ -483,7 +515,7 @@ def collect_detections(
             longitude,
             observed_on,
         )
-        return [Detection(0, 0, frames, label, score, likely_score)]
+        return [Detection(channel_index, 0, 0, frames, label, score, likely_score)]
 
     window_index = 0
     for start in range(0, frames - WINDOW_FRAMES + 1, STRIDE_FRAMES):
@@ -497,7 +529,7 @@ def collect_detections(
             observed_on,
         )
         detections.append(
-            Detection(window_index, start, end, label, score, likely_score)
+            Detection(channel_index, window_index, start, end, label, score, likely_score)
         )
         window_index += 1
     return detections
@@ -509,6 +541,7 @@ def build_runs(detections: List[Detection]) -> List[LabelRun]:
 
     runs: List[LabelRun] = []
     current = LabelRun(
+        channel_index=detections[0].channel_index,
         run_index=0,
         start_frame=detections[0].start_frame,
         end_frame=detections[0].end_frame,
@@ -534,6 +567,7 @@ def build_runs(detections: List[Detection]) -> List[LabelRun]:
 
         runs.append(current)
         current = LabelRun(
+            channel_index=detection.channel_index,
             run_index=len(runs),
             start_frame=detection.start_frame,
             end_frame=detection.end_frame,
@@ -559,6 +593,7 @@ def write_flac_runs(source_path: Path, audio: np.ndarray, sample_rate: int, runs
         filename = (
             f"{filename_time_token(source_path, run, sample_rate)}_"
             f"{loc_token}_"
+            f"ch{run.channel_index:02d}_"
             f"{run.run_index:03d}_"
             f"{sanitize_label(run.label)}_"
             f"{format_score_token(run.peak_score, 's')}_"
@@ -566,7 +601,10 @@ def write_flac_runs(source_path: Path, audio: np.ndarray, sample_rate: int, runs
             f"{start_sec:09.3f}-{end_sec:09.3f}.flac"
         )
         flac_path = out_dir / filename
-        chunk = audio[run.start_frame : run.end_frame]
+        if audio.ndim == 1:
+            chunk = audio[run.start_frame : run.end_frame]
+        else:
+            chunk = audio[run.start_frame : run.end_frame, run.channel_index]
         sf.write(flac_path, chunk, sample_rate, format="FLAC")
         written.append((run, flac_path))
     return written
@@ -648,29 +686,34 @@ def process_audio(
     conn.commit()
 
     audio, sample_rate = sf.read(source_path, dtype="int32", always_2d=True)
-    mono = to_mono(audio)
     latitude, longitude = location_coordinates()
-    detections = collect_detections(
-        mono,
-        len(mono),
-        model,
-        meta_model,
-        latitude,
-        longitude,
-        source_observation_date(source_path),
-    )
-    runs = build_runs(detections)
+    detections: List[Detection] = []
+    runs: List[LabelRun] = []
+    for channel_index, channel_audio in audio_channels(audio, INPUT_MODE):
+        channel_detections = collect_detections(
+            channel_index,
+            channel_audio,
+            len(channel_audio),
+            model,
+            meta_model,
+            latitude,
+            longitude,
+            source_observation_date(source_path),
+        )
+        detections.extend(channel_detections)
+        runs.extend(build_runs(channel_detections))
     written_runs = write_flac_runs(source_path, audio, sample_rate, runs)
 
     conn.executemany(
         """
         INSERT INTO detections (
-            source_path, window_index, start_frame, end_frame, start_sec, end_sec, top_label, top_score, top_likely_score
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            source_path, channel_index, window_index, start_frame, end_frame, start_sec, end_sec, top_label, top_score, top_likely_score
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
                 source_key,
+                d.channel_index,
                 d.window_index,
                 d.start_frame,
                 d.end_frame,
@@ -686,12 +729,13 @@ def process_audio(
     conn.executemany(
         """
         INSERT INTO flac_runs (
-            source_path, run_index, label, label_dir, start_frame, end_frame, start_sec, end_sec, peak_score, peak_likely_score, flac_path, deleted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            source_path, channel_index, run_index, label, label_dir, start_frame, end_frame, start_sec, end_sec, peak_score, peak_likely_score, flac_path, deleted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
         """,
         [
             (
                 source_key,
+                run.channel_index,
                 run.run_index,
                 run.label,
                 flac_path.relative_to(INPUT_ROOT.parent).parent.as_posix(),

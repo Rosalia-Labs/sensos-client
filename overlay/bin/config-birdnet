@@ -15,11 +15,13 @@ SERVICE_NAME = "sensos-birdnet.service"
 SETUP_HELPER = CLIENT_ROOT / "libexec" / "setup-birdnet.sh"
 INSTALL_MODELS_CMD = "install-birdnet-models"
 DEFAULT_BACKEND = "litert"
+DEFAULT_INPUT_MODE = "mono"
 BACKEND_ALIASES = {
     "tensorflow": "tensorflow",
     "litert": "litert",
     "tflite": "litert",
 }
+INPUT_MODE_CHOICES = ("mono", "split-channels")
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
@@ -69,6 +71,12 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_BACKEND,
         help="BirdNET inference backend to install and require (default: litert).",
     )
+    parser.add_argument(
+        "--input-mode",
+        choices=INPUT_MODE_CHOICES,
+        default=DEFAULT_INPUT_MODE,
+        help="How BirdNET should treat multichannel audio (default: mono).",
+    )
     return parser.parse_args()
 
 
@@ -86,13 +94,27 @@ def read_existing_backend() -> str:
     return DEFAULT_BACKEND
 
 
-def write_config(enabled: bool, backend: str) -> None:
+def read_existing_input_mode() -> str:
+    if not CONFIG_FILE.exists():
+        return DEFAULT_INPUT_MODE
+
+    for line in CONFIG_FILE.read_text(encoding="utf-8").splitlines():
+        if line.startswith("BIRDNET_INPUT_MODE="):
+            candidate = line.split("=", 1)[1].strip()
+            if candidate in INPUT_MODE_CHOICES:
+                return candidate
+
+    return DEFAULT_INPUT_MODE
+
+
+def write_config(enabled: bool, backend: str, input_mode: str) -> None:
     backend = BACKEND_ALIASES[backend]
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(
         (
             f"BIRDNET_ENABLED={'1' if enabled else '0'}\n"
             f"BIRDNET_BACKEND={backend}\n"
+            f"BIRDNET_INPUT_MODE={input_mode}\n"
         ),
         encoding="utf-8",
     )
@@ -141,7 +163,7 @@ def main() -> int:
     args = parse_args()
 
     if args.disable:
-        write_config(False, read_existing_backend())
+        write_config(False, read_existing_backend(), read_existing_input_mode())
         systemctl("disable", "--now", SERVICE_NAME)
         print("BirdNET disabled.")
         return 0
@@ -151,7 +173,7 @@ def main() -> int:
 
     ensure_models_present()
     selected_backend = BACKEND_ALIASES[args.backend]
-    write_config(True, selected_backend)
+    write_config(True, selected_backend, args.input_mode)
     run_setup_step()
 
     if args.enable_service:
@@ -161,7 +183,7 @@ def main() -> int:
 
     print(
         "BirdNET configured. "
-        f"Backend: {selected_backend}. Service: {SERVICE_NAME}"
+        f"Backend: {selected_backend}. Input mode: {args.input_mode}. Service: {SERVICE_NAME}"
     )
     return 0
 

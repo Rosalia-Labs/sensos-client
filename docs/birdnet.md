@@ -95,6 +95,13 @@ LiteRT is the default backend. To use TensorFlow instead:
 sudo -u sensos-admin config-birdnet --backend tensorflow
 ```
 
+By default BirdNET mixes multichannel input down to mono before inference. To
+process each input channel independently instead:
+
+```bash
+sudo -u sensos-admin config-birdnet --input-mode split-channels
+```
+
 That will:
 
 - verify the model files exist
@@ -103,6 +110,11 @@ That will:
 - create `/sensos/python/birdnet-venv` if needed
 - install or refresh BirdNET Python dependencies lazily
 - enable `sensos-birdnet.service`
+
+Supported input modes:
+
+- `mono`: average all channels into one analysis stream
+- `split-channels`: run BirdNET separately on each channel and include the channel index in output filenames
 
 To enable and start immediately:
 
