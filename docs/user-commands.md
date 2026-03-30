@@ -513,6 +513,23 @@ install-birdnet-models --force
 
 ## Debug and Reporting Commands
 
+### `debug-gps`
+
+Shows GPS service status and the latest state the GPS worker reported.
+
+Typical use:
+
+```sh
+debug-gps
+```
+
+Behavior:
+
+- reports whether `sensos-gps.service` is enabled and active
+- shows whether the latest worker state has a current fix
+- shows the latest state message and timestamps
+- dumps `/sensos/etc/gps.conf`, `/sensos/data/microenv/gps-state.env`, and recent GPS logs
+
 ### `packet-tracing`
 
 Runs a temporary bounded packet-capture session for debugging.

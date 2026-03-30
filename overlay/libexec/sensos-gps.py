@@ -128,13 +128,43 @@ def write_location(latitude: float, longitude: float) -> None:
     print(f"Updated location.conf to ({latitude:.6f}, {longitude:.6f})")
 
 
-def write_state(fix: dict[str, object]) -> None:
+def state_value(value: object) -> str:
+    if isinstance(value, datetime.datetime):
+        return value.astimezone(datetime.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return str(value)
+
+
+def write_state(status: str, message: str, fix: dict[str, object] | None = None) -> None:
     create_dir(str(STATE_DIR), owner="sensos-admin", group="sensos-data", mode=0o2775)
+    previous = read_kv_config(str(STATE_PATH))
     lines = []
-    for key in ("latitude", "longitude", "altitude", "fix", "source", "gps_time"):
-        value = fix.get(key)
-        if value is not None:
-            lines.append(f"{key.upper()}={value}")
+    lines.append(f"STATUS={status}")
+    lines.append(f"MESSAGE={message}")
+    if fix is not None:
+        for key in ("latitude", "longitude", "altitude", "fix", "source", "gps_time"):
+            value = fix.get(key)
+            if value is not None:
+                lines.append(f"{key.upper()}={state_value(value)}")
+        for key in ("latitude", "longitude", "altitude", "fix", "source", "gps_time"):
+            value = fix.get(key)
+            if value is not None:
+                lines.append(f"LAST_FIX_{key.upper()}={state_value(value)}")
+        lines.append(
+            f"LAST_FIX_AT={current_utc().replace(microsecond=0).isoformat().replace('+00:00', 'Z')}"
+        )
+    else:
+        for key in (
+            "LAST_FIX_LATITUDE",
+            "LAST_FIX_LONGITUDE",
+            "LAST_FIX_ALTITUDE",
+            "LAST_FIX_FIX",
+            "LAST_FIX_SOURCE",
+            "LAST_FIX_GPS_TIME",
+            "LAST_FIX_AT",
+        ):
+            value = previous.get(key)
+            if value:
+                lines.append(f"{key}={value}")
     lines.append(f"UPDATED_AT={current_utc().replace(microsecond=0).isoformat().replace('+00:00', 'Z')}")
     write_file(str(STATE_PATH), "\n".join(lines) + "\n", mode=0o664, user="sensos-admin", group="sensos-data")
 
@@ -262,25 +292,37 @@ def main() -> int:
         f"sync_time={'yes' if allow_sync else 'no'} "
         f"update_location={'yes' if allow_location else 'no'}"
     )
+    write_state(
+        "starting",
+        f"backend={backend} interval={interval_sec}s sync_time={'yes' if allow_sync else 'no'} "
+        f"update_location={'yes' if allow_location else 'no'}",
+    )
 
     while True:
         try:
             if backend != "i2c":
-                print(f"Unsupported GPS backend '{backend}'", file=sys.stderr)
+                message = f"Unsupported GPS backend '{backend}'"
+                print(message, file=sys.stderr)
+                write_state("error", message)
                 time.sleep(ERROR_SLEEP_SEC)
                 continue
             fix = parse_i2c_gps(bus_num, addr_str)
             if fix is None:
-                print("No valid GPS fix available.")
+                message = "No valid GPS fix available."
+                print(message)
+                write_state("no_fix", message)
                 time.sleep(interval_sec)
                 continue
-            print(f"GPS fix: lat={fix['latitude']:.6f} lon={fix['longitude']:.6f} source={fix['source']}")
+            message = f"GPS fix: lat={fix['latitude']:.6f} lon={fix['longitude']:.6f} source={fix['source']}"
+            print(message)
             maybe_update_time(fix, time_threshold_sec, allow_sync)
             maybe_update_location(fix, location_threshold_m, allow_location)
-            write_state(fix)
+            write_state("fix", message, fix)
             time.sleep(interval_sec)
         except Exception as exc:
-            print(f"GPS service failure: {exc}", file=sys.stderr)
+            message = f"GPS service failure: {exc}"
+            print(message, file=sys.stderr)
+            write_state("error", message)
             time.sleep(ERROR_SLEEP_SEC)
 
 

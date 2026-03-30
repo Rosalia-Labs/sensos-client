@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+set -euo pipefail
+
+SCRIPT_FILE="$(realpath "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_FILE}")" && pwd)"
+
+resolve_overlay_root() {
+    local -a candidates=()
+    local candidate
+
+    if [[ -n "${SENSOS_CLIENT_ROOT:-}" ]]; then
+        candidates+=("${SENSOS_CLIENT_ROOT}")
+    fi
+
+    candidates+=(
+        "/sensos"
+        "$(cd "${SCRIPT_DIR}/.." && pwd)"
+    )
+
+    for candidate in "${candidates[@]}"; do
+        [[ -f "${candidate}/libexec/sensos-gps.py" ]] && {
+            printf '%s\n' "${candidate}"
+            return 0
+        }
+    done
+
+    printf '%s\n' "$(cd "${SCRIPT_DIR}/.." && pwd)"
+}
+
+CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-$(resolve_overlay_root)}"
+SERVICE_NAME="sensos-gps.service"
+CONFIG_FILE="${CLIENT_ROOT}/etc/gps.conf"
+LOCATION_FILE="${CLIENT_ROOT}/etc/location.conf"
+STATE_FILE="${CLIENT_ROOT}/data/microenv/gps-state.env"
+
+section() {
+    printf '\n== %s ==\n' "$1"
+}
+
+have_cmd() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+read_kv_value() {
+    local file_path="$1"
+    local key="$2"
+
+    [[ -f "${file_path}" ]] || return 1
+
+    awk -F= -v target="${key}" '$1 == target {sub(/^[^=]*=/, "", $0); print $0; exit}' "${file_path}"
+}
+
+status_summary() {
+    local enabled active interval updated_at last_fix_at status message freshness capture_state
+    local last_fix_latitude last_fix_longitude last_fix_source
+
+    enabled="unknown"
+    active="unknown"
+    interval="$(read_kv_value "${CONFIG_FILE}" "GPS_INTERVAL_SEC" 2>/dev/null || true)"
+    updated_at="$(read_kv_value "${STATE_FILE}" "UPDATED_AT" 2>/dev/null || true)"
+    last_fix_at="$(read_kv_value "${STATE_FILE}" "LAST_FIX_AT" 2>/dev/null || true)"
+    last_fix_latitude="$(read_kv_value "${STATE_FILE}" "LAST_FIX_LATITUDE" 2>/dev/null || true)"
+    last_fix_longitude="$(read_kv_value "${STATE_FILE}" "LAST_FIX_LONGITUDE" 2>/dev/null || true)"
+    last_fix_source="$(read_kv_value "${STATE_FILE}" "LAST_FIX_SOURCE" 2>/dev/null || true)"
+    status="$(read_kv_value "${STATE_FILE}" "STATUS" 2>/dev/null || true)"
+    message="$(read_kv_value "${STATE_FILE}" "MESSAGE" 2>/dev/null || true)"
+
+    if [[ -f "${CONFIG_FILE}" ]]; then
+        enabled="$(read_kv_value "${CONFIG_FILE}" "GPS_ENABLED" 2>/dev/null || true)"
+        [[ -n "${enabled}" ]] || enabled="unknown"
+    fi
+
+    if have_cmd systemctl; then
+        active="$(systemctl is-active "${SERVICE_NAME}" 2>/dev/null || true)"
+        [[ -n "${active}" ]] || active="unknown"
+    fi
+
+    freshness="unknown"
+    if [[ -n "${interval}" && -n "${updated_at}" ]] && have_cmd python3; then
+        freshness="$(python3 - "${interval}" "${updated_at}" <<'PY'
+import datetime
+import sys
+
+interval = int(float(sys.argv[1]))
+updated_at = sys.argv[2]
+try:
+    updated = datetime.datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+except ValueError:
+    print("unknown")
+    raise SystemExit(0)
+
+age = (datetime.datetime.now(datetime.timezone.utc) - updated).total_seconds()
+threshold = max(interval * 2, 90)
+print("fresh" if age <= threshold else f"stale ({int(age)}s old)")
+PY
+)"
+    fi
+
+    capture_state="unknown"
+    case "${status}" in
+        fix)
+            capture_state="yes"
+            ;;
+        no_fix|error|starting)
+            capture_state="no"
+            ;;
+    esac
+
+    printf 'service_enabled=%s\n' "${enabled}"
+    printf 'service_active=%s\n' "${active}"
+    printf 'state_status=%s\n' "${status:-unknown}"
+    printf 'state_freshness=%s\n' "${freshness}"
+    printf 'capturing_fix=%s\n' "${capture_state}"
+    printf 'updated_at=%s\n' "${updated_at:-unknown}"
+    printf 'last_fix_at=%s\n' "${last_fix_at:-unknown}"
+    printf 'last_fix_latitude=%s\n' "${last_fix_latitude:-unknown}"
+    printf 'last_fix_longitude=%s\n' "${last_fix_longitude:-unknown}"
+    printf 'last_fix_source=%s\n' "${last_fix_source:-unknown}"
+    printf 'message=%s\n' "${message:-unknown}"
+}
+
+show_file_or_missing() {
+    local file_path="$1"
+    if [[ -f "${file_path}" ]]; then
+        cat "${file_path}"
+    else
+        printf 'missing: %s\n' "${file_path}"
+    fi
+}
+
+show_systemctl_state() {
+    if ! have_cmd systemctl; then
+        printf 'systemctl not found\n'
+        return
+    fi
+
+    systemctl is-enabled "${SERVICE_NAME}" 2>/dev/null || true
+    systemctl is-active "${SERVICE_NAME}" 2>/dev/null || true
+    systemctl status "${SERVICE_NAME}" --no-pager -n 20 2>/dev/null || true
+}
+
+show_recent_logs() {
+    if have_cmd journalctl; then
+        journalctl -u "${SERVICE_NAME}" -n 50 --no-pager 2>/dev/null || true
+    else
+        printf 'journalctl not found\n'
+    fi
+}
+
+main() {
+    section "Client Root"
+    printf '%s\n' "${CLIENT_ROOT}"
+
+    section "Summary"
+    status_summary
+
+    section "GPS Config"
+    show_file_or_missing "${CONFIG_FILE}"
+
+    section "GPS State"
+    show_file_or_missing "${STATE_FILE}"
+
+    section "Location Config"
+    show_file_or_missing "${LOCATION_FILE}"
+
+    section "Service State"
+    show_systemctl_state
+
+    section "Recent Logs"
+    show_recent_logs
+}
+
+main "$@"
