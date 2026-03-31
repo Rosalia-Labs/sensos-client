@@ -85,14 +85,21 @@ ensure_venv() {
     fi
 }
 
+required_venv_package() {
+    "${BIRDNET_VENV_DIR}/bin/python" -c 'import sys; print(f"python{sys.version_info.major}.{sys.version_info.minor}-venv")'
+}
+
 ensure_venv_pip() {
+    local venv_package
+
     if "${BIRDNET_VENV_DIR}/bin/python" -m pip --version >/dev/null 2>&1; then
         return
     fi
 
     log "bootstrapping pip in ${BIRDNET_VENV_DIR}"
+    venv_package="$(required_venv_package)"
     "${BIRDNET_VENV_DIR}/bin/python" -m ensurepip --upgrade >/dev/null 2>&1 || \
-        die "pip is unavailable in ${BIRDNET_VENV_DIR}; install the matching python venv package and retry"
+        die "pip is unavailable in ${BIRDNET_VENV_DIR}; install ${venv_package} and retry"
 }
 
 install_birdnet_requirements_if_needed() {
