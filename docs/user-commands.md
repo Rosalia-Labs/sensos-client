@@ -52,6 +52,7 @@ Typical use:
 ```sh
 ./install
 ./install --best-effort-retry
+./install --install-recommends
 ```
 
 Behavior:
@@ -60,6 +61,7 @@ Behavior:
 - confirms the target deploy root
 - runs the full setup pipeline with eager APT and Python dependency install
 - `--best-effort-retry` clears transient install artifacts such as managed venvs and install-state before rerunning setup; use it after a failed install if you pulled newer repo contents and want to avoid reusing partial Python/setup state
+- `--install-recommends` allows APT to install recommended packages during setup; the default install path still uses `--no-install-recommends`
 
 ### `./upgrade`
 

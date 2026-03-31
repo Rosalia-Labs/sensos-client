@@ -11,6 +11,7 @@ PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
 REQUIRED_PACKAGES_FILE="${CLIENT_ROOT}/setup/packages-required.txt"
 REMOVE_PACKAGES_FILE="${CLIENT_ROOT}/setup/packages-remove.txt"
 EAGER_APT="${SENSOS_EAGER_APT:-0}"
+INSTALL_RECOMMENDS="${SENSOS_APT_INSTALL_RECOMMENDS:-0}"
 
 log() {
     printf '[setup/01-packages] %s\n' "$*"
@@ -34,6 +35,16 @@ require_inputs() {
 run_preflight() {
     [[ "${SENSOS_PREFLIGHT_QUIET:-0}" == "1" ]] || log "running preflight"
     "${PRECHECK_SCRIPT}"
+}
+
+apt_install_args() {
+    if [[ "${INSTALL_RECOMMENDS}" == "1" ]]; then
+        printf '%s\n' "-y"
+        return
+    fi
+
+    printf '%s\n' "-y"
+    printf '%s\n' "--no-install-recommends"
 }
 
 read_package_file() {
@@ -151,6 +162,7 @@ collect_missing_required_packages() {
 
 install_required_packages() {
     local packages=("$@")
+    local apt_args=()
 
     [[ "${#packages[@]}" -gt 0 ]] || {
         log "all required packages already installed"
@@ -158,13 +170,15 @@ install_required_packages() {
     }
 
     log "installing missing required packages"
-    apt-get install -y --no-install-recommends "${packages[@]}"
+    mapfile -t apt_args < <(apt_install_args)
+    apt-get install "${apt_args[@]}" "${packages[@]}"
 }
 
 main() {
     local remove_packages=()
     local install_packages=()
     local required_packages=()
+    local apt_args=()
 
     require_root
     require_inputs
@@ -179,7 +193,8 @@ main() {
         remove_listed_packages "${remove_packages[@]}"
         mapfile -t required_packages < <(collect_resolved_packages_from_file "${REQUIRED_PACKAGES_FILE}")
         log "installing required packages"
-        apt-get install -y --no-install-recommends "${required_packages[@]}"
+        mapfile -t apt_args < <(apt_install_args)
+        apt-get install "${apt_args[@]}" "${required_packages[@]}"
         return
     fi
 
