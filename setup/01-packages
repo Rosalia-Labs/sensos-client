@@ -51,25 +51,48 @@ package_is_installed() {
     dpkg-query -W -f='${Status}\n' "${package_name}" 2>/dev/null | grep -Fxq 'install ok installed'
 }
 
+default_python3_version() {
+    command -v python3 >/dev/null 2>&1 || return 1
+    python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'
+}
+
+expand_package_candidate() {
+    local candidate="$1"
+    local python_version
+
+    case "${candidate}" in
+        @python3-versioned-venv)
+            python_version="$(default_python3_version)" || return 1
+            printf 'python%s-venv\n' "${python_version}"
+            ;;
+        *)
+            printf '%s\n' "${candidate}"
+            ;;
+    esac
+}
+
 resolve_package_spec() {
     local package_spec="$1"
     local candidate
     local -a package_candidates=()
+    local expanded_candidate
 
     IFS='|' read -r -a package_candidates <<< "${package_spec}"
 
     for candidate in "${package_candidates[@]}"; do
         [[ -n "${candidate}" ]] || continue
-        if package_is_installed "${candidate}"; then
-            printf '%s\n' "${candidate}"
+        expanded_candidate="$(expand_package_candidate "${candidate}")" || continue
+        if package_is_installed "${expanded_candidate}"; then
+            printf '%s\n' "${expanded_candidate}"
             return
         fi
     done
 
     for candidate in "${package_candidates[@]}"; do
         [[ -n "${candidate}" ]] || continue
-        if package_is_available "${candidate}"; then
-            printf '%s\n' "${candidate}"
+        expanded_candidate="$(expand_package_candidate "${candidate}")" || continue
+        if package_is_available "${expanded_candidate}"; then
+            printf '%s\n' "${expanded_candidate}"
             return
         fi
     done
