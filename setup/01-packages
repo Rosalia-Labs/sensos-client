@@ -41,9 +41,52 @@ read_package_file() {
     grep -Ev '^\s*(#|$)' "${package_file}" || true
 }
 
+package_is_available() {
+    local package_name="$1"
+    apt-cache show --no-all-versions "${package_name}" >/dev/null 2>&1
+}
+
 package_is_installed() {
     local package_name="$1"
     dpkg-query -W -f='${Status}\n' "${package_name}" 2>/dev/null | grep -Fxq 'install ok installed'
+}
+
+resolve_package_spec() {
+    local package_spec="$1"
+    local candidate
+    local -a package_candidates=()
+
+    IFS='|' read -r -a package_candidates <<< "${package_spec}"
+
+    for candidate in "${package_candidates[@]}"; do
+        [[ -n "${candidate}" ]] || continue
+        if package_is_installed "${candidate}"; then
+            printf '%s\n' "${candidate}"
+            return
+        fi
+    done
+
+    for candidate in "${package_candidates[@]}"; do
+        [[ -n "${candidate}" ]] || continue
+        if package_is_available "${candidate}"; then
+            printf '%s\n' "${candidate}"
+            return
+        fi
+    done
+
+    die "no installable package found for spec '${package_spec}'"
+}
+
+collect_resolved_packages_from_file() {
+    local package_file="$1"
+    local package_spec
+    local package_name
+
+    while IFS= read -r package_spec; do
+        [[ -n "${package_spec}" ]] || continue
+        package_name="$(resolve_package_spec "${package_spec}")"
+        printf '%s\n' "${package_name}"
+    done < <(read_package_file "${package_file}")
 }
 
 collect_installed_packages_from_file() {
@@ -56,7 +99,7 @@ collect_installed_packages_from_file() {
         if package_is_installed "${package_name}"; then
             packages+=("${package_name}")
         fi
-    done < <(read_package_file "${package_file}")
+    done < <(collect_resolved_packages_from_file "${package_file}")
 
     if [[ "${#packages[@]}" -gt 0 ]]; then
         printf '%s\n' "${packages[@]}"
@@ -85,7 +128,7 @@ collect_missing_required_packages() {
         if ! package_is_installed "${package_name}"; then
             packages+=("${package_name}")
         fi
-    done < <(read_package_file "${REQUIRED_PACKAGES_FILE}")
+    done < <(collect_resolved_packages_from_file "${REQUIRED_PACKAGES_FILE}")
 
     if [[ "${#packages[@]}" -gt 0 ]]; then
         printf '%s\n' "${packages[@]}"
@@ -107,6 +150,7 @@ install_required_packages() {
 main() {
     local remove_packages=()
     local install_packages=()
+    local required_packages=()
 
     require_root
     require_inputs
@@ -119,8 +163,9 @@ main() {
         log "eager APT mode enabled; refreshing package index"
         apt-get update
         remove_listed_packages "${remove_packages[@]}"
+        mapfile -t required_packages < <(collect_resolved_packages_from_file "${REQUIRED_PACKAGES_FILE}")
         log "installing required packages"
-        apt-get install -y --no-install-recommends $(read_package_file "${REQUIRED_PACKAGES_FILE}")
+        apt-get install -y --no-install-recommends "${required_packages[@]}"
         return
     fi
 
