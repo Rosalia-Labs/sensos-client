@@ -54,6 +54,10 @@ required_system_venv_package() {
     "${PYTHON_BIN}" -c 'import sys; print(f"python{sys.version_info.major}.{sys.version_info.minor}-venv")'
 }
 
+required_system_dev_package() {
+    "${PYTHON_BIN}" -c 'import sys; print(f"python{sys.version_info.major}.{sys.version_info.minor}-dev")'
+}
+
 python_can_create_venv() {
     local probe_dir
     probe_dir="$(mktemp -d "${DEPLOY_ROOT}/python/venv-probe.XXXXXX")"
@@ -122,18 +126,33 @@ requirement_declared() {
     grep -Eiq "^\s*${requirement_name}([[:space:]]*([<>=!~].*)?)?\s*$" "${REQUIREMENTS_FILE}"
 }
 
+python_headers_available() {
+    "${PYTHON_BIN}" -c 'import pathlib, sysconfig; include_dir = sysconfig.get_config_var("INCLUDEPY") or ""; print(int(pathlib.Path(include_dir, "Python.h").is_file()))' | grep -qx '1'
+}
+
 ensure_python_build_support() {
+    local dev_package
+
     if ! requirement_declared "lgpio"; then
         return
     fi
 
     if command -v swig >/dev/null 2>&1; then
+        :
+    else
+        log "installing swig for lgpio wheel build"
+        apt-get install -y swig
+        command -v swig >/dev/null 2>&1 || die "swig is still unavailable after apt install"
+    fi
+
+    if python_headers_available; then
         return
     fi
 
-    log "installing swig for lgpio wheel build"
-    apt-get install -y swig
-    command -v swig >/dev/null 2>&1 || die "swig is still unavailable after apt install"
+    dev_package="$(required_system_dev_package)"
+    log "installing ${dev_package} for Python C extension builds"
+    apt-get install -y "${dev_package}"
+    python_headers_available || die "Python headers are still unavailable after installing ${dev_package}"
 }
 
 requirements_digest() {
