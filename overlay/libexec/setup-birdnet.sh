@@ -85,6 +85,16 @@ ensure_venv() {
     fi
 }
 
+ensure_venv_pip() {
+    if "${BIRDNET_VENV_DIR}/bin/python" -m pip --version >/dev/null 2>&1; then
+        return
+    fi
+
+    log "bootstrapping pip in ${BIRDNET_VENV_DIR}"
+    "${BIRDNET_VENV_DIR}/bin/python" -m ensurepip --upgrade >/dev/null 2>&1 || \
+        die "pip is unavailable in ${BIRDNET_VENV_DIR}; install the matching python venv package and retry"
+}
+
 install_birdnet_requirements_if_needed() {
     local backend="$1"
     local current_digest
@@ -115,13 +125,13 @@ install_birdnet_requirements_if_needed() {
 
     if requirements_declared; then
         log "installing BirdNET Python dependencies from ${BIRDNET_REQUIREMENTS_FILE} with backend ${backend}"
-        "${BIRDNET_VENV_DIR}/bin/pip" install -r "${BIRDNET_REQUIREMENTS_FILE}" "${backend_package}"
+        "${BIRDNET_VENV_DIR}/bin/python" -m pip install -r "${BIRDNET_REQUIREMENTS_FILE}" "${backend_package}"
     else
         log "no BirdNET Python requirements declared; installing backend ${backend} only"
-        "${BIRDNET_VENV_DIR}/bin/pip" install "${backend_package}"
+        "${BIRDNET_VENV_DIR}/bin/python" -m pip install "${backend_package}"
     fi
 
-    "${BIRDNET_VENV_DIR}/bin/pip" uninstall -y "${other_package}" >/dev/null 2>&1 || true
+    "${BIRDNET_VENV_DIR}/bin/python" -m pip uninstall -y "${other_package}" >/dev/null 2>&1 || true
 
     printf '%s\n' "${current_digest}" >"${BIRDNET_STAMP_FILE}"
 }
@@ -156,6 +166,7 @@ main() {
 
     backend="$(birdnet_backend)"
     ensure_venv
+    ensure_venv_pip
     install_birdnet_requirements_if_needed "${backend}"
     set_permissions
     reconcile_service_state

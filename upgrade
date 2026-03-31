@@ -163,7 +163,7 @@ main() {
     elif have_deployed_client; then
         log "install-state missing at ${INSTALL_STATE_FILE}; continuing and expecting setup to repair it"
     else
-        die "no deployed client install-state found at ${INSTALL_STATE_FILE}; use ./install for first-time deployment"
+        die "no deployed client install-state found at ${INSTALL_STATE_FILE}; use ./install for first-time deployment. If a previous install failed and you only need newer repo contents, run 'git pull' manually and retry ./install instead of using ./upgrade"
     fi
 
     source_version="$(read_repo_version)"

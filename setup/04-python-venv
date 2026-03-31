@@ -65,6 +65,16 @@ ensure_venv() {
     fi
 }
 
+ensure_venv_pip() {
+    if "${VENV_DIR}/bin/python" -m pip --version >/dev/null 2>&1; then
+        return
+    fi
+
+    log "bootstrapping pip in ${VENV_DIR}"
+    "${VENV_DIR}/bin/python" -m ensurepip --upgrade >/dev/null 2>&1 || \
+        die "pip is unavailable in ${VENV_DIR}; install the matching python venv package and retry"
+}
+
 requirements_declared() {
     grep -Eq '^\s*[^#[:space:]]' "${REQUIREMENTS_FILE}"
 }
@@ -95,7 +105,7 @@ install_requirements_if_needed() {
     if [[ "${EAGER_PIP}" == "1" ]]; then
         if requirements_declared; then
             log "eager pip mode enabled; installing Python dependencies from ${REQUIREMENTS_FILE}"
-            "${VENV_DIR}/bin/pip" install -r "${REQUIREMENTS_FILE}"
+            "${VENV_DIR}/bin/python" -m pip install -r "${REQUIREMENTS_FILE}"
         else
             log "eager pip mode enabled but no Python requirements declared; skipping pip"
         fi
@@ -110,7 +120,7 @@ install_requirements_if_needed() {
 
     if requirements_declared; then
         log "installing Python dependencies from ${REQUIREMENTS_FILE}"
-        "${VENV_DIR}/bin/pip" install -r "${REQUIREMENTS_FILE}"
+        "${VENV_DIR}/bin/python" -m pip install -r "${REQUIREMENTS_FILE}"
     else
         log "no Python requirements declared; skipping pip"
     fi
@@ -133,6 +143,7 @@ main() {
     require_python
     ensure_python_layout
     ensure_venv
+    ensure_venv_pip
     install_requirements_if_needed
     set_venv_permissions
 }

@@ -75,6 +75,8 @@ Behavior:
 
 - in normal mode, it must be run from a clean git worktree
 - in normal mode, the current branch must have an upstream
+- only use it for a machine that already has a successful SensOS install
+- if `./install` failed and you just need newer repo contents before retrying, run `git pull` manually and then rerun `./install`; do not use `./upgrade` as install recovery
 - runs migrations between installed and repo versions
 - reruns setup after pull
 - `--force-package-updates` forces both APT metadata/package reconciliation and Python dependency reinstall
