@@ -105,6 +105,16 @@ The script forwards host port `2222` to guest SSH:
 ssh -p 2222 <user>@127.0.0.1
 ```
 
+You can add extra host port forwards with `SENSOS_QEMU_EXTRA_HOST_FWD`. Use a
+comma-separated list of raw QEMU `hostfwd` rules, for example:
+
+```bash
+SENSOS_QEMU_EXTRA_HOST_FWD='tcp:0.0.0.0:8765-:8765' test/qemu/run-debian-trixie-arm64 run
+```
+
+That is useful when running two disposable VMs and you need one VM to expose a
+service to the host so the other VM can reach it through `10.0.2.2`.
+
 With QEMU user networking, the guest can usually reach macOS-hosted services at:
 
 ```text
@@ -128,6 +138,21 @@ Then inside the guest:
 
 ```bash
 config-network --config-server 10.0.2.2 --network testing
+```
+
+If the config server is another QEMU guest started by the helper, launch that
+server VM with an extra forward first, for example:
+
+```bash
+SENSOS_QEMU_SSH_PORT=2223 \
+SENSOS_QEMU_EXTRA_HOST_FWD='tcp:0.0.0.0:18765-:8765' \
+test/qemu/run-debian-trixie-arm64 run
+```
+
+Then the client VM can still use:
+
+```bash
+config-network --config-server 10.0.2.2 --port 18765 --network testing
 ```
 
 After install, run the deployed config commands as `sensos-admin`, for example:

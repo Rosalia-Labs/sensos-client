@@ -18,6 +18,7 @@ FIRMWARE_VARS="${SENSOS_QEMU_FIRMWARE_VARS:-${IMAGE_DIR}/edk2-arm64-vars.fd}"
 DATA_IMAGE="${SENSOS_QEMU_DATA_IMAGE:-${IMAGE_DIR}/debian-trixie-arm64-data.qcow2}"
 
 SSH_FORWARD_PORT="${SENSOS_QEMU_SSH_PORT:-2222}"
+EXTRA_HOST_FWD="${SENSOS_QEMU_EXTRA_HOST_FWD:-}"
 MEMORY_MB="${SENSOS_QEMU_MEMORY_MB:-4096}"
 CPU_COUNT="${SENSOS_QEMU_CPU_COUNT:-4}"
 DISK_SIZE="${SENSOS_QEMU_DISK_SIZE:-32G}"
@@ -53,6 +54,7 @@ Environment overrides:
   SENSOS_QEMU_FIRMWARE_VARS
   SENSOS_QEMU_DATA_IMAGE
   SENSOS_QEMU_SSH_PORT
+  SENSOS_QEMU_EXTRA_HOST_FWD
   SENSOS_QEMU_MEMORY_MB
   SENSOS_QEMU_CPU_COUNT
   SENSOS_QEMU_DISK_SIZE
@@ -144,10 +146,29 @@ Artifact root: ${ARTIFACT_ROOT}
 Base image:    ${BASE_IMAGE}
 Data image:    ${DATA_IMAGE}
 SSH forward:   ssh -p ${SSH_FORWARD_PORT} <user>@127.0.0.1
+Extra forwards: ${EXTRA_HOST_FWD:-<none>}
 Host access:   guest can reach macOS services at 10.0.2.2
 Repo path:     ${REPO_ROOT}
 
 EOF
+}
+
+build_netdev_arg() {
+    local netdev_arg
+    local forward_spec
+    local -a forward_specs=()
+
+    netdev_arg="user,id=net0,hostfwd=tcp:127.0.0.1:${SSH_FORWARD_PORT}-:22"
+
+    if [[ -n "${EXTRA_HOST_FWD}" ]]; then
+        IFS=',' read -r -a forward_specs <<< "${EXTRA_HOST_FWD}"
+        for forward_spec in "${forward_specs[@]}"; do
+            [[ -n "${forward_spec}" ]] || continue
+            netdev_arg+=",hostfwd=${forward_spec}"
+        done
+    fi
+
+    printf '%s\n' "${netdev_arg}"
 }
 
 run_qemu() {
@@ -156,9 +177,11 @@ run_qemu() {
     local attach_data_image="${1:-yes}"
     shift
     local -a extra_drives=()
+    local netdev_arg
 
     log "launching QEMU in ${mode} mode"
     print_connection_hints
+    netdev_arg="$(build_netdev_arg)"
 
     if [[ "${attach_data_image}" == "yes" ]]; then
         ensure_data_image
@@ -177,7 +200,7 @@ run_qemu() {
         -device usb-tablet \
         -device virtio-rng-pci \
         -device virtio-net-pci,netdev=net0 \
-        -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${SSH_FORWARD_PORT}-:22" \
+        -netdev "${netdev_arg}" \
         -drive "if=pflash,format=raw,readonly=on,file=${FIRMWARE_CODE}" \
         -drive "if=pflash,format=raw,file=${FIRMWARE_VARS}" \
         ${extra_drives+"${extra_drives[@]}"} \
