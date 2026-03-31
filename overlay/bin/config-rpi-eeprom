@@ -7,26 +7,7 @@ SCRIPT_FILE="$(realpath "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_FILE}")" && pwd)"
 
 resolve_overlay_root() {
-    local -a candidates=()
-    local candidate
-
-    if [[ -n "${SENSOS_CLIENT_ROOT:-}" ]]; then
-        candidates+=("${SENSOS_CLIENT_ROOT}")
-    fi
-
-    candidates+=(
-        "$(cd "${SCRIPT_DIR}/.." && pwd)"
-        "/sensos"
-    )
-
-    for candidate in "${candidates[@]}"; do
-        [[ -f "${candidate}/libexec/parse-switches.sh" ]] && {
-            printf '%s\n' "${candidate}"
-            return 0
-        }
-    done
-
-    printf '%s\n' "$(cd "${SCRIPT_DIR}/.." && pwd)"
+    printf '%s\n' "${SENSOS_CLIENT_ROOT:-/sensos}"
 }
 
 OVERLAY_ROOT="$(resolve_overlay_root)"

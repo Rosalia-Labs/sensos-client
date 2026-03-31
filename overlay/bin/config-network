@@ -13,25 +13,7 @@ import psutil
 
 SCRIPT_FILE = os.path.realpath(__file__)
 SCRIPT_DIR = os.path.dirname(SCRIPT_FILE)
-DEFAULT_OVERLAY_ROOT = os.path.dirname(SCRIPT_DIR)
-
-
-def resolve_overlay_root() -> str:
-    candidates = []
-    env_root = os.environ.get("SENSOS_CLIENT_ROOT")
-    if env_root:
-        candidates.append(env_root)
-    candidates.extend([DEFAULT_OVERLAY_ROOT, "/sensos"])
-
-    for candidate in candidates:
-        utils_file = os.path.join(candidate, "libexec", "utils.py")
-        if os.path.isfile(utils_file):
-            return candidate
-
-    return DEFAULT_OVERLAY_ROOT
-
-
-OVERLAY_ROOT = resolve_overlay_root()
+OVERLAY_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", "/sensos")
 CLIENT_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", OVERLAY_ROOT)
 UTILS_FILE = os.path.join(OVERLAY_ROOT, "libexec", "utils.py")
 

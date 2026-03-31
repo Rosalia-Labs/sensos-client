@@ -11,10 +11,7 @@ import subprocess
 import configparser
 import argparse
 
-CLIENT_ROOT = os.environ.get(
-    "SENSOS_CLIENT_ROOT",
-    os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..")),
-)
+CLIENT_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", "/sensos")
 
 API_PASSWORD_FILE = os.path.join(CLIENT_ROOT, "keys", "api_password")
 DEFAULTS_CONF = os.path.join(CLIENT_ROOT, "etc", "defaults.conf")

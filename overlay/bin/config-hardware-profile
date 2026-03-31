@@ -22,19 +22,7 @@ SCRIPT_DIR = SCRIPT_FILE.parent
 
 
 def resolve_overlay_root() -> Path:
-    candidates: list[Path] = []
-    env_text = os.environ.get("SENSOS_CLIENT_ROOT")
-
-    if env_text:
-        candidates.append(Path(env_text))
-
-    candidates.extend([SCRIPT_DIR.parent, Path("/sensos")])
-
-    for candidate in candidates:
-        if (candidate / "profiles").is_dir():
-            return candidate
-
-    return SCRIPT_DIR.parent
+    return Path(os.environ.get("SENSOS_CLIENT_ROOT", "/sensos"))
 
 
 OVERLAY_ROOT = resolve_overlay_root()
