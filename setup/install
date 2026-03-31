@@ -4,6 +4,12 @@ set -euo pipefail
 
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
+BEST_EFFORT_RETRY="${SENSOS_BEST_EFFORT_RETRY:-0}"
+INSTALL_STATE_FILE="${DEPLOY_ROOT}/etc/install-state.env"
+SYSTEM_CONFIG_STATE_FILE="${DEPLOY_ROOT}/etc/system-config-state.env"
+MAIN_VENV_DIR="${DEPLOY_ROOT}/python/venv"
+BIRDNET_VENV_DIR="${DEPLOY_ROOT}/python/birdnet-venv"
 
 log() {
     printf '[setup/install] %s\n' "$*"
@@ -16,6 +22,32 @@ die() {
 
 require_root() {
     [[ "${EUID}" -eq 0 ]] || die "run as root"
+}
+
+purge_retry_artifacts() {
+    [[ "${BEST_EFFORT_RETRY}" == "1" ]] || return 0
+
+    log "best-effort retry enabled; clearing transient install artifacts"
+
+    if [[ -d "${MAIN_VENV_DIR}" ]]; then
+        rm -rf "${MAIN_VENV_DIR}"
+        log "removed ${MAIN_VENV_DIR}"
+    fi
+
+    if [[ -d "${BIRDNET_VENV_DIR}" ]]; then
+        rm -rf "${BIRDNET_VENV_DIR}"
+        log "removed ${BIRDNET_VENV_DIR}"
+    fi
+
+    if [[ -f "${INSTALL_STATE_FILE}" ]]; then
+        rm -f "${INSTALL_STATE_FILE}"
+        log "removed ${INSTALL_STATE_FILE}"
+    fi
+
+    if [[ -f "${SYSTEM_CONFIG_STATE_FILE}" ]]; then
+        rm -f "${SYSTEM_CONFIG_STATE_FILE}"
+        log "removed ${SYSTEM_CONFIG_STATE_FILE}"
+    fi
 }
 
 run_step() {
@@ -31,6 +63,7 @@ main() {
 
     require_root
     export SENSOS_PREFLIGHT_QUIET=1
+    purge_retry_artifacts
 
     while IFS= read -r step_path; do
         run_step "${step_path}"
