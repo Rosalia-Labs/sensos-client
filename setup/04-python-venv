@@ -50,6 +50,37 @@ require_python() {
     command -v "${PYTHON_BIN}" >/dev/null 2>&1 || die "missing ${PYTHON_BIN}; run setup/01-packages first"
 }
 
+required_system_venv_package() {
+    "${PYTHON_BIN}" -c 'import sys; print(f"python{sys.version_info.major}.{sys.version_info.minor}-venv")'
+}
+
+python_can_create_venv() {
+    local probe_dir
+    probe_dir="$(mktemp -d "${DEPLOY_ROOT}/python/venv-probe.XXXXXX")"
+
+    if "${PYTHON_BIN}" -m venv "${probe_dir}" >/dev/null 2>&1; then
+        rm -rf "${probe_dir}"
+        return 0
+    fi
+
+    rm -rf "${probe_dir}"
+    return 1
+}
+
+ensure_system_venv_support() {
+    local venv_package
+
+    if python_can_create_venv; then
+        return
+    fi
+
+    venv_package="$(required_system_venv_package)"
+    log "installing ${venv_package} so ${PYTHON_BIN} can create virtual environments"
+    apt-get install -y "${venv_package}"
+
+    python_can_create_venv || die "${PYTHON_BIN} still cannot create a virtual environment after installing ${venv_package}"
+}
+
 ensure_python_layout() {
     install -d "${DEPLOY_ROOT}/python"
 }
@@ -149,6 +180,7 @@ main() {
     require_identity
     require_python
     ensure_python_layout
+    ensure_system_venv_support
     ensure_venv
     ensure_venv_pip
     install_requirements_if_needed
