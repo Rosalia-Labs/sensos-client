@@ -63,6 +63,15 @@ def systemctl(*args: str) -> None:
         raise SystemExit(result.returncode)
 
 
+def install_optional_python_dependencies() -> None:
+    helper = os.path.join(CLIENT_ROOT, "libexec", "setup-gps-python.sh")
+    if not os.path.isfile(helper):
+        raise SystemExit(f"ERROR: missing GPS setup helper at {helper}")
+    result = subprocess.run(["sudo", helper], check=False)
+    if result.returncode != 0:
+        raise SystemExit(result.returncode)
+
+
 def main() -> int:
     require_sensos_admin()
     arg_defs = [
@@ -107,6 +116,8 @@ def main() -> int:
     )
     write_file(CONFIG_PATH, content, mode=0o664, user="sensos-admin", group="sensos-data")
     print(f"Wrote GPS config to {CONFIG_PATH}")
+
+    install_optional_python_dependencies()
 
     subprocess.run(["sudo", "systemctl", "daemon-reload"], check=False)
     if str(args.enable_service).lower() in {"1", "true", "yes", "on"}:

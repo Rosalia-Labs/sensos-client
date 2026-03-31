@@ -17,6 +17,8 @@ OVERLAY_LIBEXEC_DIR="${OVERLAY_ROOT}/libexec"
 OVERLAY_PROFILES_DIR="${OVERLAY_ROOT}/profiles"
 OVERLAY_SYSTEMD_DIR="${OVERLAY_ROOT}/systemd"
 BIRDNET_REQUIREMENTS_SOURCE="${CLIENT_ROOT}/python/requirements-birdnet.txt"
+I2C_REQUIREMENTS_SOURCE="${CLIENT_ROOT}/python/requirements-i2c.txt"
+GPS_REQUIREMENTS_SOURCE="${CLIENT_ROOT}/python/requirements-gps.txt"
 
 DEPLOY_ETC_DIR="${DEPLOY_ROOT}/etc"
 DEPLOY_LIBEXEC_DIR="${DEPLOY_ROOT}/libexec"
@@ -69,6 +71,24 @@ install_birdnet_requirements() {
         log "installed ${DEPLOY_ETC_DIR}/birdnet-requirements.txt from ${BIRDNET_REQUIREMENTS_SOURCE}"
     else
         log "no BirdNET requirements file found at ${BIRDNET_REQUIREMENTS_SOURCE}; skipping"
+    fi
+}
+
+install_i2c_requirements() {
+    if [[ -f "${I2C_REQUIREMENTS_SOURCE}" ]]; then
+        install -m 0644 "${I2C_REQUIREMENTS_SOURCE}" "${DEPLOY_ETC_DIR}/i2c-requirements.txt"
+        log "installed ${DEPLOY_ETC_DIR}/i2c-requirements.txt from ${I2C_REQUIREMENTS_SOURCE}"
+    else
+        log "no I2C requirements file found at ${I2C_REQUIREMENTS_SOURCE}; skipping"
+    fi
+}
+
+install_gps_requirements() {
+    if [[ -f "${GPS_REQUIREMENTS_SOURCE}" ]]; then
+        install -m 0644 "${GPS_REQUIREMENTS_SOURCE}" "${DEPLOY_ETC_DIR}/gps-requirements.txt"
+        log "installed ${DEPLOY_ETC_DIR}/gps-requirements.txt from ${GPS_REQUIREMENTS_SOURCE}"
+    else
+        log "no GPS requirements file found at ${GPS_REQUIREMENTS_SOURCE}; skipping"
     fi
 }
 
@@ -165,6 +185,8 @@ main() {
     install_dir_entries "${OVERLAY_LIBEXEC_DIR}" "${DEPLOY_LIBEXEC_DIR}" 0755 yes
     install_dir_entries "${OVERLAY_PROFILES_DIR}" "${DEPLOY_PROFILES_DIR}" 0644 yes
     install_birdnet_requirements
+    install_i2c_requirements
+    install_gps_requirements
     remove_legacy_symlinks
     install_host_entries "${OVERLAY_BIN_DIR}" "${HOST_BIN_DIR}" 0755
     install_host_entries "${OVERLAY_SYSTEMD_DIR}" "${HOST_SYSTEMD_DIR}" 0644

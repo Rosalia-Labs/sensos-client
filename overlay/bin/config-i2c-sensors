@@ -108,6 +108,9 @@ mkdir -p "${output_dir}"
 sudo chown -R sensos-admin:sensos-data "${output_dir}"
 sudo chmod -R 2775 "${output_dir}"
 
+echo "Ensuring optional I2C Python dependencies are installed..."
+sudo "${CLIENT_ROOT}/libexec/setup-i2c-python.sh"
+
 if [[ "$enable_service" == "true" ]]; then
     echo "Enabling sensos-read-i2c.service..."
     sudo systemctl daemon-reload

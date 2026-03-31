@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
 DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
-BEST_EFFORT_RETRY="${SENSOS_BEST_EFFORT_RETRY:-0}"
+RESTART_INSTALL="${SENSOS_RESTART_INSTALL:-0}"
 INSTALL_STATE_FILE="${DEPLOY_ROOT}/etc/install-state.env"
 SYSTEM_CONFIG_STATE_FILE="${DEPLOY_ROOT}/etc/system-config-state.env"
 MAIN_VENV_DIR="${DEPLOY_ROOT}/python/venv"
@@ -25,9 +25,9 @@ require_root() {
 }
 
 purge_retry_artifacts() {
-    [[ "${BEST_EFFORT_RETRY}" == "1" ]] || return 0
+    [[ "${RESTART_INSTALL}" == "1" ]] || return 0
 
-    log "best-effort retry enabled; clearing transient install artifacts"
+    log "restart mode enabled; clearing transient install artifacts"
 
     if [[ -d "${MAIN_VENV_DIR}" ]]; then
         rm -rf "${MAIN_VENV_DIR}"

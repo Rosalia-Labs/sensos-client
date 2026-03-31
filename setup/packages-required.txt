@@ -2,14 +2,10 @@ build-essential
 alsa-utils
 chrony
 gpiod|libgpiod-tools
-gpsd
-gpsd-clients
-i2c-tools
 iftop
 jq
 libffi-dev
 libgpiod-dev|libgpiod2
-liblgpio-dev|lgpio
 libssl-dev
 libusb-1.0-0
 libftdi1-2

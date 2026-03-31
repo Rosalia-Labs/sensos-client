@@ -9,7 +9,7 @@ DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
 SETUP_SCRIPT="${REPO_ROOT}/setup/install"
 PREFLIGHT_SCRIPT="${REPO_ROOT}/setup/00-preflight"
 INSTALL_STATE_FILE="${DEPLOY_ROOT}/etc/install-state.env"
-BEST_EFFORT_RETRY=0
+RESTART_INSTALL=0
 INSTALL_RECOMMENDS=0
 
 log() {
@@ -29,7 +29,7 @@ Configure the current machine as a SensOS client.
 
 Options:
   --help             Show this help and exit
-  --best-effort-retry
+  --restart
                      Clear transient install artifacts before rerunning setup
   --install-recommends
                      Allow APT to install recommended packages during setup
@@ -39,8 +39,8 @@ EOF
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --best-effort-retry)
-                BEST_EFFORT_RETRY=1
+            --restart)
+                RESTART_INSTALL=1
                 ;;
             --install-recommends)
                 INSTALL_RECOMMENDS=1
@@ -76,7 +76,7 @@ sudo_run() {
         "SENSOS_ALLOW_FRESH_INSTALL=1" \
         "SENSOS_EAGER_APT=1" \
         "SENSOS_EAGER_PIP=1" \
-        "SENSOS_BEST_EFFORT_RETRY=${BEST_EFFORT_RETRY}" \
+        "SENSOS_RESTART_INSTALL=${RESTART_INSTALL}" \
         "SENSOS_APT_INSTALL_RECOMMENDS=${INSTALL_RECOMMENDS}" \
         "$@"
 }

@@ -51,7 +51,7 @@ Typical use:
 
 ```sh
 ./install
-./install --best-effort-retry
+./install --restart
 ./install --install-recommends
 ```
 
@@ -60,7 +60,7 @@ Behavior:
 - must be run as the bootstrap user, not `root`
 - confirms the target deploy root
 - runs the full setup pipeline with eager APT and Python dependency install
-- `--best-effort-retry` clears transient install artifacts such as managed venvs and install-state before rerunning setup; use it after a failed install if you pulled newer repo contents and want to avoid reusing partial Python/setup state
+- `--restart` clears transient install artifacts such as managed venvs and install-state before rerunning setup; use it after a failed install if you pulled newer repo contents and want to avoid reusing partial Python/setup state
 - `--install-recommends` allows APT to install recommended packages during setup; the default install path still uses `--no-install-recommends`
 
 ### `./upgrade`
@@ -293,6 +293,7 @@ Behavior:
 
 - writes `/sensos/etc/i2c-sensors.conf`
 - ensures `/sensos/data/microenv` exists with shared permissions
+- installs optional I2C/GPIO Python dependencies on demand before enabling the reader service
 - warns if time sync or location is missing
 
 ### `config-rpi-eeprom`
@@ -469,6 +470,7 @@ config-gps --time-conflict-sec 300
 Behavior:
 
 - writes `/sensos/etc/gps.conf`
+- installs optional GPS Python dependencies on demand before enabling the GPS service
 - can update time and location automatically from GPS
 - when NTP does not appear healthy, a valid GPS fix becomes the active time source
 - reports a GPS/NTP time conflict instead of overriding a synchronized clock when the difference is too large
