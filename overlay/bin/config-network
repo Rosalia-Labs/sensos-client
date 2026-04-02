@@ -46,7 +46,8 @@ def parse_args():
 
     arg_defs = [
         (["--config-server"], {"help": "Configuration server hostname or IP (required)", "dest": "config_server"}),
-        (["--port"], {"help": "Server port (default: 8765)", "dest": "port", "type": int, "default": 8765}),
+        (["--port"], {"help": "Configuration server port used during initial setup (default: 8765)", "dest": "port", "type": int, "default": 8765}),
+        (["--config-port"], {"help": "Configuration server port to store for post-setup WireGuard access (defaults to --port)", "dest": "config_port", "type": int}),
         (["--network"], {"help": "Network name (required)", "dest": "network"}),
         (["--subnet"], {"help": "Subnet offset for WireGuard IP assignment (default: 1, i.e., x.x.1.1)", "dest": "subnet", "type": int, "default": 1}),
         (["--wg-endpoint"], {"help": "WireGuard endpoint as IP[:port] (optional override)", "dest": "wg_endpoint"}),
@@ -64,6 +65,8 @@ def parse_args():
         raise SystemExit("Error: --network is required and must be provided explicitly.")
 
     require_nonempty(args.network, "--network")
+    if args.config_port is None:
+        args.config_port = args.port
     return args
 
 
@@ -382,7 +385,7 @@ def write_client_settings(args, server_wg_ip, client_wg_ip, endpoint_ip, wg_port
     content = (
         f"SERVER_WG_IP={server_wg_ip}\n"
         f"CLIENT_WG_IP={client_wg_ip}\n"
-        f"SERVER_PORT={args.port}\n"
+        f"SERVER_PORT={args.config_port}\n"
         f"NETWORK_NAME={args.network}\n"
         f"WG_ENDPOINT_IP={endpoint_ip}\n"
         f"WG_ENDPOINT_PORT={wg_port}\n"

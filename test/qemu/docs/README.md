@@ -152,7 +152,7 @@ test/qemu/run-debian-trixie-arm64 run
 Then the client VM can still use:
 
 ```bash
-config-network --config-server 10.0.2.2 --port 18765 --network testing
+config-network --config-server 10.0.2.2 --port 18765 --config-port 8765 --network testing
 ```
 
 After install, run the deployed config commands as `sensos-admin`, for example:

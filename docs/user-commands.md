@@ -116,6 +116,7 @@ Important flags from the source:
 
 - `--config-server`
 - `--port`
+- `--config-port`
 - `--network`
 - `--subnet`
 - `--wg-endpoint`
@@ -129,11 +130,13 @@ Typical use:
 ```sh
 config-network --config-server <server-ip-or-name> --network <network-name>
 config-network --config-server <server-ip-or-name> --network sensos --subnet 1
+config-network --config-server <server-ip-or-name> --port 18765 --config-port 8765 --network sensos
 ```
 
 Main gotchas:
 
 - `--config-server` is only the server address reachable from the current setup environment.
+- `--port` is the port `config-network` uses during initial enrollment; `--config-port` is the port saved into `/sensos/etc/network.conf` for later WireGuard-side API calls such as `config-location` and status updates
 - the server will usually return a `wg_endpoint` suitable for the chosen network, but if the deployed device must reach a different public or routed endpoint, you need to override it with `--wg-endpoint`
 - `--network` is now required and must be supplied explicitly for every enrollment
 - `--subnet` is normally not required for device enrollment
