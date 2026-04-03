@@ -1,0 +1,231 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import platform
+import socket
+import subprocess
+import sys
+from pathlib import Path
+
+SCRIPT_FILE = Path(__file__).resolve()
+SCRIPT_DIR = SCRIPT_FILE.parent
+OVERLAY_ROOT = Path(os.environ.get("SENSOS_CLIENT_ROOT", "/sensos"))
+UTILS_FILE = OVERLAY_ROOT / "libexec" / "utils.py"
+
+if not UTILS_FILE.is_file():
+    raise RuntimeError(f"Missing utils.py at {UTILS_FILE}")
+
+UTILS_SPEC = importlib.util.spec_from_file_location("sensos_overlay_utils", UTILS_FILE)
+UTILS_MODULE = importlib.util.module_from_spec(UTILS_SPEC)
+assert UTILS_SPEC.loader is not None
+UTILS_SPEC.loader.exec_module(UTILS_MODULE)
+
+for name in dir(UTILS_MODULE):
+    if not name.startswith("_"):
+        globals()[name] = getattr(UTILS_MODULE, name)
+
+REQUESTS = None
+
+
+def http_requests():
+    global REQUESTS
+    if REQUESTS is None:
+        REQUESTS = require_requests()
+    return REQUESTS
+
+
+def read_first_line(path: str) -> str | None:
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            return handle.readline().strip() or None
+    except OSError:
+        return None
+
+
+def run_json(cmd: list[str], default):
+    try:
+        output = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL)
+        return json.loads(output)
+    except Exception:
+        return default
+
+
+def run_lines(cmd: list[str]) -> list[str]:
+    try:
+        output = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL)
+    except Exception:
+        return []
+    return [line.strip() for line in output.splitlines() if line.strip()]
+
+
+def collect_model() -> str:
+    return (
+        read_first_line("/proc/device-tree/model")
+        or read_first_line("/sys/devices/virtual/dmi/id/product_name")
+        or platform.machine()
+    )
+
+
+def collect_cpu() -> dict:
+    model_name = None
+    hardware = None
+    serial = None
+    try:
+        with open("/proc/cpuinfo", "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if ":" not in line:
+                    continue
+                key, value = [part.strip() for part in line.split(":", 1)]
+                if key == "model name" and model_name is None:
+                    model_name = value
+                elif key == "Hardware" and hardware is None:
+                    hardware = value
+                elif key == "Serial" and serial is None:
+                    serial = value
+    except OSError:
+        pass
+    return {
+        "architecture": platform.machine(),
+        "model_name": model_name,
+        "hardware": hardware,
+        "serial": serial,
+        "logical_cpus": os.cpu_count(),
+    }
+
+
+def collect_firmware() -> dict:
+    return {
+        "bios_vendor": read_first_line("/sys/devices/virtual/dmi/id/bios_vendor"),
+        "bios_version": read_first_line("/sys/devices/virtual/dmi/id/bios_version"),
+        "board_name": read_first_line("/sys/devices/virtual/dmi/id/board_name"),
+        "board_vendor": read_first_line("/sys/devices/virtual/dmi/id/board_vendor"),
+    }
+
+
+def collect_memory() -> dict:
+    mem_total_kb = None
+    mem_available_kb = None
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("MemTotal:"):
+                    mem_total_kb = int(line.split()[1])
+                elif line.startswith("MemAvailable:"):
+                    mem_available_kb = int(line.split()[1])
+    except OSError:
+        pass
+    return {
+        "mem_total_mb": mem_total_kb // 1024 if mem_total_kb is not None else None,
+        "mem_available_mb": mem_available_kb // 1024 if mem_available_kb is not None else None,
+    }
+
+
+def collect_disks() -> list[dict]:
+    data = run_json(["lsblk", "-J", "-b", "-o", "NAME,PATH,SIZE,MODEL,TYPE,ROTA,TRAN"], {"blockdevices": []})
+    disks = []
+    for device in data.get("blockdevices", []):
+        if device.get("type") != "disk":
+            continue
+        disks.append(
+            {
+                "name": device.get("name"),
+                "path": device.get("path"),
+                "size_bytes": device.get("size"),
+                "model": device.get("model"),
+                "transport": device.get("tran"),
+                "rotational": device.get("rota"),
+            }
+        )
+    return disks
+
+
+def collect_usb_devices() -> list[dict]:
+    devices = []
+    for line in run_lines(["lsusb"]):
+        parts = line.split(None, 6)
+        devices.append(
+            {
+                "raw": line,
+                "bus": parts[1] if len(parts) > 1 else None,
+                "device": parts[3].rstrip(":") if len(parts) > 3 else None,
+                "id": parts[5] if len(parts) > 5 else None,
+                "description": parts[6] if len(parts) > 6 else None,
+            }
+        )
+    return devices
+
+
+def collect_network_interfaces() -> list[dict]:
+    data = run_json(["ip", "-json", "addr", "show"], [])
+    interfaces = []
+    for entry in data:
+        addresses = entry.get("addr_info", [])
+        interfaces.append(
+            {
+                "name": entry.get("ifname"),
+                "mac_address": entry.get("address"),
+                "operstate": entry.get("operstate"),
+                "mtu": entry.get("mtu"),
+                "ipv4": [addr.get("local") for addr in addresses if addr.get("family") == "inet"],
+                "ipv6": [addr.get("local") for addr in addresses if addr.get("family") == "inet6"],
+            }
+        )
+    return interfaces
+
+
+def build_hardware_profile_payload(wg_ip: str, hostname: str | None = None) -> dict:
+    return {
+        "wg_ip": wg_ip,
+        "hostname": hostname or socket.gethostname(),
+        "model": collect_model(),
+        "kernel_version": platform.release(),
+        "cpu": collect_cpu(),
+        "firmware": collect_firmware(),
+        "memory": collect_memory(),
+        "disks": collect_disks(),
+        "usb_devices": collect_usb_devices(),
+        "network_interfaces": collect_network_interfaces(),
+    }
+
+
+def upload_hardware_profile(server_ip: str, port: str, api_password: str, payload: dict):
+    url = f"http://{server_ip}:{port}/upload-hardware-profile"
+    headers = {
+        **build_basic_auth_header(api_password),
+        "Content-Type": "application/json",
+    }
+    return http_requests().post(url, headers=headers, json=payload, timeout=15)
+
+
+def main() -> int:
+    config = read_network_conf()
+    server_ip = config.get("SERVER_WG_IP")
+    port = config.get("SERVER_PORT") or DEFAULT_PORT
+    wg_ip = config.get("CLIENT_WG_IP")
+
+    require_nonempty(server_ip, "SERVER_WG_IP")
+    require_nonempty(port, "SERVER_PORT")
+    require_nonempty(wg_ip, "CLIENT_WG_IP")
+
+    api_password = read_api_password()
+    if not api_password:
+        raise SystemExit("Error: client API password required to upload hardware profile.")
+
+    payload = build_hardware_profile_payload(wg_ip)
+    response = upload_hardware_profile(server_ip, port, api_password, payload)
+    if response.status_code != 200:
+        raise SystemExit(
+            f"Error: upload-hardware-profile failed: {response.status_code} {response.text}"
+        )
+
+    print(f"✅ Hardware profile uploaded for {wg_ip}.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

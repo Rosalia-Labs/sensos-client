@@ -10,6 +10,7 @@ import tempfile
 import subprocess
 import configparser
 import argparse
+from urllib.parse import urlencode
 
 CLIENT_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", "/sensos")
 CLIENT_API_USERNAME = "sensos"
@@ -19,6 +20,7 @@ DEFAULTS_CONF = os.path.join(CLIENT_ROOT, "etc", "defaults.conf")
 NETWORK_CONF = os.path.join(CLIENT_ROOT, "etc", "network.conf")
 LOG_DIR = os.path.join(CLIENT_ROOT, "log")
 DEFAULT_PORT = "8765"
+HEALTHZ_PATH = "/healthz"
 
 
 def require_requests():
@@ -113,6 +115,47 @@ def get_basic_auth(api_password, username=CLIENT_API_USERNAME):
     return base64.b64encode(f"{username}:{api_password}".encode()).decode()
 
 
+def build_basic_auth_header(api_password, username=CLIENT_API_USERNAME):
+    return {"Authorization": f"Basic {get_basic_auth(api_password, username=username)}"}
+
+
+def healthz_url(config_server, port):
+    return f"http://{config_server}:{port}{HEALTHZ_PATH}"
+
+
+def network_info_url(config_server, port, network_name):
+    query = urlencode({"network_name": network_name})
+    return f"http://{config_server}:{port}/get-network-info?{query}"
+
+
+def get_server_health(config_server, port, timeout=3):
+    requests = require_requests()
+    url = healthz_url(config_server, port)
+    try:
+        response = requests.get(url, timeout=timeout)
+        payload = {}
+        try:
+            payload = response.json()
+        except Exception:
+            payload = {}
+
+        status = payload.get("status")
+        if response.status_code == 200 and status == "ok":
+            return {"reachable": True, "ready": True, "status": status}
+        if response.status_code == 503 and status == "starting":
+            return {"reachable": True, "ready": False, "status": status}
+        return {
+            "reachable": True,
+            "ready": response.status_code == 200,
+            "status": status or f"http-{response.status_code}",
+        }
+    except requests.exceptions.ConnectionError:
+        return {"reachable": False, "ready": False, "status": "unreachable"}
+    except Exception as e:
+        print(f"⚠️ Unexpected error when checking server health: {e}", file=sys.stderr)
+        return {"reachable": False, "ready": False, "status": "error"}
+
+
 def load_defaults(*sections, path=DEFAULTS_CONF):
     defaults = {}
     if not os.path.exists(path):
@@ -165,54 +208,53 @@ def read_api_password():
     return read_file(API_PASSWORD_FILE)
 
 
-def validate_api_password(config_server, port, api_password):
+def validate_api_password(config_server, port, api_password, network_name=None):
     requests = require_requests()
-    url = f"http://{config_server}:{port}/"
-    headers = {"Authorization": f"Basic {get_basic_auth(api_password)}"}
+    probe_network_name = network_name or "__sensos_auth_probe__"
+    url = network_info_url(config_server, port, probe_network_name)
+    headers = build_basic_auth_header(api_password)
     try:
         response = requests.get(url, headers=headers, timeout=5)
-        return response.status_code == 200
+        return response.status_code in (200, 404)
     except Exception as e:
         print(f"❌ Error testing client API password: {e}", file=sys.stderr)
         return False
 
 
-def get_api_password(config_server, port):
+def fetch_network_info(config_server, port, api_password, network_name, timeout=5):
     requests = require_requests()
+    headers = build_basic_auth_header(api_password)
+    url = network_info_url(config_server, port, network_name)
+    return requests.get(url, headers=headers, timeout=timeout)
 
-    def check_server_reachable():
-        try:
-            url = f"http://{config_server}:{port}/"
-            requests.get(url, timeout=3)
-            return True
-        except requests.exceptions.ConnectionError:
-            return False
-        except Exception as e:
-            print(
-                f"⚠️ Unexpected error when checking server availability: {e}",
-                file=sys.stderr,
-            )
-            return False
 
-    if not check_server_reachable():
+def get_api_password(config_server, port, network_name=None):
+    health = get_server_health(config_server, port)
+    if not health["reachable"]:
         print(
             f"❌ Cannot reach configuration server at {config_server}:{port}.",
             file=sys.stderr,
         )
         print("📡 Is the device online? Is the server address correct?")
         return None
+    if not health["ready"]:
+        print(
+            f"❌ Configuration server at {config_server}:{port} is not ready yet ({health['status']}).",
+            file=sys.stderr,
+        )
+        return None
     tries = 3
     for attempt in range(tries):
         if os.path.exists(API_PASSWORD_FILE):
             stored_password = read_file(API_PASSWORD_FILE)
             print("Testing stored client API password...")
-            if validate_api_password(config_server, port, stored_password):
+            if validate_api_password(config_server, port, stored_password, network_name=network_name):
                 print("✅ Client API password from file is valid.")
                 return stored_password
             else:
                 print("⚠️ Stored client API password is invalid.", file=sys.stderr)
         api_password = input("🔑 Enter client API password: ").strip()
-        if validate_api_password(config_server, port, api_password):
+        if validate_api_password(config_server, port, api_password, network_name=network_name):
             if not api_password:
                 print("❌ Error: client API password is empty. Not saving.", file=sys.stderr)
                 continue

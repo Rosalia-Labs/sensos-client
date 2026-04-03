@@ -6,10 +6,8 @@ import os
 import sys
 import pwd
 import importlib.util
-import requests
 import datetime
 import shutil
-import psutil
 
 SCRIPT_FILE = os.path.realpath(__file__)
 SCRIPT_DIR = os.path.dirname(SCRIPT_FILE)
@@ -34,6 +32,14 @@ SENSOS_ADMIN_HOME = "/home/sensos-admin"
 SENSOS_ETC_DIR = os.path.join(CLIENT_ROOT, "etc")
 SENSOS_KEYS_DIR = os.path.join(CLIENT_ROOT, "keys")
 SENSOS_NET_CONF = os.path.join(SENSOS_ETC_DIR, "network.conf")
+REQUESTS = None
+
+
+def http_requests():
+    global REQUESTS
+    if REQUESTS is None:
+        REQUESTS = require_requests()
+    return REQUESTS
 
 
 def parse_args():
@@ -135,16 +141,27 @@ def register_peer(config_server, port, network_name, wg_public_key, api_password
     server_url = f"http://{config_server}:{port}/register-peer"
     print(f"📡 Registering device on network '{network_name}' with {server_url}...")
 
-    headers = {"Authorization": f"Basic {get_basic_auth(api_password)}"}
-    response = requests.post(
+    headers = build_basic_auth_header(api_password)
+    response = http_requests().post(
         server_url,
         json={"network_name": network_name, "subnet_offset": subnet, "note": note if note else None},
         headers=headers,
+        timeout=10,
     )
 
     print(f"Status Code: {response.status_code}")
     print(f"Response Text: {response.text}")
 
+    if response.status_code == 404:
+        sys.exit(
+            f"Error: network '{network_name}' does not exist on the server. "
+            "Create the network before enrolling this client."
+        )
+    if response.status_code == 409:
+        sys.exit(
+            f"Error: network '{network_name}' exists but is not ready yet on the server. "
+            "Wait for the server-side network to finish provisioning and retry."
+        )
     if response.status_code != 200:
         sys.exit(f"Error: register-peer failed: {response.text}")
 
@@ -153,15 +170,19 @@ def register_peer(config_server, port, network_name, wg_public_key, api_password
     server_pubkey = data.get("wg_public_key")
     wg_public_ip = data.get("wg_public_ip")
     wg_port = data.get("wg_port")
+    peer_uuid = data.get("peer_uuid")
 
-    if not all([wg_ip, server_pubkey, wg_public_ip, wg_port]):
-        sys.exit("Error: incomplete register-peer response (wg_ip/server_pubkey/wg_public_ip/wg_port).")
+    if not all([wg_ip, server_pubkey, wg_public_ip, wg_port, peer_uuid]):
+        sys.exit(
+            "Error: incomplete register-peer response "
+            "(wg_ip/wg_public_key/wg_public_ip/wg_port/peer_uuid)."
+        )
 
     ip_parts = wg_ip.split(".")
     hostname = f"{network_name}-{ip_parts[2]}-{ip_parts[3]}"
 
     register_wireguard_key(config_server, port, wg_ip, wg_public_key, api_password)
-    return wg_ip, hostname, server_pubkey, wg_public_ip, wg_port
+    return wg_ip, hostname, server_pubkey, wg_public_ip, int(wg_port), peer_uuid
 
 
 def register_wireguard_key(config_server, port, wg_ip, wg_public_key, api_password):
@@ -170,11 +191,12 @@ def register_wireguard_key(config_server, port, wg_ip, wg_public_key, api_passwo
     server_url = f"http://{config_server}:{port}/register-wireguard-key"
     print(f"🔑 Registering WireGuard public key with {server_url}...")
 
-    headers = {"Authorization": f"Basic {get_basic_auth(api_password)}"}
-    response = requests.post(
+    headers = build_basic_auth_header(api_password)
+    response = http_requests().post(
         server_url,
         json={"wg_ip": wg_ip, "wg_public_key": wg_public_key},
         headers=headers,
+        timeout=10,
     )
 
     if response.status_code != 200:
@@ -319,8 +341,8 @@ def exchange_ssh_keys(config_server, port, wg_ip, api_password):
         sys.exit("Error: incomplete SSH key data; aborting exchange.")
     server_url = f"http://{config_server}:{port}/exchange-ssh-keys"
     print(f"🔑 Registering SSH public key with {server_url}...")
-    headers = {"Authorization": f"Basic {get_basic_auth(api_password)}"}
-    response = requests.post(server_url, json=payload, headers=headers)
+    headers = build_basic_auth_header(api_password)
+    response = http_requests().post(server_url, json=payload, headers=headers, timeout=10)
     if response.status_code != 200:
         sys.exit(f"Error: exchange-ssh-keys failed: {response.text}")
     print(f"✅ SSH key registered for peer {wg_ip}.")
@@ -339,7 +361,7 @@ def configure_wireguard(args, api_password):
     if wg_public_key is None:
         sys.exit("Error: WireGuard key generation failed.")
 
-    wg_ip, hostname, server_pubkey, wg_public_ip, wg_port = register_peer(
+    wg_ip, hostname, server_pubkey, wg_public_ip, wg_port, peer_uuid = register_peer(
         args.config_server,
         args.port,
         args.network,
@@ -362,7 +384,7 @@ def configure_wireguard(args, api_password):
 
     write_wireguard_config(wg_ip, server_pubkey, wg_public_ip, wg_port, args.network, args.wg_keepalive)
     change_hostname(hostname)
-    return wg_ip, wg_public_ip, wg_port
+    return wg_ip, wg_public_ip, wg_port, peer_uuid
 
 
 def configure_ssh(args, api_password, wg_ip):
@@ -373,7 +395,7 @@ def configure_ssh(args, api_password, wg_ip):
         sys.exit("Error: no WG IP available; cannot exchange SSH keys.")
 
 
-def write_client_settings(args, server_wg_ip, client_wg_ip, endpoint_ip, wg_port):
+def write_client_settings(args, server_wg_ip, client_wg_ip, endpoint_ip, wg_port, peer_uuid=None):
     settings_file = os.path.join(SENSOS_ETC_DIR, "network.conf")
     require_dir(SENSOS_ETC_DIR, "SensOS etc directory")
     require_nonempty(server_wg_ip, "SERVER_WG_IP")
@@ -390,8 +412,31 @@ def write_client_settings(args, server_wg_ip, client_wg_ip, endpoint_ip, wg_port
         f"WG_ENDPOINT_IP={endpoint_ip}\n"
         f"WG_ENDPOINT_PORT={wg_port}\n"
     )
+    if peer_uuid:
+        content += f"PEER_UUID={peer_uuid}\n"
     write_file(settings_file, content, mode=0o644, user="sensos-admin")
     print(f"✅ Client network settings written to {settings_file}")
+
+
+def ensure_network_exists(config_server, port, api_password, network_name):
+    print(f"🔎 Verifying network '{network_name}' exists before enrollment...")
+    response = fetch_network_info(config_server, port, api_password, network_name, timeout=5)
+    if response.status_code == 200:
+        data = response.json()
+        print(
+            "✅ Enrollment target found: "
+            f"{data.get('name', network_name)} "
+            f"({data.get('ip_range', 'ip-range unavailable')})"
+        )
+        return data
+    if response.status_code == 404:
+        sys.exit(
+            f"Error: network '{network_name}' does not exist on the server. "
+            "The client no longer assumes the server will auto-create a default network."
+        )
+    if response.status_code in (401, 403):
+        sys.exit("Error: client API password was rejected by get-network-info.")
+    sys.exit(f"Error: get-network-info failed: {response.status_code} {response.text}")
 
 
 def sensos_config_files_exist(args):
@@ -430,6 +475,19 @@ def vnstat_register_interface(iface: str):
     print(f"✅ vnStat: registered interface '{iface}'.")
 
 
+def upload_initial_hardware_profile():
+    uploader = os.path.join(SCRIPT_DIR, "upload-hardware-profile")
+    if not os.path.exists(uploader):
+        print("⚠️ Hardware profile uploader not found; skipping initial upload.")
+        return
+    print("🧰 Uploading hardware profile...")
+    output, rc = privileged_shell(shlex.quote(uploader), silent=True)
+    if rc == 0:
+        print("✅ Hardware profile uploaded.")
+        return
+    print("⚠️ Hardware profile upload failed; enrollment will continue.")
+
+
 def main():
     username = pwd.getpwuid(os.geteuid()).pw_name
     if username not in ("sensos-admin", "root"):
@@ -460,11 +518,13 @@ def main():
 
     print("🚀 Starting device configuration...")
 
-    api_password = get_api_password(args.config_server, args.port)
+    api_password = get_api_password(args.config_server, args.port, network_name=args.network)
     if not api_password:
         sys.exit("Error: client API password not obtained (get_api_password).")
 
-    client_wg_ip, wg_public_ip, wg_port = configure_wireguard(args, api_password)
+    ensure_network_exists(args.config_server, args.port, api_password, args.network)
+
+    client_wg_ip, wg_public_ip, wg_port, peer_uuid = configure_wireguard(args, api_password)
     if not client_wg_ip:
         sys.exit("Error: WireGuard configuration failed.")
 
@@ -476,7 +536,7 @@ def main():
     if ":" in endpoint_ip:
         endpoint_ip = endpoint_ip.split(":", 1)[0]
 
-    write_client_settings(args, server_wg_ip, client_wg_ip, endpoint_ip, wg_port)
+    write_client_settings(args, server_wg_ip, client_wg_ip, endpoint_ip, wg_port, peer_uuid=peer_uuid)
 
     configure_ssh(args, api_password, client_wg_ip)
 
@@ -505,6 +565,7 @@ def main():
 
     privileged_shell(f"systemctl enable wg-quick@{args.network}")
     privileged_shell(f"systemctl start wg-quick@{args.network}")
+    upload_initial_hardware_profile()
 
     print("✅ Configuration complete. Reboot now and check connectivity.")
 

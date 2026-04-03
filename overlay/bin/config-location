@@ -37,7 +37,7 @@ def send_location(server_ip, port, wg_ip, api_password, latitude, longitude):
     }
     url = f"http://{server_ip}:{port}/set-peer-location"
     headers = {
-        "Authorization": f"Basic {get_basic_auth(api_password)}",
+        **build_basic_auth_header(api_password),
         "Content-Type": "application/json",
     }
 
