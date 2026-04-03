@@ -56,6 +56,10 @@ test/qemu/run-debian-trixie-arm64 run
 The `run` command uses `-snapshot`, so guest disk changes are discarded when
 QEMU exits.
 
+Before leaving the install phase, shut the guest down cleanly from inside the
+VM. Files changed during install and bootstrap are only reliably persisted to
+the base image after a clean shutdown.
+
 ## Guest bootstrap
 
 The stock Debian guest does not include `git` or `sudo`, so there is a small
@@ -85,7 +89,8 @@ completes, log out and back in again if you want the new group membership in
 that shell before generating test audio directly into `/sensos/data`.
 
 Because `run` is disposable, anything you want to keep should be completed
-during the install flow before switching to `run`.
+during the install flow before switching to `run`, and that install-phase boot
+must end with a clean guest shutdown.
 
 ## Data disk
 
