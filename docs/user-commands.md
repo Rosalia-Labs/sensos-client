@@ -147,7 +147,7 @@ Run this before commands that need:
 
 - `CLIENT_WG_IP`
 - `SERVER_WG_IP`
-- API password
+- client API password
 
 ### `config-location`
 
@@ -169,7 +169,7 @@ config-location --latitude 30.2672 --longitude -97.7431
 Behavior:
 
 - always writes `/sensos/etc/location.conf`
-- syncs location to the server when `network.conf`, `CLIENT_WG_IP`, and API password are available
+- syncs location to the server when `network.conf`, `CLIENT_WG_IP`, and the client API password are available
 
 ### `config-storage`
 

@@ -12,6 +12,7 @@ import configparser
 import argparse
 
 CLIENT_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", "/sensos")
+CLIENT_API_USERNAME = "sensos"
 
 API_PASSWORD_FILE = os.path.join(CLIENT_ROOT, "keys", "api_password")
 DEFAULTS_CONF = os.path.join(CLIENT_ROOT, "etc", "defaults.conf")
@@ -108,8 +109,8 @@ def set_permissions_and_owner(
         privileged_shell(f"chown {user}:{group} {shlex.quote(str(path))}", silent=True)
 
 
-def get_basic_auth(api_password):
-    return base64.b64encode(f":{api_password}".encode()).decode()
+def get_basic_auth(api_password, username=CLIENT_API_USERNAME):
+    return base64.b64encode(f"{username}:{api_password}".encode()).decode()
 
 
 def load_defaults(*sections, path=DEFAULTS_CONF):
@@ -159,7 +160,7 @@ def read_network_conf():
 
 def read_api_password():
     if not os.path.exists(API_PASSWORD_FILE):
-        print("❌ API password file missing", file=sys.stderr)
+        print("❌ Client API password file missing", file=sys.stderr)
         return None
     return read_file(API_PASSWORD_FILE)
 
@@ -172,7 +173,7 @@ def validate_api_password(config_server, port, api_password):
         response = requests.get(url, headers=headers, timeout=5)
         return response.status_code == 200
     except Exception as e:
-        print(f"❌ Error testing API password: {e}", file=sys.stderr)
+        print(f"❌ Error testing client API password: {e}", file=sys.stderr)
         return False
 
 
@@ -204,24 +205,24 @@ def get_api_password(config_server, port):
     for attempt in range(tries):
         if os.path.exists(API_PASSWORD_FILE):
             stored_password = read_file(API_PASSWORD_FILE)
-            print("Testing stored API password...")
+            print("Testing stored client API password...")
             if validate_api_password(config_server, port, stored_password):
-                print("✅ API password from file is valid.")
+                print("✅ Client API password from file is valid.")
                 return stored_password
             else:
-                print("⚠️ Stored API password is invalid.", file=sys.stderr)
-        api_password = input("🔑 Enter API password: ").strip()
+                print("⚠️ Stored client API password is invalid.", file=sys.stderr)
+        api_password = input("🔑 Enter client API password: ").strip()
         if validate_api_password(config_server, port, api_password):
             if not api_password:
-                print("❌ Error: API password is empty. Not saving.", file=sys.stderr)
+                print("❌ Error: client API password is empty. Not saving.", file=sys.stderr)
                 continue
             write_file(API_PASSWORD_FILE, api_password + "\n", mode=0o640, user="root")
-            print(f"✅ API password saved securely in {API_PASSWORD_FILE}.")
+            print(f"✅ Client API password saved securely in {API_PASSWORD_FILE}.")
             return api_password
         else:
-            print("❌ API password is invalid, please try again.", file=sys.stderr)
+            print("❌ Client API password is invalid, please try again.", file=sys.stderr)
     print(
-        "🚫 Failed to provide a valid API password after 3 attempts.", file=sys.stderr
+        "🚫 Failed to provide a valid client API password after 3 attempts.", file=sys.stderr
     )
     return None
 

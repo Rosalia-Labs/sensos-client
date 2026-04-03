@@ -462,7 +462,7 @@ def main():
 
     api_password = get_api_password(args.config_server, args.port)
     if not api_password:
-        sys.exit("Error: API password not obtained (get_api_password).")
+        sys.exit("Error: client API password not obtained (get_api_password).")
 
     client_wg_ip, wg_public_ip, wg_port = configure_wireguard(args, api_password)
     if not client_wg_ip:

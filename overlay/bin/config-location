@@ -91,7 +91,7 @@ def main():
 
     api_password = read_api_password()
     if not api_password:
-        print("❌ API password required to sync location to the server.", file=sys.stderr)
+        print("❌ Client API password required to sync location to the server.", file=sys.stderr)
         return 1
 
     send_location(server_ip, port, wg_ip, api_password, args.latitude, args.longitude)

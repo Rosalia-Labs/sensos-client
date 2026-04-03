@@ -40,7 +40,7 @@ if [[ -z "${SERVER_WG_IP}" || -z "${SERVER_PORT}" || -z "${WIREGUARD_IP}" ]]; th
 fi
 
 if [[ ! -f "${API_PASS_FILE}" ]]; then
-    echo "[ERROR] API password file ${API_PASS_FILE} not found." >&2
+    echo "[ERROR] Client API password file ${API_PASS_FILE} not found." >&2
     exit 1
 fi
 

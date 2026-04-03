@@ -15,7 +15,7 @@ Without hardware-backed secret storage, the client cannot avoid holding a live s
 In the current design:
 
 - the client must authenticate to the server API
-- the client stores the API password on disk at `/sensos/keys/api_password`
+- the client stores the client API password on disk at `/sensos/keys/api_password`
 - the client also stores WireGuard material on disk
 
 That means:
@@ -29,7 +29,7 @@ This is not a bug in one script. It is a consequence of the trust model.
 
 If an attacker can read the client disk or obtain local privileged access, they can likely:
 
-1. recover the API password
+1. recover the client API password
 2. recover enough network configuration to understand how the client reaches the server
 3. create or register a WireGuard peer
 4. reach the server API over the WireGuard network
@@ -78,7 +78,7 @@ That is meaningfully better than exposing the API directly on the host network, 
 With the current design, the realistic attack path is:
 
 1. gain local login on the device or physical access to the storage media
-2. recover the API password and other client config
+2. recover the client API password and other client config
 3. create a WireGuard peer or otherwise impersonate the client
 4. send API commands to the SensOS server over WireGuard
 5. gain access to one or more Docker containers through API misuse or container-level compromise
