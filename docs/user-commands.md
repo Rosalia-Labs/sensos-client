@@ -188,21 +188,27 @@ Prepares the data layout under `/sensos`, and optionally formats/mounts a separa
 Important flags:
 
 - `--device`
+- `--wipe`
 - `--no-fstab`
+- `--yes`
 
 Typical use:
 
 ```sh
 config-storage
-config-storage --device /dev/sda
-config-storage --device /dev/sda --no-fstab
+config-storage --device /dev/sda --wipe
+config-storage --device /dev/sda --wipe --no-fstab
 ```
 
 Behavior:
 
-- if no device is supplied, prompts interactively
+- if no device is supplied and stdin is interactive, prompts for a block device or `none`
+- if no device is supplied and stdin is not interactive, exits with a clear error naming `--device`
 - can prepare `/sensos/data` on the current filesystem without a separate disk
-- can partition, format, mount, and persist a selected block device
+- the normal external-disk path is: create one GPT table, create one ext4 partition, mount it at `/sensos/data`, and persist it in `/etc/fstab`
+- `--wipe` is the explicit non-interactive flag for destructive reprovisioning of a selected disk
+- `--yes` skips confirmations, but only when paired with an explicit destructive action such as `--wipe`
+- without `--wipe`, the command will mount an already prepared partition when possible, but it will not silently repartition a disk in non-interactive use
 - this is the provisioning step for data storage; it is not a replacement for `archive-mode`
 - use `config-storage` when you are setting up or changing where `/sensos/data` lives
 - use `archive-mode` when storage is already configured and you need a safe temporary archive window to copy data off, swap media, or clear `/sensos/data`
