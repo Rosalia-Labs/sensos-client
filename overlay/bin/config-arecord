@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Rosalia Labs LLC
 
-set -e
+set -euo pipefail
 
 SCRIPT_FILE="$(realpath "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_FILE}")" && pwd)"
@@ -13,7 +13,7 @@ resolve_overlay_root() {
 OVERLAY_ROOT="$(resolve_overlay_root)"
 CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${OVERLAY_ROOT}}"
 
-script_name=$(basename "$0")
+script_name="$(basename "$0")"
 PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
 
 [[ -f "${PARSE_SWITCHES_LIB}" ]] || {
@@ -35,20 +35,20 @@ warn_clock_and_location() {
         fi
     fi
 
-    if [[ -f "$location_file" ]] &&
-        grep -q '^LATITUDE=' "$location_file" &&
-        grep -q '^LONGITUDE=' "$location_file"; then
+    if [[ -f "${location_file}" ]] &&
+        grep -q '^LATITUDE=' "${location_file}" &&
+        grep -q '^LONGITUDE=' "${location_file}"; then
         location_ok=1
     fi
 
-    if [[ "$clock_ok" -eq 1 && "$location_ok" -eq 1 ]]; then
+    if [[ "${clock_ok}" -eq 1 && "${location_ok}" -eq 1 ]]; then
         return
     fi
 
     echo
     echo "WARNING: device metadata is incomplete."
-    [[ "$clock_ok" -eq 0 ]] && echo "  - System clock does not appear to be synchronized."
-    [[ "$location_ok" -eq 0 ]] && echo "  - Device location has not been set in ${CLIENT_ROOT}/etc/location.conf."
+    [[ "${clock_ok}" -eq 0 ]] && echo "  - System clock does not appear to be synchronized."
+    [[ "${location_ok}" -eq 0 ]] && echo "  - Device location has not been set in ${CLIENT_ROOT}/etc/location.conf."
     echo "Recordings may have incorrect timestamps or missing location context."
     echo "Recommended actions:"
     echo "  - Verify time sync before field deployment."
@@ -65,235 +65,439 @@ register_option --rate rate "Sample rate in Hz" "48000"
 register_option --base-dir base_dir "Base directory for sound files" "${CLIENT_ROOT}/data/audio_recordings/"
 register_option --enable-service enable_service "Enable systemd service" "true"
 register_option --start-service start_service "Start systemd service" "false"
+register_option --yes yes "Skip interactive confirmations" "false"
 
 parse_switches "$script_name" "$@"
 
-get_hw_params() {
-    local device="$1"
-    if [ -z "$device" ]; then
-        echo "Usage: get_hw_params <device>" >&2
+is_interactive() {
+    [[ -t 0 ]]
+}
+
+die() {
+    echo "❌ $*" >&2
+    exit 1
+}
+
+confirm_yes_no() {
+    local prompt="$1"
+    local default_yes="${2:-true}"
+    local answer=""
+
+    if [[ "${yes}" == "true" ]]; then
+        return 0
+    fi
+
+    if ! is_interactive; then
         return 1
     fi
 
-    local params
-    params=$(arecord --dump-hw-params -D "$device" -d 1 -f S16_LE /dev/null 2>&1 1>/dev/null || true)
-    echo "$params" | sed -n '/HW Params of device/,$p'
+    if [[ "${default_yes}" == "true" ]]; then
+        read -r -p "${prompt} [Y/n] " answer
+        [[ "${answer}" != [nN] ]]
+        return
+    fi
+
+    read -r -p "${prompt} [y/N] " answer
+    [[ "${answer}" == [yY] ]]
 }
 
-if systemctl is-active --quiet sensos-arecord.service; then
-    read -p "sensos-arecord.service is currently running. Would you like to stop it? (y/n): " answer
-    if [[ "$answer" =~ ^[Yy] ]]; then
-        echo "Stopping sensos-arecord.service..."
-        sudo systemctl stop sensos-arecord.service
-    else
-        echo "Service is still running; note that running arecord may fail if the service is listening on a device."
-    fi
-fi
+require_value_or_prompt() {
+    local current_value="$1"
+    local option_name="$2"
+    local prompt_text="$3"
+    local default_value="${4:-}"
 
-if systemctl is-active --quiet sensos-compress-audio.service; then
-    read -p "sensos-compress-audio.service is currently running. Would you like to stop it? (y/n): " answer
-    if [[ "$answer" =~ ^[Yy] ]]; then
-        echo "Stopping sensos-compress-audio.service..."
-        sudo systemctl stop sensos-compress-audio.service
-    else
-        echo "Compression service is still running; queued files may be moved while you reconfigure."
+    if [[ -n "${current_value}" ]]; then
+        printf '%s\n' "${current_value}"
+        return 0
     fi
-fi
 
-if systemctl is-active --quiet thin-data.service; then
-    read -p "thin-data.service is currently running. Would you like to stop it? (y/n): " answer
-    if [[ "$answer" =~ ^[Yy] ]]; then
-        echo "Stopping thin-data.service..."
-        sudo systemctl stop thin-data.service
-    else
-        echo "Data thinning is still running; retained audio may be pruned while you reconfigure."
+    if ! is_interactive; then
+        die "Missing required value: ${option_name}. Run interactively to be prompted, or pass ${option_name} explicitly."
     fi
-fi
 
-if [ -n "$device" ]; then
-    echo "Validating provided device string: $device"
-    valid_devices=$(arecord -l | grep '^card ' | sed -n 's/^card \([0-9]\+\):.*device \([0-9]\+\):.*/hw:\1,\2\nplughw:\1,\2/p')
-    if ! echo "$valid_devices" | grep -qx "$device"; then
-        echo "Warning: Provided device '$device' is not listed in available devices:"
-        echo "$valid_devices"
-        echo "Restarting configuration prompts..."
-        device=""
+    if [[ -n "${default_value}" ]]; then
+        read -r -p "${prompt_text} [${default_value}]: " current_value
+        printf '%s\n' "${current_value:-${default_value}}"
+        return 0
     fi
-fi
 
-if [ -z "$device" ]; then
-    mapfile -t device_choices < <(arecord -l | grep '^card ')
-    if [ ${#device_choices[@]} -eq 0 ]; then
-        echo "No recording devices found."
-        exit 1
+    while true; do
+        read -r -p "${prompt_text}: " current_value
+        [[ -n "${current_value}" ]] && break
+        echo "❌ A value is required."
+    done
+    printf '%s\n' "${current_value}"
+}
+
+get_hw_params() {
+    local target_device="$1"
+    local params
+    params="$(arecord --dump-hw-params -D "${target_device}" -d 1 -f S16_LE /dev/null 2>&1 1>/dev/null || true)"
+    echo "${params}" | sed -n '/HW Params of device/,$p'
+}
+
+normalize_bool() {
+    local value="$1"
+    case "${value,,}" in
+        1|true|yes|on) echo "true" ;;
+        *) echo "false" ;;
+    esac
+}
+
+maybe_stop_service() {
+    local unit_name="$1"
+    local warning_text="$2"
+
+    if ! systemctl is-active --quiet "${unit_name}"; then
+        return 0
     fi
+
+    if confirm_yes_no "${unit_name} is currently running. Stop it before reconfiguring?" true; then
+        echo "Stopping ${unit_name}..."
+        sudo systemctl stop "${unit_name}"
+        return 0
+    fi
+
+    echo "${warning_text}"
+}
+
+list_recording_devices() {
+    arecord -l | awk '
+        /^card / {
+            if (match($0, /^card ([0-9]+): .*device ([0-9]+):/, m)) {
+                printf "%s|%s|%s\n", m[1], m[2], $0
+            }
+        }
+    '
+}
+
+select_device_interactively() {
+    local -a device_rows=()
+    local idx=""
+
+    mapfile -t device_rows < <(list_recording_devices)
+    [[ "${#device_rows[@]}" -gt 0 ]] || die "No recording devices found."
 
     echo "Available recording devices:"
-    for i in "${!device_choices[@]}"; do
-        echo "$i) ${device_choices[$i]}"
+    local i
+    for i in "${!device_rows[@]}"; do
+        IFS='|' read -r _ _ description <<<"${device_rows[$i]}"
+        printf "  %d) %s\n" "${i}" "${description}"
     done
 
-    read -p "Select device index: " device_index
-    choice="${device_choices[$device_index]}"
-    echo "Selected device: $choice"
+    while true; do
+        read -r -p "Select device index: " idx
+        if [[ "${idx}" =~ ^[0-9]+$ ]] && [[ "${idx}" -ge 0 ]] && [[ "${idx}" -lt "${#device_rows[@]}" ]]; then
+            printf '%s\n' "${device_rows[$idx]}"
+            return 0
+        fi
+        echo "❌ Invalid index."
+    done
+}
 
-    card_number=$(echo "$choice" | sed -n 's/^card \([0-9]\+\):.*/\1/p')
-    device_number=$(echo "$choice" | sed -n 's/.*device \([0-9]\+\):.*/\1/p')
+resolve_device_selection() {
+    local selected="$1"
+    local -a device_rows=()
+    local row
+    local native_candidate=""
+    local plughw_candidate=""
 
-    echo "Extracted card number: $card_number"
-    echo "Extracted device number: $device_number"
-fi
+    mapfile -t device_rows < <(list_recording_devices)
+    [[ "${#device_rows[@]}" -gt 0 ]] || die "No recording devices found."
 
-native_device="hw:${card_number},${device_number}"
-plughw_device="plughw:${card_number},${device_number}"
+    if [[ -z "${selected}" ]]; then
+        if ! is_interactive; then
+            die "Missing required value: --device. Run interactively to choose a device, or pass --device explicitly."
+        fi
+        row="$(select_device_interactively)"
+        printf '%s\n' "${row}"
+        return 0
+    fi
 
-native_params=$(get_hw_params "$native_device")
-plughw_params=$(get_hw_params "$plughw_device")
-
-native_line=$(echo "$native_params" | sed -n 's/^[[:space:]]*FORMAT:[[:space:]]*//p')
-plughw_line=$(echo "$plughw_params" | sed -n 's/^[[:space:]]*FORMAT:[[:space:]]*//p')
-
-read -ra native_formats_arr <<<"$native_line"
-read -ra plughw_formats_arr <<<"$plughw_line"
-
-combined_formats=()
-for fmt in "${plughw_formats_arr[@]}"; do
-    annotation=""
-    for nfmt in "${native_formats_arr[@]}"; do
-        if [ "$fmt" = "$nfmt" ]; then
-            annotation=" (native)"
-            break
+    for row in "${device_rows[@]}"; do
+        IFS='|' read -r card_number device_number _ <<<"${row}"
+        native_candidate="hw:${card_number},${device_number}"
+        plughw_candidate="plughw:${card_number},${device_number}"
+        if [[ "${selected}" == "${native_candidate}" || "${selected}" == "${plughw_candidate}" ]]; then
+            printf '%s\n' "${row}"
+            return 0
         fi
     done
-    combined_formats+=("$fmt$annotation")
-done
 
-echo "Available formats:"
-for i in "${!combined_formats[@]}"; do
-    printf "%2d) %s\n" "$i" "${combined_formats[$i]}"
-done
+    die "Provided device '${selected}' is not one of the available arecord devices."
+}
 
-read -p "Select format index: " fmt_index
-format=$(echo "${combined_formats[$fmt_index]}" | sed 's/ (native)$//')
-echo "Selected format: $format"
+parse_hw_interval() {
+    local params="$1"
+    local field_name="$2"
+    echo "${params}" | sed -n "s/^[[:space:]]*${field_name}:[[:space:]]*\\[\\(.*\\)\\].*/\\1/p" | head -n 1
+}
 
-native_channels_line=$(echo "$native_params" | grep -E "^[[:space:]]*CHANNELS:")
-native_range=$(echo "$native_channels_line" | sed -n 's/.*\[\(.*\)\].*/\1/p')
-read -ra native_range_arr <<<"$native_range"
-native_low="${native_range_arr[0]}"
-native_high="${native_range_arr[1]}"
+parse_hw_options() {
+    local params="$1"
+    local field_name="$2"
+    echo "${params}" | sed -n "s/^[[:space:]]*${field_name}:[[:space:]]*//p" | head -n 1
+}
 
-native_channel_options=()
-for ((ch = native_low; ch <= native_high; ch++)); do
-    native_channel_options+=("$ch (native)")
-done
+select_format() {
+    local requested_format="$1"
+    local native_params="$2"
+    local plughw_params="$3"
+    local native_line plughw_line
+    local -a native_formats_arr=()
+    local -a plughw_formats_arr=()
+    local -a combined_formats=()
+    local fmt annotation idx selected
 
-plughw_channels_line=$(echo "$plughw_params" | grep -E "^[[:space:]]*CHANNELS:")
-plughw_range=$(echo "$plughw_channels_line" | sed -n 's/.*\[\(.*\)\].*/\1/p')
-read -ra plughw_range_arr <<<"$plughw_range"
-plughw_low="${plughw_range_arr[0]}"
-plughw_high="${plughw_range_arr[1]}"
+    native_line="$(parse_hw_options "${native_params}" "FORMAT")"
+    plughw_line="$(parse_hw_options "${plughw_params}" "FORMAT")"
+    read -r -a native_formats_arr <<<"${native_line}"
+    read -r -a plughw_formats_arr <<<"${plughw_line}"
 
-channel_options=("${native_channel_options[@]}")
-channel_options+=("enter number (${plughw_low} - ${plughw_high})")
+    [[ "${#plughw_formats_arr[@]}" -gt 0 ]] || die "Could not determine supported recording formats."
 
-echo "Available channel options:"
-for i in "${!channel_options[@]}"; do
-    printf "%2d) %s\n" "$i" "${channel_options[$i]}"
-done
+    if [[ -n "${requested_format}" ]]; then
+        for fmt in "${plughw_formats_arr[@]}"; do
+            [[ "${requested_format}" == "${fmt}" ]] && {
+                printf '%s\n' "${requested_format}"
+                return 0
+            }
+        done
+        die "Requested format '${requested_format}' is not supported by the selected device."
+    fi
 
-read -p "Select channel option index: " channel_index
-if ! [[ "$channel_index" =~ ^[0-9]+$ ]] || [ "$channel_index" -lt 0 ] || [ "$channel_index" -ge "${#channel_options[@]}" ]; then
-    echo "Invalid index."
-    exit 1
-fi
+    if ! is_interactive; then
+        die "Missing required value: --format. Run interactively to choose a format, or pass --format explicitly."
+    fi
 
-if [ "$channel_index" -eq $((${#channel_options[@]} - 1)) ]; then
-    read -p "Enter channel count (${plughw_low} - ${plughw_high}): " channels
-else
-    channels=$(echo "${channel_options[$channel_index]}" | sed 's/ (native)//')
-fi
+    for fmt in "${plughw_formats_arr[@]}"; do
+        annotation=""
+        for selected in "${native_formats_arr[@]}"; do
+            [[ "${fmt}" == "${selected}" ]] && annotation=" (native)"
+        done
+        combined_formats+=("${fmt}${annotation}")
+    done
 
-echo "Selected channels: $channels"
+    echo "Available formats:"
+    for idx in "${!combined_formats[@]}"; do
+        printf "  %d) %s\n" "${idx}" "${combined_formats[$idx]}"
+    done
 
-native_rate_line=$(echo "$native_params" | grep -E "^[[:space:]]*RATE:" | sed -n 's/^[[:space:]]*RATE:[[:space:]]*\[\(.*\)\].*/\1/p')
-read -ra native_rate_range_arr <<<"$native_rate_line"
-native_rate_low="${native_rate_range_arr[0]}"
-native_rate_high="${native_rate_range_arr[1]}"
+    while true; do
+        read -r -p "Select format index: " idx
+        if [[ "${idx}" =~ ^[0-9]+$ ]] && [[ "${idx}" -ge 0 ]] && [[ "${idx}" -lt "${#combined_formats[@]}" ]]; then
+            printf '%s\n' "$(echo "${combined_formats[$idx]}" | sed 's/ (native)$//')"
+            return 0
+        fi
+        echo "❌ Invalid index."
+    done
+}
 
-plughw_rate_line=$(echo "$plughw_params" | grep -E "^[[:space:]]*RATE:" | sed -n 's/^[[:space:]]*RATE:[[:space:]]*\[\(.*\)\].*/\1/p')
-read -ra plughw_rate_range_arr <<<"$plughw_rate_line"
-plughw_rate_low="${plughw_rate_range_arr[0]}"
-plughw_rate_high="${plughw_rate_range_arr[1]}"
+validate_integer_in_range() {
+    local value="$1"
+    local low="$2"
+    local high="$3"
+    [[ "${value}" =~ ^[0-9]+$ ]] || return 1
+    [[ "${value}" -ge "${low}" && "${value}" -le "${high}" ]]
+}
 
-echo "Native sample rate range: [${native_rate_low} - ${native_rate_high}]"
-echo "Extended sample rate range: [${plughw_rate_low} - ${plughw_rate_high}]"
+select_channels() {
+    local requested_channels="$1"
+    local native_params="$2"
+    local plughw_params="$3"
+    local native_range plughw_range
+    local native_low native_high plughw_low plughw_high
+    local -a native_range_arr=()
+    local -a plughw_range_arr=()
+    local -a channel_options=()
+    local idx
 
-read -p "Enter sample rate in Hz (default: 48000): " rate
-rate="${rate:-48000}"
-echo "Selected sample rate: $rate"
+    native_range="$(parse_hw_interval "${native_params}" "CHANNELS")"
+    plughw_range="$(parse_hw_interval "${plughw_params}" "CHANNELS")"
+    read -r -a native_range_arr <<<"${native_range}"
+    read -r -a plughw_range_arr <<<"${plughw_range}"
 
-if [ -z "$max_time" ]; then
-    read -p "Enter max file duration in seconds (default: 900): " max_time
-    max_time="${max_time:-900}"
-fi
+    native_low="${native_range_arr[0]:-1}"
+    native_high="${native_range_arr[1]:-${native_range_arr[0]:-1}}"
+    plughw_low="${plughw_range_arr[0]:-1}"
+    plughw_high="${plughw_range_arr[1]:-${plughw_range_arr[0]:-1}}"
 
-if [ -z "$base_dir" ]; then
-    read -p "Enter base directory for recordings (default: ${CLIENT_ROOT}/data/audio_recordings/): " base_dir
-    base_dir="${base_dir:-${CLIENT_ROOT}/data/audio_recordings/}"
-fi
+    if [[ -n "${requested_channels}" ]]; then
+        validate_integer_in_range "${requested_channels}" "${plughw_low}" "${plughw_high}" || \
+            die "Requested channel count '${requested_channels}' is outside the supported range ${plughw_low}-${plughw_high}."
+        printf '%s\n' "${requested_channels}"
+        return 0
+    fi
 
-if [ "$use_plughw" = "true" ]; then
-    device="$plughw_device"
-else
-    device="$native_device"
-fi
+    if ! is_interactive; then
+        die "Missing required value: --channels. Run interactively to choose a channel count, or pass --channels explicitly."
+    fi
 
-echo "Testing recording configuration on device $device..."
-if ! arecord -D "$device" -f "$format" -c "$channels" -r "$rate" -d 1 /dev/null; then
-    echo "Error: arecord test failed with these parameters."
-    echo "Restarting configuration prompts..."
-    exec "$0"
-fi
+    local ch
+    for ((ch = native_low; ch <= native_high; ch++)); do
+        channel_options+=("${ch} (native)")
+    done
+    channel_options+=("enter number (${plughw_low}-${plughw_high})")
 
-config_dir="${CLIENT_ROOT}/etc"
-mkdir -p "$config_dir"
-config_file="$config_dir/arecord.conf"
+    echo "Available channel options:"
+    for idx in "${!channel_options[@]}"; do
+        printf "  %d) %s\n" "${idx}" "${channel_options[$idx]}"
+    done
 
-cat >"$config_file" <<EOF
+    while true; do
+        read -r -p "Select channel option index: " idx
+        if [[ ! "${idx}" =~ ^[0-9]+$ ]] || [[ "${idx}" -lt 0 ]] || [[ "${idx}" -ge "${#channel_options[@]}" ]]; then
+            echo "❌ Invalid index."
+            continue
+        fi
+
+        if [[ "${idx}" -eq $((${#channel_options[@]} - 1)) ]]; then
+            while true; do
+                read -r -p "Enter channel count (${plughw_low}-${plughw_high}): " requested_channels
+                if validate_integer_in_range "${requested_channels}" "${plughw_low}" "${plughw_high}"; then
+                    printf '%s\n' "${requested_channels}"
+                    return 0
+                fi
+                echo "❌ Invalid channel count."
+            done
+        fi
+
+        printf '%s\n' "$(echo "${channel_options[$idx]}" | sed 's/ (native)$//')"
+        return 0
+    done
+}
+
+select_rate() {
+    local requested_rate="$1"
+    local native_params="$2"
+    local plughw_params="$3"
+    local native_range plughw_range
+    local -a native_rate_range_arr=()
+    local -a plughw_rate_range_arr=()
+    local native_low native_high plughw_low plughw_high
+
+    native_range="$(parse_hw_interval "${native_params}" "RATE")"
+    plughw_range="$(parse_hw_interval "${plughw_params}" "RATE")"
+    read -r -a native_rate_range_arr <<<"${native_range}"
+    read -r -a plughw_rate_range_arr <<<"${plughw_range}"
+    native_low="${native_rate_range_arr[0]:-0}"
+    native_high="${native_rate_range_arr[1]:-${native_rate_range_arr[0]:-0}}"
+    plughw_low="${plughw_rate_range_arr[0]:-0}"
+    plughw_high="${plughw_rate_range_arr[1]:-${plughw_rate_range_arr[0]:-0}}"
+
+    if [[ -n "${requested_rate}" ]]; then
+        validate_integer_in_range "${requested_rate}" "${plughw_low}" "${plughw_high}" || \
+            die "Requested sample rate '${requested_rate}' is outside the supported range ${plughw_low}-${plughw_high}."
+        printf '%s\n' "${requested_rate}"
+        return 0
+    fi
+
+    if ! is_interactive; then
+        die "Missing required value: --rate. Run interactively to choose a sample rate, or pass --rate explicitly."
+    fi
+
+    echo "Native sample rate range: [${native_low} - ${native_high}]"
+    echo "Extended sample rate range: [${plughw_low} - ${plughw_high}]"
+
+    while true; do
+        requested_rate="$(require_value_or_prompt "" "--rate" "Enter sample rate in Hz" "48000")"
+        if validate_integer_in_range "${requested_rate}" "${plughw_low}" "${plughw_high}"; then
+            printf '%s\n' "${requested_rate}"
+            return 0
+        fi
+        echo "❌ Sample rate must be within ${plughw_low}-${plughw_high}."
+    done
+}
+
+write_config() {
+    local config_dir config_file
+    config_dir="${CLIENT_ROOT}/etc"
+    mkdir -p "${config_dir}"
+    config_file="${config_dir}/arecord.conf"
+
+    cat >"${config_file}" <<EOF
 # Auto-generated arecord configuration
-DEVICE="$device"
-FORMAT="$format"
-CHANNELS=$channels
-RATE=$rate
-MAX_TIME=$max_time
-BASE_DIR="$base_dir"
+DEVICE="${device}"
+FORMAT="${format}"
+CHANNELS=${channels}
+RATE=${rate}
+MAX_TIME=${max_time}
+BASE_DIR="${base_dir}"
 EOF
 
-mkdir -p "$base_dir"
-sudo chown -R sensos-admin:sensos-data "$base_dir"
-sudo chmod -R 2775 "$base_dir"
+    mkdir -p "${base_dir}"
+    sudo chown -R sensos-admin:sensos-data "${base_dir}"
+    sudo chmod -R 2775 "${base_dir}"
+    echo "Configuration written to ${config_file}"
+}
 
-echo "Configuration written to $config_file"
+test_configuration() {
+    echo "Testing recording configuration on device ${device}..."
+    if ! arecord -D "${device}" -f "${format}" -c "${channels}" -r "${rate}" -d 1 /dev/null; then
+        die "arecord test failed with the selected parameters."
+    fi
+}
 
-if [[ "$enable_service" == "true" ]]; then
-    sudo systemctl daemon-reload
-    echo "Enabling sensos-arecord.service..."
-    sudo systemctl enable sensos-arecord.service
-    echo "Enabling sensos-compress-audio.service..."
-    sudo systemctl enable sensos-compress-audio.service
-    echo "Enabling thin-data.service..."
-    sudo systemctl enable thin-data.service
-fi
+apply_service_state() {
+    if [[ "$(normalize_bool "${enable_service}")" == "true" ]]; then
+        sudo systemctl daemon-reload
+        echo "Enabling sensos-arecord.service..."
+        sudo systemctl enable sensos-arecord.service
+        echo "Enabling sensos-compress-audio.service..."
+        sudo systemctl enable sensos-compress-audio.service
+        echo "Enabling thin-data.service..."
+        sudo systemctl enable thin-data.service
+    fi
 
-if [[ "$start_service" == "true" ]]; then
-    sudo systemctl daemon-reload
-    echo "Starting sensos-arecord.service..."
-    sudo systemctl start sensos-arecord.service
-    echo "Starting sensos-compress-audio.service..."
-    sudo systemctl start sensos-compress-audio.service
-    echo "Starting thin-data.service..."
-    sudo systemctl start thin-data.service
-fi
+    if [[ "$(normalize_bool "${start_service}")" == "true" ]]; then
+        sudo systemctl daemon-reload
+        echo "Starting sensos-arecord.service..."
+        sudo systemctl start sensos-arecord.service
+        echo "Starting sensos-compress-audio.service..."
+        sudo systemctl start sensos-compress-audio.service
+        echo "Starting thin-data.service..."
+        sudo systemctl start thin-data.service
+    fi
+}
 
-warn_clock_and_location
+main() {
+    local device_row card_number device_number native_device plughw_device
+    local native_params plughw_params
+
+    maybe_stop_service "sensos-arecord.service" \
+        "Recording service is still running; note that arecord may fail if the service is using the device."
+    maybe_stop_service "sensos-compress-audio.service" \
+        "Compression service is still running; queued files may be moved while you reconfigure."
+    maybe_stop_service "thin-data.service" \
+        "Data thinning is still running; retained audio may be pruned while you reconfigure."
+
+    device_row="$(resolve_device_selection "${device}")"
+    IFS='|' read -r card_number device_number _ <<<"${device_row}"
+
+    native_device="hw:${card_number},${device_number}"
+    plughw_device="plughw:${card_number},${device_number}"
+
+    native_params="$(get_hw_params "${native_device}")"
+    plughw_params="$(get_hw_params "${plughw_device}")"
+    [[ -n "${plughw_params}" ]] || die "Could not read hardware parameters for ${plughw_device}."
+
+    format="$(select_format "${format}" "${native_params}" "${plughw_params}")"
+    channels="$(select_channels "${channels}" "${native_params}" "${plughw_params}")"
+    rate="$(select_rate "${rate}" "${native_params}" "${plughw_params}")"
+    max_time="$(require_value_or_prompt "${max_time}" "--max-time" "Enter max file duration in seconds" "900")"
+    base_dir="$(require_value_or_prompt "${base_dir}" "--base-dir" "Enter base directory for recordings" "${CLIENT_ROOT}/data/audio_recordings/")"
+
+    if [[ "$(normalize_bool "${use_plughw}")" == "true" ]]; then
+        device="${plughw_device}"
+    else
+        device="${native_device}"
+    fi
+
+    test_configuration
+    write_config
+    apply_service_state
+    warn_clock_and_location
+}
+
+main "$@"

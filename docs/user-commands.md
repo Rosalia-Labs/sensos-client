@@ -283,7 +283,9 @@ config-arecord --device plughw:1,0 --channels 2 --rate 48000 --start-service tru
 Behavior:
 
 - warns if time sync or location is missing
-- may ask to stop active recording/compression/thinning services before reconfiguring
+- if required recording selections are missing and stdin is interactive, prompts for the missing device/format/channel/rate values
+- if required recording selections are missing and stdin is not interactive, exits with a clear missing-flags error
+- may ask to stop active recording/compression/thinning services before reconfiguring when run interactively
 - writes recording config and can enable/start `sensos-arecord.service`
 
 ### `config-i2c-sensors`
