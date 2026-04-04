@@ -167,14 +167,22 @@ class ApiContractTests(unittest.TestCase):
         fake_requests = SimpleNamespace(get=mock_get)
 
         with mock.patch.object(utils, "require_requests", return_value=fake_requests):
-            valid = utils.validate_api_password(
+            validation = utils.validate_api_password(
                 "config.example",
                 8765,
                 "client-password",
                 network_name="fieldnet",
             )
 
-        self.assertTrue(valid)
+        self.assertEqual(
+            validation,
+            {
+                "ok": True,
+                "reason": "accepted",
+                "status_code": 404,
+                "url": "http://config.example:8765/get-network-info?network_name=fieldnet",
+            },
+        )
         self.assertEqual(
             mock_get.call_args.args[0],
             "http://config.example:8765/get-network-info?network_name=fieldnet",
@@ -186,6 +194,22 @@ class ApiContractTests(unittest.TestCase):
                 + base64.b64encode(b"sensos:client-password").decode()
             },
         )
+
+    def test_client_auth_validation_rejects_bad_credentials_on_client_route(self):
+        mock_get = mock.Mock(return_value=FakeResponse(401, {"detail": "unauthorized"}))
+        fake_requests = SimpleNamespace(get=mock_get)
+
+        with mock.patch.object(utils, "require_requests", return_value=fake_requests):
+            validation = utils.validate_api_password(
+                "config.example",
+                8765,
+                "wrong-password",
+                network_name="fieldnet",
+            )
+
+        self.assertEqual(validation["ok"], False)
+        self.assertEqual(validation["reason"], "invalid_credentials")
+        self.assertEqual(validation["status_code"], 401)
 
     def test_hardware_profile_payload_includes_required_top_level_fields(self):
         with mock.patch.object(upload_hardware_profile, "collect_model", return_value="Test Device"):
