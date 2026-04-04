@@ -91,20 +91,38 @@ Behavior:
 
 ### `config-time`
 
-Interactive time and timezone setup.
+Time inspection and correction while keeping the system timezone on UTC.
 
 Use it to:
 
 - inspect current system time and sync status
 - check whether `chrony` is configured and active
-- set timezone
 - set the clock manually if needed
+
+Important flags:
+
+- `--input-timezone` (`--entry-timezone` is still accepted)
+- `--year`
+- `--month`
+- `--day`
+- `--hour`
+- `--minute`
+- `--second`
+- `--yes`
 
 Typical use:
 
 ```sh
 config-time
+config-time --input-timezone America/Chicago --year 2026 --month 4 --day 4 --hour 8 --minute 30 --second 0 --yes
 ```
+
+Behavior:
+
+- shows current UTC time, display timezone, sync status, and chrony health
+- if no correction flags are supplied and stdin is interactive, walks through time correction interactively
+- if correction flags are supplied, can apply them non-interactively
+- always keeps the actual system timezone on UTC
 
 Run this first. Accurate time matters before recording or storing sensor data.
 
@@ -400,6 +418,8 @@ config-wifi --ssid MySSID --password 'secretpass' --iface wlan1 --start true
 Behavior:
 
 - usually used on `wlan1` when the device also exposes an AP on `wlan0`
+- if `--ssid` is missing and stdin is interactive, prompts for it
+- if `--ssid` is missing and stdin is not interactive, exits with a clear error
 - Wi-Fi client mode and AP mode are mutually exclusive on the same interface
 - do not run `config-wifi` and `config-hotspot` against the same NIC unless you intend one to replace the other
 - if the device has only one Wi-Fi NIC and that NIC must join an upstream Wi-Fi network, the device cannot also host a local AP at the same time
@@ -455,6 +475,8 @@ Behavior:
 
 - requires `NETWORK_NAME` and `CLIENT_WG_IP` from `network.conf`
 - derives a default SSID from the network name and WG IP when `--ssid` is not supplied
+- if `--password` is missing and stdin is interactive, prompts for it
+- if `--password` is missing and stdin is not interactive, exits with a clear error
 - usually used on `wlan0` when Wi‑Fi client mode is handled separately on `wlan1`
 - AP mode and Wi‑Fi client mode are mutually exclusive on the same interface
 - if the device has only one Wi-Fi NIC and that NIC is needed for `config-wifi`, you cannot keep the AP active on that same NIC

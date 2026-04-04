@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Rosalia Labs LLC
 
+import argparse
 import os
 import subprocess
 import sys
@@ -12,6 +13,26 @@ from zoneinfo import ZoneInfo
 CHRONY_CONF = Path("/etc/chrony/chrony.conf")
 SENSOS_CHRONY_CONF = Path(os.environ.get("SENSOS_CLIENT_ROOT", "/sensos")) / "etc" / "chrony.conf"
 DEFAULT_DISPLAY_TIMEZONE = "America/Chicago"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Inspect or correct device time while keeping the system timezone at UTC."
+    )
+    parser.add_argument(
+        "--input-timezone",
+        "--entry-timezone",
+        dest="input_timezone",
+        help="Timezone for the local clock values you enter.",
+    )
+    parser.add_argument("--year", type=int, help="Local year to set.")
+    parser.add_argument("--month", type=int, help="Local month to set.")
+    parser.add_argument("--day", type=int, help="Local day of month to set.")
+    parser.add_argument("--hour", type=int, help="Local 24-hour clock hour to set.")
+    parser.add_argument("--minute", type=int, help="Local minute to set.")
+    parser.add_argument("--second", type=int, help="Local second to set.")
+    parser.add_argument("--yes", action="store_true", help="Apply supplied changes without interactive confirmation.")
+    return parser.parse_args()
 
 
 def run(cmd):
@@ -107,6 +128,10 @@ def ask_yes_no(prompt: str, default_yes: bool = True) -> bool:
     return raw in {"y", "yes"}
 
 
+def is_interactive() -> bool:
+    return sys.stdin.isatty()
+
+
 def choose_timezone(default_tz: str) -> str:
     common = [
         "America/New_York",
@@ -175,10 +200,8 @@ def restart_chrony() -> None:
     run(["sudo", "systemctl", "restart", "chrony"])
 
 
-def main() -> int:
+def print_status(timezone_name: str) -> None:
     system_timezone_name = current_timezone_name()
-    timezone_name = display_timezone_name()
-
     print("Current device time:")
     print(f"  Local time: {current_local_time_display(timezone_name)}")
     print(f"  Display timezone: {timezone_name}")
@@ -192,38 +215,87 @@ def main() -> int:
         print("Chrony configuration issues:")
         for issue in issues:
             print(f"  - {issue}")
+
+
+def has_requested_time_change(args: argparse.Namespace) -> bool:
+    return any(
+        value is not None
+        for value in (
+            args.input_timezone,
+            args.year,
+            args.month,
+            args.day,
+            args.hour,
+            args.minute,
+            args.second,
+        )
+    )
+
+
+def build_entered_datetime(args: argparse.Namespace, display_tz: str) -> tuple[str, datetime]:
+    utc_now = current_utc_time()
+    entry_tz = args.input_timezone or display_tz
+    entry_now = utc_now.replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo(entry_tz))
+
+    if not has_requested_time_change(args):
+        if not is_interactive():
+            print("No changes requested.", file=sys.stderr)
+            raise SystemExit(1)
+
+        print()
+        print("Enter the corrected date/time in the timezone where you are standing.")
+        print("The device itself will remain configured for UTC.")
+        print("Leave any field blank to keep the current value.")
+        print()
+
+        entry_tz = choose_timezone(display_tz)
+        entry_now = utc_now.replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo(entry_tz))
+        year = int(ask("Year", str(entry_now.year)))
+        month = int(ask("Month", str(entry_now.month)))
+        day = int(ask("Day", str(entry_now.day)))
+        hour = int(ask("Hour (24-hour)", str(entry_now.hour)))
+        minute = int(ask("Minute", str(entry_now.minute)))
+        second = int(ask("Second", str(entry_now.second)))
+    else:
+        year = args.year if args.year is not None else entry_now.year
+        month = args.month if args.month is not None else entry_now.month
+        day = args.day if args.day is not None else entry_now.day
+        hour = args.hour if args.hour is not None else entry_now.hour
+        minute = args.minute if args.minute is not None else entry_now.minute
+        second = args.second if args.second is not None else entry_now.second
+
+    entered_dt = datetime(
+        int(year),
+        int(month),
+        int(day),
+        int(hour),
+        int(minute),
+        int(second),
+        tzinfo=ZoneInfo(entry_tz),
+    )
+    return entry_tz, entered_dt
+
+
+def main() -> int:
+    args = parse_args()
+    timezone_name = display_timezone_name()
+
+    print_status(timezone_name)
     print()
 
-    if ask_yes_no("Does this look correct?", default_yes=True):
+    if not has_requested_time_change(args):
+        if not is_interactive():
+            return 0
+        if ask_yes_no("Does this look correct?", default_yes=True):
+            print("No changes made.")
+            return 0
+    elif is_interactive() and not args.yes and not ask_yes_no("Proceed to review and apply the supplied time change?", default_yes=True):
         print("No changes made.")
         return 0
 
     try:
-        utc_now = current_utc_time()
+        entry_tz, entered_dt = build_entered_datetime(args, timezone_name)
     except Exception as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
-
-    print()
-    print("Enter the corrected date/time in the timezone where you are standing.")
-    print("The device itself will remain configured for UTC.")
-    print("Leave any field blank to keep the current value.")
-    print()
-
-    entry_tz = choose_timezone(timezone_name)
-    entry_now = utc_now.replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo(entry_tz))
-
-    try:
-        entered_dt = datetime(
-            int(ask("Year", str(entry_now.year))),
-            int(ask("Month", str(entry_now.month))),
-            int(ask("Day", str(entry_now.day))),
-            int(ask("Hour (24-hour)", str(entry_now.hour))),
-            int(ask("Minute", str(entry_now.minute))),
-            int(ask("Second", str(entry_now.second))),
-            tzinfo=ZoneInfo(entry_tz),
-        )
-    except ValueError as exc:
         print(f"Invalid date/time: {exc}", file=sys.stderr)
         return 1
 
@@ -236,7 +308,7 @@ def main() -> int:
     print(f"  Device UTC time to set: {new_dt.strftime('%Y-%m-%d %H:%M:%S UTC')}")
     print()
 
-    if not ask_yes_no("Apply these settings?", default_yes=True):
+    if is_interactive() and not args.yes and not ask_yes_no("Apply these settings?", default_yes=True):
         print("No changes made.")
         return 0
 
@@ -250,18 +322,7 @@ def main() -> int:
 
     print()
     print("Updated device time:")
-    print(f"  Local time: {current_local_time_display(timezone_name)}")
-    print(f"  Display timezone: {timezone_name}")
-    print(f"  System timezone: {current_timezone_name()}")
-    print(f"  UTC time: {current_time_display()}")
-    print("Time sync status:")
-    for line in sync_status_lines():
-        print(line)
-    issues = chrony_status()
-    if issues:
-        print("Chrony configuration issues:")
-        for issue in issues:
-            print(f"  - {issue}")
+    print_status(timezone_name)
     return 0
 
 

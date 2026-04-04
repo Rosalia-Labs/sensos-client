@@ -68,10 +68,34 @@ register_option --limit-down-kbit limit_down_kbit "Optional ingress cap in kbit"
 
 parse_switches "${SCRIPT_NAME}" "$@"
 
-[[ -n "${ssid}" ]] || {
-    echo "ERROR: --ssid must be specified." >&2
-    exit 1
+is_interactive() {
+    [[ -t 0 ]]
 }
+
+require_value_or_prompt() {
+    local current_value="$1"
+    local option_name="$2"
+    local prompt_text="$3"
+
+    if [[ -n "${current_value}" ]]; then
+        printf '%s\n' "${current_value}"
+        return 0
+    fi
+
+    if ! is_interactive; then
+        echo "ERROR: missing required value: ${option_name}. Run interactively to be prompted, or pass ${option_name} explicitly." >&2
+        exit 1
+    fi
+
+    while true; do
+        read -r -p "${prompt_text}: " current_value
+        [[ -n "${current_value}" ]] && break
+        echo "❌ A value is required."
+    done
+    printf '%s\n' "${current_value}"
+}
+
+ssid="$(require_value_or_prompt "${ssid}" "--ssid" "Wi-Fi SSID")"
 
 require_command nmcli
 

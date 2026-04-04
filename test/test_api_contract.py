@@ -27,6 +27,7 @@ send_status_update = load_module(
     "send_status_update_test", OVERLAY_ROOT / "libexec" / "send_status_update.py"
 )
 config_location = load_module("config_location_test", OVERLAY_ROOT / "bin" / "config-location")
+config_time = load_module("config_time_test", OVERLAY_ROOT / "bin" / "config-time")
 upload_hardware_profile = load_module(
     "upload_hardware_profile_test", OVERLAY_ROOT / "bin" / "upload-hardware-profile"
 )
@@ -323,6 +324,41 @@ class ApiContractTests(unittest.TestCase):
                 config_location.fill_missing_location_args(args)
 
         self.assertEqual(exc.exception.code, 1)
+
+    def test_config_time_detects_requested_noninteractive_change(self):
+        args = SimpleNamespace(
+            input_timezone="America/Chicago",
+            year=2026,
+            month=None,
+            day=None,
+            hour=None,
+            minute=None,
+            second=None,
+        )
+        self.assertTrue(config_time.has_requested_time_change(args))
+
+    def test_config_time_builds_entered_datetime_from_supplied_flags(self):
+        args = SimpleNamespace(
+            input_timezone="America/Chicago",
+            year=2026,
+            month=4,
+            day=4,
+            hour=8,
+            minute=30,
+            second=0,
+        )
+        fake_utc_now = config_time.datetime(2026, 4, 4, 13, 30, 0)
+
+        with mock.patch.object(config_time, "current_utc_time", return_value=fake_utc_now):
+            entry_tz, entered_dt = config_time.build_entered_datetime(args, "America/Chicago")
+
+        self.assertEqual(entry_tz, "America/Chicago")
+        self.assertEqual(entered_dt.year, 2026)
+        self.assertEqual(entered_dt.month, 4)
+        self.assertEqual(entered_dt.day, 4)
+        self.assertEqual(entered_dt.hour, 8)
+        self.assertEqual(entered_dt.minute, 30)
+        self.assertEqual(entered_dt.second, 0)
 
 
 if __name__ == "__main__":

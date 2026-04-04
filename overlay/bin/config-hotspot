@@ -82,13 +82,43 @@ register_option --channel channel "2.4 GHz channel (1/6/11 or empty for auto)" "
 
 parse_switches "${SCRIPT_NAME}" "$@"
 
+is_interactive() {
+    [[ -t 0 ]]
+}
+
+require_value_or_prompt() {
+    local current_value="$1"
+    local option_name="$2"
+    local prompt_text="$3"
+    local default_value="${4:-}"
+
+    if [[ -n "${current_value}" ]]; then
+        printf '%s\n' "${current_value}"
+        return 0
+    fi
+
+    if ! is_interactive; then
+        echo "ERROR: missing required value: ${option_name}. Run interactively to be prompted, or pass ${option_name} explicitly." >&2
+        exit 1
+    fi
+
+    if [[ -n "${default_value}" ]]; then
+        read -r -p "${prompt_text} [${default_value}]: " current_value
+        printf '%s\n' "${current_value:-${default_value}}"
+        return 0
+    fi
+
+    while true; do
+        read -r -p "${prompt_text}: " current_value
+        [[ -n "${current_value}" ]] && break
+        echo "❌ A value is required."
+    done
+    printf '%s\n' "${current_value}"
+}
+
 SSID="${ssid:-${DEFAULT_SSID}}"
 IFACE="${interface:-wlan0}"
-
-[[ -n "${password}" ]] || {
-    echo "ERROR: --password is required (SSID defaults to '${DEFAULT_SSID}' unless provided)." >&2
-    exit 1
-}
+password="$(require_value_or_prompt "${password}" "--password" "Wi-Fi password (8-63 chars)")"
 
 if [[ ${#password} -lt 8 || ${#password} -gt 63 ]]; then
     echo "ERROR: WPA2 password must be between 8 and 63 characters." >&2
