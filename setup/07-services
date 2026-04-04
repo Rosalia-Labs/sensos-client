@@ -11,6 +11,7 @@ DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
 PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
 OVERLAY_SYSTEMD_DIR="${CLIENT_ROOT}/overlay/systemd"
 INSTALL_STATE_FILE="${DEPLOY_ROOT}/etc/install-state.env"
+ARECORD_CONF_FILE="${DEPLOY_ROOT}/etc/arecord.conf"
 
 HOST_BASELINE_UNITS=(
     monitor-data-space.timer
@@ -18,6 +19,11 @@ HOST_BASELINE_UNITS=(
     nftables.service
     ssh.service
     vnstat.service
+)
+
+OPTIONAL_AUDIO_UNITS=(
+    sensos-compress-audio.service
+    thin-data.service
 )
 
 log() {
@@ -88,6 +94,34 @@ describe_host_unit_state() {
     log "preserved host unit ${unit_name}: enabled=${enabled_state} active=${active_state}"
 }
 
+disable_host_unit_if_present() {
+    local unit_name="$1"
+
+    if systemctl list-unit-files --type=service --type=timer 2>/dev/null | awk '{print $1}' | grep -Fxq "${unit_name}"; then
+        systemctl disable --now "${unit_name}" >/dev/null 2>&1 || true
+        log "disabled host unit ${unit_name}"
+    else
+        log "host unit not present; skipped ${unit_name}"
+    fi
+}
+
+reconcile_optional_audio_units() {
+    local unit_name
+
+    if [[ -f "${ARECORD_CONF_FILE}" ]]; then
+        log "audio configuration present at ${ARECORD_CONF_FILE}; preserving optional audio unit state"
+        for unit_name in "${OPTIONAL_AUDIO_UNITS[@]}"; do
+            describe_host_unit_state "${unit_name}"
+        done
+        return
+    fi
+
+    log "audio configuration absent at ${ARECORD_CONF_FILE}; disabling optional audio units"
+    for unit_name in "${OPTIONAL_AUDIO_UNITS[@]}"; do
+        disable_host_unit_if_present "${unit_name}"
+    done
+}
+
 main() {
     local unit_name
 
@@ -104,6 +138,7 @@ main() {
         for unit_name in "${HOST_BASELINE_UNITS[@]}"; do
             describe_host_unit_state "${unit_name}"
         done
+        reconcile_optional_audio_units
     else
         for unit_name in "${HOST_BASELINE_UNITS[@]}"; do
             enable_host_unit_if_present "${unit_name}"
