@@ -170,12 +170,13 @@ test/qemu/run-debian-trixie-arm64 run
 Then the client VM can enroll through the setup API with:
 
 ```bash
-config-network --config-server 10.0.2.2 --port 18765 --config-port 8765 --network testing
+config-network --config-server 10.0.2.2 --setup-port 18765 --config-port 8765 --network testing
 ```
 
 If you omit `--config-port`, the client now still stores steady-state API port
 `8765` in `/sensos/etc/network.conf`. The setup API port `18765` is only for
-enrollment.
+enrollment. `--port` still works as a backward-compatible alias for
+`--setup-port`.
 
 In the standard QEMU flow, do not override `--wg-endpoint` just to translate an
 old internal container port like `15182`. The server should publish the

@@ -115,7 +115,7 @@ Primary network enrollment command. This is the core command that registers the 
 Important flags from the source:
 
 - `--config-server`
-- `--port`
+- `--setup-port` (`--port` is still accepted)
 - `--config-port`
 - `--network`
 - `--subnet`
@@ -130,15 +130,16 @@ Typical use:
 ```sh
 config-network --config-server <server-ip-or-name> --network <network-name>
 config-network --config-server <server-ip-or-name> --network sensos --subnet 1
-config-network --config-server <server-ip-or-name> --port 18765 --config-port 8765 --network sensos
-config-network --config-server 10.0.2.2 --port 18765 --config-port 8765 --network testing
-config-network --config-server 10.0.2.2 --port 18765 --network testing
+config-network --config-server <server-ip-or-name> --setup-port 18765 --config-port 8765 --network sensos
+config-network --config-server 10.0.2.2 --setup-port 18765 --config-port 8765 --network testing
+config-network --config-server 10.0.2.2 --setup-port 18765 --network testing
 ```
 
 Main gotchas:
 
 - `--config-server` is only the server address reachable from the current setup environment.
-- `--port` is the setup-time enrollment API port only
+- `--setup-port` is the setup-time enrollment API port only
+- `--port` remains as a backward-compatible alias for `--setup-port`
 - `--config-port` is the steady-state in-tunnel API port saved into `/sensos/etc/network.conf` for later WireGuard-side API calls such as `config-location`, status updates, and hardware-profile upload
 - if `--config-port` is omitted, it defaults to `8765` even when setup enrollment uses a forwarded port such as `18765`
 - the server will usually return a `wg_endpoint` suitable for the chosen network, but if the deployed device must reach a different public or routed endpoint, you need to override it with `--wg-endpoint`

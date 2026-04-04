@@ -217,9 +217,9 @@ class ApiContractTests(unittest.TestCase):
             with mock.patch.object(upload_hardware_profile, "collect_cpu", return_value={"model_name": "cpu"}):
                 with mock.patch.object(upload_hardware_profile, "collect_firmware", return_value={"bios_version": "1"}):
                     with mock.patch.object(upload_hardware_profile, "collect_memory", return_value={"mem_total_mb": 1024}):
-                        with mock.patch.object(upload_hardware_profile, "collect_disks", return_value=[]):
-                            with mock.patch.object(upload_hardware_profile, "collect_usb_devices", return_value=[]):
-                                with mock.patch.object(upload_hardware_profile, "collect_network_interfaces", return_value=[]):
+                        with mock.patch.object(upload_hardware_profile, "collect_disks", return_value={"vda": {"path": "/dev/vda"}}):
+                            with mock.patch.object(upload_hardware_profile, "collect_usb_devices", return_value="Bus 001 Device 001: test"):
+                                with mock.patch.object(upload_hardware_profile, "collect_network_interfaces", return_value={"eth0": {"ipv4": ["10.0.2.15"]}}):
                                     payload = upload_hardware_profile.build_hardware_profile_payload(
                                         "10.42.1.9",
                                         hostname="sensor-1",
@@ -240,8 +240,27 @@ class ApiContractTests(unittest.TestCase):
                 "network_interfaces",
             },
         )
+        self.assertIsInstance(payload["disks"], dict)
+        self.assertIsInstance(payload["usb_devices"], str)
+        self.assertIsInstance(payload["network_interfaces"], dict)
 
     def test_config_network_defaults_steady_state_port_to_8765_not_setup_port(self):
+        argv = [
+            "config-network",
+            "--config-server",
+            "10.0.2.2",
+            "--setup-port",
+            "18765",
+            "--network",
+            "testing",
+        ]
+        with mock.patch.object(sys, "argv", argv):
+            args = config_network.parse_args()
+
+        self.assertEqual(args.port, 18765)
+        self.assertEqual(args.config_port, 8765)
+
+    def test_config_network_keeps_port_as_backward_compatible_setup_port_alias(self):
         argv = [
             "config-network",
             "--config-server",

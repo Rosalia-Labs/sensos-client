@@ -125,56 +125,42 @@ def collect_memory() -> dict:
     }
 
 
-def collect_disks() -> list[dict]:
+def collect_disks() -> dict[str, dict]:
     data = run_json(["lsblk", "-J", "-b", "-o", "NAME,PATH,SIZE,MODEL,TYPE,ROTA,TRAN"], {"blockdevices": []})
-    disks = []
+    disks = {}
     for device in data.get("blockdevices", []):
         if device.get("type") != "disk":
             continue
-        disks.append(
-            {
-                "name": device.get("name"),
-                "path": device.get("path"),
-                "size_bytes": device.get("size"),
-                "model": device.get("model"),
-                "transport": device.get("tran"),
-                "rotational": device.get("rota"),
-            }
-        )
+        disk_name = device.get("name") or device.get("path") or f"disk-{len(disks) + 1}"
+        disks[disk_name] = {
+            "name": device.get("name"),
+            "path": device.get("path"),
+            "size_bytes": device.get("size"),
+            "model": device.get("model"),
+            "transport": device.get("tran"),
+            "rotational": device.get("rota"),
+        }
     return disks
 
 
-def collect_usb_devices() -> list[dict]:
-    devices = []
-    for line in run_lines(["lsusb"]):
-        parts = line.split(None, 6)
-        devices.append(
-            {
-                "raw": line,
-                "bus": parts[1] if len(parts) > 1 else None,
-                "device": parts[3].rstrip(":") if len(parts) > 3 else None,
-                "id": parts[5] if len(parts) > 5 else None,
-                "description": parts[6] if len(parts) > 6 else None,
-            }
-        )
-    return devices
+def collect_usb_devices() -> str:
+    return "\n".join(run_lines(["lsusb"]))
 
 
-def collect_network_interfaces() -> list[dict]:
+def collect_network_interfaces() -> dict[str, dict]:
     data = run_json(["ip", "-json", "addr", "show"], [])
-    interfaces = []
+    interfaces = {}
     for entry in data:
         addresses = entry.get("addr_info", [])
-        interfaces.append(
-            {
-                "name": entry.get("ifname"),
-                "mac_address": entry.get("address"),
-                "operstate": entry.get("operstate"),
-                "mtu": entry.get("mtu"),
-                "ipv4": [addr.get("local") for addr in addresses if addr.get("family") == "inet"],
-                "ipv6": [addr.get("local") for addr in addresses if addr.get("family") == "inet6"],
-            }
-        )
+        iface_name = entry.get("ifname") or f"iface-{len(interfaces) + 1}"
+        interfaces[iface_name] = {
+            "name": entry.get("ifname"),
+            "mac_address": entry.get("address"),
+            "operstate": entry.get("operstate"),
+            "mtu": entry.get("mtu"),
+            "ipv4": [addr.get("local") for addr in addresses if addr.get("family") == "inet"],
+            "ipv6": [addr.get("local") for addr in addresses if addr.get("family") == "inet6"],
+        }
     return interfaces
 
 
