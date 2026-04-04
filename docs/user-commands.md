@@ -177,6 +177,8 @@ config-location --latitude 30.2672 --longitude -97.7431
 Behavior:
 
 - always writes `/sensos/etc/location.conf`
+- if `--latitude` or `--longitude` is missing and stdin is interactive, prompts for the missing values
+- if `--latitude` or `--longitude` is missing and stdin is not interactive, exits with a clear error
 - syncs location to the server when `network.conf`, `CLIENT_WG_IP`, and the client API password are available
 
 ### `config-storage`

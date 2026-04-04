@@ -26,6 +26,7 @@ config_network = load_module("config_network_test", OVERLAY_ROOT / "bin" / "conf
 send_status_update = load_module(
     "send_status_update_test", OVERLAY_ROOT / "libexec" / "send_status_update.py"
 )
+config_location = load_module("config_location_test", OVERLAY_ROOT / "bin" / "config-location")
 upload_hardware_profile = load_module(
     "upload_hardware_profile_test", OVERLAY_ROOT / "bin" / "upload-hardware-profile"
 )
@@ -301,6 +302,27 @@ class ApiContractTests(unittest.TestCase):
         self.assertIn("SERVER_PORT=8765\n", written)
         self.assertIn("WG_ENDPOINT_IP=10.0.2.2\n", written)
         self.assertIn("WG_ENDPOINT_PORT=51281\n", written)
+
+    def test_config_location_prompts_for_missing_values_when_interactive(self):
+        args = SimpleNamespace(latitude=None, longitude=None)
+        with mock.patch.object(config_location, "is_interactive", return_value=True):
+            with mock.patch.object(
+                config_location,
+                "prompt_for_float",
+                side_effect=[30.2672, -97.7431],
+            ):
+                updated = config_location.fill_missing_location_args(args)
+
+        self.assertEqual(updated.latitude, 30.2672)
+        self.assertEqual(updated.longitude, -97.7431)
+
+    def test_config_location_errors_for_missing_values_when_non_interactive(self):
+        args = SimpleNamespace(latitude=None, longitude=None)
+        with mock.patch.object(config_location, "is_interactive", return_value=False):
+            with self.assertRaises(SystemExit) as exc:
+                config_location.fill_missing_location_args(args)
+
+        self.assertEqual(exc.exception.code, 1)
 
 
 if __name__ == "__main__":

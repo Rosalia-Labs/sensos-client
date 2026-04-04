@@ -6,8 +6,6 @@ import importlib.util
 import os
 import sys
 
-import requests
-
 SCRIPT_FILE = os.path.realpath(__file__)
 SCRIPT_DIR = os.path.dirname(SCRIPT_FILE)
 OVERLAY_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", "/sensos")
@@ -27,6 +25,14 @@ for name in dir(UTILS_MODULE):
         globals()[name] = getattr(UTILS_MODULE, name)
 
 LOCATION_CONF = os.path.join(CLIENT_ROOT, "etc", "location.conf")
+REQUESTS = None
+
+
+def http_requests():
+    global REQUESTS
+    if REQUESTS is None:
+        REQUESTS = require_requests()
+    return REQUESTS
 
 
 def send_location(server_ip, port, wg_ip, api_password, latitude, longitude):
@@ -42,7 +48,7 @@ def send_location(server_ip, port, wg_ip, api_password, latitude, longitude):
     }
 
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=5)
+        response = http_requests().post(url, headers=headers, json=payload, timeout=5)
     except Exception as exc:
         print(f"❌ Request failed: {exc}", file=sys.stderr)
         return
@@ -61,6 +67,45 @@ def write_local_location_conf(latitude, longitude):
     print(f"✅ Location written to {LOCATION_CONF}")
 
 
+def is_interactive():
+    return sys.stdin.isatty()
+
+
+def prompt_for_float(prompt_text):
+    while True:
+        raw = input(f"{prompt_text}: ").strip()
+        try:
+            return float(raw)
+        except ValueError:
+            print("❌ Please enter a valid number.", file=sys.stderr)
+
+
+def fill_missing_location_args(args):
+    missing = []
+    if args.latitude is None:
+        missing.append("--latitude")
+    if args.longitude is None:
+        missing.append("--longitude")
+
+    if not missing:
+        return args
+
+    if not is_interactive():
+        joined = ", ".join(missing)
+        print(
+            f"❌ Missing required values: {joined}. Run interactively to be prompted, "
+            "or pass both flags.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    if args.latitude is None:
+        args.latitude = prompt_for_float("Latitude")
+    if args.longitude is None:
+        args.longitude = prompt_for_float("Longitude")
+    return args
+
+
 def main():
     arg_defs = [
         (["--latitude"], {"type": float, "help": "Latitude"}),
@@ -69,10 +114,7 @@ def main():
         (["--port"], {"help": "Override server port"}),
     ]
     args = parse_args_with_defaults(arg_defs, ["global", "config_location"])
-
-    if args.latitude is None or args.longitude is None:
-        print("❌ Both --latitude and --longitude must be provided.", file=sys.stderr)
-        return 1
+    args = fill_missing_location_args(args)
 
     write_local_location_conf(args.latitude, args.longitude)
 
