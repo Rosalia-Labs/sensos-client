@@ -77,6 +77,7 @@ LOCATION_TOKEN="$(location_token)"
 OUTPUT_PATTERN="${BASE_DIR}/queued/%Y/%m/%d/sensos_%Y-%m-%dT%H-%M-%SZ${LOCATION_TOKEN}.wav"
 
 mkdir -p "$BASE_DIR"
+mkdir -p "$BASE_DIR/queued" "$BASE_DIR/compressed" "$BASE_DIR/processed"
 sudo chown -R sensos-admin:sensos-data "$BASE_DIR"
 sudo chmod -R 2775 "$BASE_DIR"
 

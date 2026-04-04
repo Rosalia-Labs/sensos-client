@@ -58,6 +58,11 @@ ensure_data_layout() {
         "${CLIENT_ROOT}/data"
         "${CLIENT_ROOT}/etc"
         "${CLIENT_ROOT}/log"
+        "${CLIENT_ROOT}/data/audio_recordings"
+        "${CLIENT_ROOT}/data/audio_recordings/queued"
+        "${CLIENT_ROOT}/data/audio_recordings/compressed"
+        "${CLIENT_ROOT}/data/audio_recordings/processed"
+        "${CLIENT_ROOT}/data/birdnet"
     )
 
     echo "🔧 Ensuring SensOS data layout and permissions..."
