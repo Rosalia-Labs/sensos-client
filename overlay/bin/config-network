@@ -477,6 +477,13 @@ def vnstat_register_interface(iface: str):
     print(f"✅ vnStat: registered interface '{iface}'.")
 
 
+def restart_wireguard_service(network_name: str):
+    unit_name = f"wg-quick@{network_name}"
+    print(f"🔄 Applying WireGuard configuration with {unit_name}...")
+    privileged_shell(f"systemctl enable {unit_name}")
+    privileged_shell(f"systemctl restart {unit_name}")
+
+
 def upload_initial_hardware_profile():
     uploader = os.path.join(SCRIPT_DIR, "upload-hardware-profile")
     if not os.path.exists(uploader):
@@ -565,8 +572,7 @@ def main():
     enable_ssh(disable_passwords=args.disable_ssh_passwords, allowed_password_subnets=allowed_pw_subnets)
     vnstat_register_interface(args.network)
 
-    privileged_shell(f"systemctl enable wg-quick@{args.network}")
-    privileged_shell(f"systemctl start wg-quick@{args.network}")
+    restart_wireguard_service(args.network)
     upload_initial_hardware_profile()
 
     print("✅ Configuration complete. Reboot now and check connectivity.")
