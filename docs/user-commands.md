@@ -131,13 +131,19 @@ Typical use:
 config-network --config-server <server-ip-or-name> --network <network-name>
 config-network --config-server <server-ip-or-name> --network sensos --subnet 1
 config-network --config-server <server-ip-or-name> --port 18765 --config-port 8765 --network sensos
+config-network --config-server 10.0.2.2 --port 18765 --config-port 8765 --network testing
+config-network --config-server 10.0.2.2 --port 18765 --network testing
 ```
 
 Main gotchas:
 
 - `--config-server` is only the server address reachable from the current setup environment.
-- `--port` is the port `config-network` uses during initial enrollment; `--config-port` is the port saved into `/sensos/etc/network.conf` for later WireGuard-side API calls such as `config-location` and status updates
+- `--port` is the setup-time enrollment API port only
+- `--config-port` is the steady-state in-tunnel API port saved into `/sensos/etc/network.conf` for later WireGuard-side API calls such as `config-location`, status updates, and hardware-profile upload
+- if `--config-port` is omitted, it defaults to `8765` even when setup enrollment uses a forwarded port such as `18765`
 - the server will usually return a `wg_endpoint` suitable for the chosen network, but if the deployed device must reach a different public or routed endpoint, you need to override it with `--wg-endpoint`
+- in the standard SensOS QEMU workflow, the setup API target from the client VM is `10.0.2.2:18765`, while the first WireGuard test network should be published by the server as `10.0.2.2:51281`
+- in that QEMU workflow, do not assume the setup API port and the WireGuard endpoint port are the same thing; the client should enroll through `18765`, then use the returned WireGuard endpoint, and finally use `SERVER_WG_IP:8765` for steady-state API calls
 - `--network` is now required and must be supplied explicitly for every enrollment
 - `--subnet` is normally not required for device enrollment
 - in the current server implementation, the server searches for the first available host IP starting at the requested subnet offset; with the normal default of `1`, allocation starts at `x.x.1.1`
@@ -147,6 +153,7 @@ Run this before commands that need:
 
 - `CLIENT_WG_IP`
 - `SERVER_WG_IP`
+- `SERVER_PORT`
 - client API password
 
 ### `config-location`

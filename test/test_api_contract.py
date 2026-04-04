@@ -2,6 +2,7 @@ import base64
 import importlib.machinery
 import importlib.util
 import os
+import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -239,6 +240,48 @@ class ApiContractTests(unittest.TestCase):
                 "network_interfaces",
             },
         )
+
+    def test_config_network_defaults_steady_state_port_to_8765_not_setup_port(self):
+        argv = [
+            "config-network",
+            "--config-server",
+            "10.0.2.2",
+            "--port",
+            "18765",
+            "--network",
+            "testing",
+        ]
+        with mock.patch.object(sys, "argv", argv):
+            args = config_network.parse_args()
+
+        self.assertEqual(args.port, 18765)
+        self.assertEqual(args.config_port, 8765)
+
+    def test_write_client_settings_separates_setup_and_steady_state_api_ports(self):
+        args = SimpleNamespace(
+            config_server="10.0.2.2",
+            port=18765,
+            config_port=8765,
+            network="testing",
+        )
+
+        with mock.patch.object(config_network, "write_file") as write_file_mock:
+            config_network.write_client_settings(
+                args,
+                "10.254.0.1",
+                "10.254.1.5",
+                "10.0.2.2",
+                51281,
+                peer_uuid="peer-123",
+            )
+
+        written = write_file_mock.call_args.args[1]
+        self.assertIn("SETUP_API_HOST=10.0.2.2\n", written)
+        self.assertIn("SETUP_API_PORT=18765\n", written)
+        self.assertIn("SERVER_WG_IP=10.254.0.1\n", written)
+        self.assertIn("SERVER_PORT=8765\n", written)
+        self.assertIn("WG_ENDPOINT_IP=10.0.2.2\n", written)
+        self.assertIn("WG_ENDPOINT_PORT=51281\n", written)
 
 
 if __name__ == "__main__":

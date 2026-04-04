@@ -120,6 +120,14 @@ SENSOS_QEMU_EXTRA_HOST_FWD='tcp:0.0.0.0:8765-:8765' test/qemu/run-debian-trixie-
 That is useful when running two disposable VMs and you need one VM to expose a
 service to the host so the other VM can reach it through `10.0.2.2`.
 
+QEMU `hostfwd` can forward both TCP and UDP. For SensOS client/server tests,
+keep the setup API and WireGuard endpoint model distinct:
+
+- setup API from the client guest to the server guest: `10.0.2.2:18765`
+- first published WireGuard endpoint from the client guest to the server guest:
+  `10.0.2.2:51281`
+- additional test networks: `10.0.2.2:51282` through `10.0.2.2:51289`
+
 With QEMU user networking, the guest can usually reach macOS-hosted services at:
 
 ```text
@@ -145,20 +153,40 @@ Then inside the guest:
 config-network --config-server 10.0.2.2 --network testing
 ```
 
+In that direct-host case, the server should still publish the real reachable
+WireGuard UDP endpoint for the selected network. For the first test network in
+the standard SensOS QEMU workflow, that endpoint is expected to be
+`10.0.2.2:51281`.
+
 If the config server is another QEMU guest started by the helper, launch that
 server VM with an extra forward first, for example:
 
 ```bash
 SENSOS_QEMU_SSH_PORT=2223 \
-SENSOS_QEMU_EXTRA_HOST_FWD='tcp:0.0.0.0:18765-:8765' \
+SENSOS_QEMU_EXTRA_HOST_FWD='tcp:0.0.0.0:18765-:8765,udp:0.0.0.0:51281-:51281,udp:0.0.0.0:51282-:51282,udp:0.0.0.0:51283-:51283,udp:0.0.0.0:51284-:51284,udp:0.0.0.0:51285-:51285,udp:0.0.0.0:51286-:51286,udp:0.0.0.0:51287-:51287,udp:0.0.0.0:51288-:51288,udp:0.0.0.0:51289-:51289' \
 test/qemu/run-debian-trixie-arm64 run
 ```
 
-Then the client VM can still use:
+Then the client VM can enroll through the setup API with:
 
 ```bash
 config-network --config-server 10.0.2.2 --port 18765 --config-port 8765 --network testing
 ```
+
+If you omit `--config-port`, the client now still stores steady-state API port
+`8765` in `/sensos/etc/network.conf`. The setup API port `18765` is only for
+enrollment.
+
+In the standard QEMU flow, do not override `--wg-endpoint` just to translate an
+old internal container port like `15182`. The server should publish the
+host-reachable endpoint directly, which is `10.0.2.2:51281` for the first test
+network unless the server explicitly returns a different valid port.
+
+After enrollment in the standard QEMU flow, the resulting split should be:
+
+- setup API during enrollment: `10.0.2.2:18765`
+- WireGuard peer endpoint: `10.0.2.2:51281`
+- steady-state API over WireGuard: `10.254.0.1:8765`
 
 After install, run the deployed config commands as `sensos-admin`, for example:
 
