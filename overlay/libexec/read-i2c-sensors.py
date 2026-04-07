@@ -7,7 +7,6 @@ import datetime
 import heapq
 import importlib.util
 import os
-import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -18,6 +17,9 @@ SCRIPT_DIR = os.path.dirname(SCRIPT_FILE)
 OVERLAY_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", "/sensos")
 CLIENT_ROOT = Path(os.environ.get("SENSOS_CLIENT_ROOT", OVERLAY_ROOT))
 UTILS_FILE = os.path.join(str(CLIENT_ROOT), "libexec", "utils.py")
+sys.path.insert(0, SCRIPT_DIR)
+
+from i2c_data import connect_db, ensure_schema
 
 if not os.path.isfile(UTILS_FILE):
     raise RuntimeError(f"Missing utils.py at {UTILS_FILE}")
@@ -36,9 +38,7 @@ config = read_kv_config(str(CONFIG_PATH))
 if not config:
     print(f"Config file missing or empty: {CONFIG_PATH}", file=sys.stderr)
     sys.exit(1)
-
-DB_PATH = CLIENT_ROOT / "data" / "microenv" / "i2c_readings.db"
-create_dir(str(DB_PATH.parent), "sensos-admin", "sensos-data", 0o2775)
+create_dir(str((CLIENT_ROOT / "data" / "microenv")), "sensos-admin", "sensos-data", 0o2775)
 
 MAX_ATTEMPTS = 3
 BACKOFF_MULTIPLIER = 2
@@ -96,23 +96,6 @@ def safe_sensor_read(read_func, *args, **kwargs):
             get_i2c(force_reset=True)
             return read_func(*args, **kwargs)
         raise
-
-
-def ensure_schema(conn: sqlite3.Connection):
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS i2c_readings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            device_address TEXT NOT NULL,
-            sensor_type TEXT NOT NULL,
-            key TEXT NOT NULL,
-            value REAL
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_i2c_time ON i2c_readings (timestamp)")
-    conn.commit()
 
 
 def get_interval(key: str) -> Optional[int]:
@@ -302,7 +285,7 @@ def store_readings(readings):
     if not readings:
         return
     try:
-        with sqlite3.connect(DB_PATH) as conn:
+        with connect_db() as conn:
             conn.executemany(
                 """
                 INSERT INTO i2c_readings (timestamp, device_address, sensor_type, key, value)
@@ -318,7 +301,7 @@ def store_readings(readings):
 
 def main():
     setup_logging("read_i2c_sensors.log")
-    with sqlite3.connect(DB_PATH) as conn:
+    with connect_db() as conn:
         ensure_schema(conn)
 
     sensors = [

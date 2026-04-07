@@ -4,6 +4,7 @@ Client side configuration scripts
 Docs:
 
 - [BirdNET setup](docs/birdnet.md)
+- [I2C upload API](docs/i2c-uploads.md)
 - [Network capture](docs/network-capture.md)
 - [QEMU testing](docs/qemu-testing.md)
 - [Developer security notes](docs/security-development.md)

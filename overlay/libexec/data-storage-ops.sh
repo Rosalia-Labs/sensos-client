@@ -7,6 +7,7 @@ DATA_SERVICES=(
     "sensos-arecord.service"
     "sensos-compress-audio.service"
     "sensos-read-i2c.service"
+    "sensos-upload-i2c.service"
     "sensos-birdnet.service"
     "sensos-gps.service"
     "thin-data.service"

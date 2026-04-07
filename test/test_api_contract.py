@@ -31,6 +31,9 @@ config_time = load_module("config_time_test", OVERLAY_ROOT / "bin" / "config-tim
 upload_hardware_profile = load_module(
     "upload_hardware_profile_test", OVERLAY_ROOT / "bin" / "upload-hardware-profile"
 )
+i2c_upload = load_module(
+    "i2c_upload_test", OVERLAY_ROOT / "libexec" / "upload-i2c-readings.py"
+)
 utils = load_module("utils_test", OVERLAY_ROOT / "libexec" / "utils.py")
 
 
@@ -245,6 +248,78 @@ class ApiContractTests(unittest.TestCase):
         self.assertIsInstance(payload["disks"], dict)
         self.assertIsInstance(payload["usb_devices"], str)
         self.assertIsInstance(payload["network_interfaces"], dict)
+
+    def test_i2c_upload_payload_includes_batch_metadata_and_normalized_readings(self):
+        payload = i2c_upload.build_i2c_upload_payload(
+            wireguard_ip="10.42.1.9",
+            hostname="sensor-1",
+            client_version="1.2.3",
+            batch_id=17,
+            ownership_mode="server-owns",
+            readings=[
+                {
+                    "id": 101,
+                    "timestamp": "2026-04-07T12:00:00Z",
+                    "device_address": "0x76",
+                    "sensor_type": "BME280",
+                    "key": "temperature_c",
+                    "value": 22.5,
+                },
+                {
+                    "id": 102,
+                    "timestamp": "2026-04-07T12:00:00Z",
+                    "device_address": "0x76",
+                    "sensor_type": "BME280",
+                    "key": "humidity_percent",
+                    "value": 44.1,
+                },
+            ],
+        )
+
+        self.assertEqual(payload["schema_version"], 1)
+        self.assertEqual(payload["wireguard_ip"], "10.42.1.9")
+        self.assertEqual(payload["hostname"], "sensor-1")
+        self.assertEqual(payload["client_version"], "1.2.3")
+        self.assertEqual(payload["batch_id"], 17)
+        self.assertEqual(payload["ownership_mode"], "server-owns")
+        self.assertEqual(payload["reading_count"], 2)
+        self.assertEqual(payload["first_reading_id"], 101)
+        self.assertEqual(payload["last_reading_id"], 102)
+        self.assertEqual(payload["first_recorded_at"], "2026-04-07T12:00:00Z")
+        self.assertEqual(payload["last_recorded_at"], "2026-04-07T12:00:00Z")
+        self.assertEqual(
+            payload["readings"][0],
+            {
+                "id": 101,
+                "timestamp": "2026-04-07T12:00:00Z",
+                "device_address": "0x76",
+                "sensor_type": "BME280",
+                "key": "temperature_c",
+                "value": 22.5,
+            },
+        )
+
+    def test_i2c_upload_response_requires_receipt_and_full_acceptance(self):
+        parsed = i2c_upload.parse_upload_response(
+            '{"status":"ok","receipt_id":"receipt-123","accepted_count":2,"server_received_at":"2026-04-07T12:01:00Z"}',
+            2,
+        )
+
+        self.assertEqual(
+            parsed,
+            {
+                "receipt_id": "receipt-123",
+                "accepted_count": 2,
+                "server_received_at": "2026-04-07T12:01:00Z",
+            },
+        )
+
+    def test_i2c_upload_response_rejects_partial_acceptance(self):
+        with self.assertRaises(ValueError):
+            i2c_upload.parse_upload_response(
+                '{"status":"ok","receipt_id":"receipt-123","accepted_count":1,"server_received_at":"2026-04-07T12:01:00Z"}',
+                2,
+            )
 
     def test_config_network_defaults_steady_state_port_to_8765_not_setup_port(self):
         argv = [

@@ -14,8 +14,9 @@ Typical order on a newly configured device:
 4. `config-storage`
 5. `config-arecord`
 6. `config-i2c-sensors`
-7. `config-birdnet`
-8. other feature-specific commands as needed
+7. `config-i2c-uploads`
+8. `config-birdnet`
+9. other feature-specific commands as needed
 
 Notes:
 
@@ -318,14 +319,16 @@ Important flags:
 - `--scd30-interval`
 - `--scd4x-interval`
 - `--ads1015-interval`
-- `--enable-service`
-- `--start-service`
+- `--enable`
+- `--start`
+- `--disable`
 
 Typical use:
 
 ```sh
 config-i2c-sensors
-config-i2c-sensors --interval 60 --scd30-interval 120 --start-service true
+config-i2c-sensors --interval 60 --scd30-interval 120 --enable --start
+config-i2c-sensors --disable
 ```
 
 Behavior:
@@ -333,7 +336,43 @@ Behavior:
 - writes `/sensos/etc/i2c-sensors.conf`
 - ensures `/sensos/data/microenv` exists with shared permissions
 - installs optional I2C/GPIO Python dependencies on demand before enabling the reader service
+- leaves the service state unchanged unless `--enable`, `--start`, or `--disable` is supplied
 - warns if time sync or location is missing
+
+### `config-i2c-uploads`
+
+Configures the continuous I2C upload service and its ownership model.
+
+Important flags:
+
+- `--ownership-model`
+- `--session-interval-sec`
+- `--batch-size`
+- `--connect-timeout-sec`
+- `--read-timeout-sec`
+- `--delete-after-days`
+- `--enable`
+- `--start`
+- `--disable`
+
+Typical use:
+
+```sh
+config-i2c-uploads --ownership-model client-retains --session-interval-sec 3600 --enable --start
+config-i2c-uploads --ownership-model server-owns --batch-size 1000 --delete-after-days 30 --enable --start
+config-i2c-uploads --disable
+```
+
+Behavior:
+
+- writes `/sensos/etc/i2c-uploads.conf`
+- leaves the service state unchanged unless `--enable`, `--start`, or `--disable` is supplied
+- uploads only numeric readings from `/sensos/data/microenv/i2c_readings.db`
+- tracks upload batches, server receipts, and local pruning decisions in the same SQLite database
+- supports two ownership modes:
+- `client-retains`: server gets a copy, but the client remains the authoritative owner
+- `server-owns`: the server becomes authoritative after acceptance, and the client may prune old local copies later
+- `--delete-after-days` is only valid with `--ownership-model server-owns`
 
 ### `config-rpi-eeprom`
 
