@@ -33,6 +33,7 @@ SENSOS_ETC_DIR = os.path.join(CLIENT_ROOT, "etc")
 SENSOS_KEYS_DIR = os.path.join(CLIENT_ROOT, "keys")
 SENSOS_NET_CONF = os.path.join(SENSOS_ETC_DIR, "network.conf")
 REQUESTS = None
+STATUS_UPDATE_TIMER = "sensos-send-status-update.timer"
 
 
 def http_requests():
@@ -492,6 +493,12 @@ def restart_wireguard_service(network_name: str):
     privileged_shell(f"systemctl restart {unit_name}")
 
 
+def enable_status_update_timer():
+    print(f"⏱️ Enabling periodic status updates with {STATUS_UPDATE_TIMER}...")
+    privileged_shell(f"systemctl enable {STATUS_UPDATE_TIMER}")
+    privileged_shell(f"systemctl start {STATUS_UPDATE_TIMER}")
+
+
 def upload_initial_hardware_profile():
     uploader = os.path.join(SCRIPT_DIR, "upload-hardware-profile")
     if not os.path.exists(uploader):
@@ -584,6 +591,7 @@ def main():
     vnstat_register_interface(args.network)
 
     restart_wireguard_service(args.network)
+    enable_status_update_timer()
     upload_initial_hardware_profile()
 
     print("✅ Configuration complete. Reboot now and check connectivity.")

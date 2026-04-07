@@ -15,7 +15,6 @@ ARECORD_CONF_FILE="${DEPLOY_ROOT}/etc/arecord.conf"
 
 HOST_BASELINE_UNITS=(
     sensos-monitor-data-space.timer
-    sensos-send-status-update.timer
     nftables.service
     ssh.service
     vnstat.service
