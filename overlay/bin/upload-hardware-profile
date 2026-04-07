@@ -179,7 +179,7 @@ def build_hardware_profile_payload(hostname: str | None = None) -> dict:
 
 
 def upload_hardware_profile(server_ip: str, port: str, peer_uuid: str, api_password: str, payload: dict):
-    url = f"http://{server_ip}:{port}/upload-hardware-profile"
+    url = f"http://{server_ip}:{port}/api/v1/client/peer/hardware-profile"
     headers = {
         **build_basic_auth_header(api_password, username=peer_uuid),
         "Content-Type": "application/json",

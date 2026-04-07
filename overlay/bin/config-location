@@ -40,7 +40,7 @@ def send_location(server_ip, port, peer_uuid, api_password, latitude, longitude)
         "latitude": latitude,
         "longitude": longitude,
     }
-    url = f"http://{server_ip}:{port}/set-peer-location"
+    url = f"http://{server_ip}:{port}/api/v1/client/peer/location"
     headers = {
         **build_basic_auth_header(api_password, username=peer_uuid),
         "Content-Type": "application/json",

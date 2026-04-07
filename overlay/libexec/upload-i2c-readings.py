@@ -176,7 +176,7 @@ def post_i2c_batch(
     read_timeout_sec: int,
 ) -> tuple[int, str]:
     timeout = max(connect_timeout_sec, read_timeout_sec)
-    url = f"http://{server_ip}:{port}/i2c-readings/upload"
+    url = f"http://{server_ip}:{port}/api/v1/client/peer/i2c-readings/batches"
     req = request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
@@ -240,7 +240,7 @@ def run_upload_session(config: dict, network_config: dict, api_password: str, cl
     try:
         print(
             f"[INFO] Uploading I2C batch {batch_id} with {len(payload_readings)} readings "
-            f"to http://{server_ip}:{server_port}/i2c-readings/upload"
+            f"to http://{server_ip}:{server_port}/api/v1/client/peer/i2c-readings/batches"
         )
         response_status, response_body = post_i2c_batch(
             server_ip,

@@ -192,12 +192,12 @@ class ApiContractTests(unittest.TestCase):
                 "ok": True,
                 "reason": "accepted",
                 "status_code": 404,
-                "url": "http://config.example:8765/get-network-info?network_name=fieldnet",
+                "url": "http://config.example:8765/api/v1/client/networks/fieldnet",
             },
         )
         self.assertEqual(
             mock_get.call_args.args[0],
-            "http://config.example:8765/get-network-info?network_name=fieldnet",
+            "http://config.example:8765/api/v1/client/networks/fieldnet",
         )
         self.assertEqual(
             mock_get.call_args.kwargs["headers"],

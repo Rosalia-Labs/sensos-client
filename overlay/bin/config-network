@@ -138,7 +138,7 @@ def register_peer(config_server, port, network_name, wg_public_key, api_password
     require_nonempty(wg_public_key, "wg_public_key")
     require_nonempty(config_server, "--config-server")
     require_nonempty(port, "--port")
-    server_url = f"http://{config_server}:{port}/register-peer"
+    server_url = f"http://{config_server}:{port}/api/v1/client/peers/enroll"
     print(f"📡 Registering device on network '{network_name}' with {server_url}...")
 
     headers = build_basic_auth_header(api_password)
@@ -197,7 +197,7 @@ def register_wireguard_key(config_server, port, peer_uuid, wg_ip, wg_public_key,
     require_nonempty(wg_ip, "wg_ip")
     require_nonempty(peer_uuid, "peer_uuid")
     require_nonempty(wg_public_key, "wg_public_key")
-    server_url = f"http://{config_server}:{port}/register-wireguard-key"
+    server_url = f"http://{config_server}:{port}/api/v1/client/peer/wireguard-key"
     print(f"🔑 Registering WireGuard public key with {server_url}...")
 
     headers = build_basic_auth_header(api_password, username=peer_uuid)
@@ -347,7 +347,7 @@ def exchange_ssh_keys(config_server, port, peer_uuid, wg_ip, api_password):
     }
     if not all([wg_ip, payload["ssh_public_key"], key_type, fingerprint]):
         sys.exit("Error: incomplete SSH key data; aborting exchange.")
-    server_url = f"http://{config_server}:{port}/exchange-ssh-keys"
+    server_url = f"http://{config_server}:{port}/api/v1/client/peer/ssh-key"
     print(f"🔑 Registering SSH public key with {server_url}...")
     headers = build_basic_auth_header(api_password, username=peer_uuid)
     response = http_requests().post(server_url, json=payload, headers=headers, timeout=10)

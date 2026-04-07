@@ -121,7 +121,7 @@ def collect_client_status_payload(config: dict, version: str) -> tuple[dict, str
 
 
 def post_status_update(server_ip: str, port: str, peer_uuid: str, api_password: str, payload: dict, timeout: int = 10):
-    api_url = f"http://{server_ip}:{port}/client-status"
+    api_url = f"http://{server_ip}:{port}/api/v1/client/peer/status"
     req = request.Request(
         api_url,
         data=json.dumps(payload).encode("utf-8"),
@@ -143,7 +143,7 @@ def main() -> int:
     server_ip = config["SERVER_WG_IP"]
     server_port = config["SERVER_PORT"]
 
-    print(f"[INFO] Sending status to http://{server_ip}:{server_port}/client-status")
+    print(f"[INFO] Sending status to http://{server_ip}:{server_port}/api/v1/client/peer/status")
     try:
         post_status_update(server_ip, server_port, peer_uuid, api_password, payload)
     except error.HTTPError as exc:

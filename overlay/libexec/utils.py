@@ -10,7 +10,6 @@ import tempfile
 import subprocess
 import configparser
 import argparse
-from urllib.parse import urlencode
 
 CLIENT_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", "/sensos")
 CLIENT_API_USERNAME = "sensos"
@@ -124,8 +123,7 @@ def healthz_url(config_server, port):
 
 
 def network_info_url(config_server, port, network_name):
-    query = urlencode({"network_name": network_name})
-    return f"http://{config_server}:{port}/get-network-info?{query}"
+    return f"http://{config_server}:{port}/api/v1/client/networks/{network_name}"
 
 
 def get_server_health(config_server, port, timeout=3):
