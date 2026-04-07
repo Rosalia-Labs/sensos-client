@@ -208,6 +208,15 @@ def read_api_password():
     return read_file(API_PASSWORD_FILE)
 
 
+def write_api_password(api_password: str):
+    require_nonempty(api_password, "client API password")
+    write_file(API_PASSWORD_FILE, api_password + "\n", mode=0o640, user="root")
+
+
+def require_peer_uuid(config: dict) -> str:
+    return require_nonempty(config.get("PEER_UUID"), "PEER_UUID")
+
+
 def validate_api_password(config_server, port, api_password, network_name=None):
     requests = require_requests()
     probe_network_name = network_name or "__sensos_auth_probe__"

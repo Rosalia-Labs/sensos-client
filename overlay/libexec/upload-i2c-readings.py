@@ -112,7 +112,6 @@ def read_i2c_upload_config() -> dict:
 
 def build_i2c_upload_payload(
     *,
-    wireguard_ip: str,
     hostname: str,
     client_version: str,
     batch_id: int,
@@ -123,7 +122,6 @@ def build_i2c_upload_payload(
     last_reading = readings[-1]
     return {
         "schema_version": 1,
-        "wireguard_ip": wireguard_ip,
         "hostname": hostname,
         "client_version": client_version,
         "batch_id": batch_id,
@@ -170,6 +168,7 @@ def parse_upload_response(body: str, expected_count: int) -> dict:
 def post_i2c_batch(
     server_ip: str,
     port: str,
+    peer_uuid: str,
     api_password: str,
     payload: dict,
     *,
@@ -183,7 +182,7 @@ def post_i2c_batch(
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "Content-Type": "application/json",
-            **build_basic_auth_header(api_password),
+            **build_basic_auth_header(api_password, username=peer_uuid),
         },
         method="POST",
     )
@@ -208,7 +207,7 @@ def reading_rows_to_payload(rows) -> list[dict]:
 def run_upload_session(config: dict, network_config: dict, api_password: str, client_version: str) -> None:
     server_ip = require_nonempty(network_config.get("SERVER_WG_IP"), "SERVER_WG_IP")
     server_port = require_nonempty(network_config.get("SERVER_PORT"), "SERVER_PORT")
-    wireguard_ip = require_nonempty(network_config.get("CLIENT_WG_IP"), "CLIENT_WG_IP")
+    peer_uuid = require_peer_uuid(network_config)
     hostname = socket.gethostname()
 
     with connect_db() as conn:
@@ -229,7 +228,6 @@ def run_upload_session(config: dict, network_config: dict, api_password: str, cl
 
     payload_readings = reading_rows_to_payload(rows)
     payload = build_i2c_upload_payload(
-        wireguard_ip=wireguard_ip,
         hostname=hostname,
         client_version=client_version,
         batch_id=batch_id,
@@ -247,6 +245,7 @@ def run_upload_session(config: dict, network_config: dict, api_password: str, cl
         response_status, response_body = post_i2c_batch(
             server_ip,
             server_port,
+            peer_uuid,
             api_password,
             payload,
             connect_timeout_sec=config["connect_timeout_sec"],

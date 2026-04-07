@@ -171,30 +171,39 @@ def register_peer(config_server, port, network_name, wg_public_key, api_password
     wg_public_ip = data.get("wg_public_ip")
     wg_port = data.get("wg_port")
     peer_uuid = data.get("peer_uuid")
+    peer_api_password = data.get("peer_api_password")
 
-    if not all([wg_ip, server_pubkey, wg_public_ip, wg_port, peer_uuid]):
+    if not all([wg_ip, server_pubkey, wg_public_ip, wg_port, peer_uuid, peer_api_password]):
         sys.exit(
             "Error: incomplete register-peer response "
-            "(wg_ip/wg_public_key/wg_public_ip/wg_port/peer_uuid)."
+            "(wg_ip/wg_public_key/wg_public_ip/wg_port/peer_uuid/peer_api_password)."
         )
 
     ip_parts = wg_ip.split(".")
     hostname = f"{network_name}-{ip_parts[2]}-{ip_parts[3]}"
 
-    register_wireguard_key(config_server, port, wg_ip, wg_public_key, api_password)
-    return wg_ip, hostname, server_pubkey, wg_public_ip, int(wg_port), peer_uuid
+    register_wireguard_key(
+        config_server,
+        port,
+        peer_uuid,
+        wg_ip,
+        wg_public_key,
+        peer_api_password,
+    )
+    return wg_ip, hostname, server_pubkey, wg_public_ip, int(wg_port), peer_uuid, peer_api_password
 
 
-def register_wireguard_key(config_server, port, wg_ip, wg_public_key, api_password):
+def register_wireguard_key(config_server, port, peer_uuid, wg_ip, wg_public_key, api_password):
     require_nonempty(wg_ip, "wg_ip")
+    require_nonempty(peer_uuid, "peer_uuid")
     require_nonempty(wg_public_key, "wg_public_key")
     server_url = f"http://{config_server}:{port}/register-wireguard-key"
     print(f"🔑 Registering WireGuard public key with {server_url}...")
 
-    headers = build_basic_auth_header(api_password)
+    headers = build_basic_auth_header(api_password, username=peer_uuid)
     response = http_requests().post(
         server_url,
-        json={"wg_ip": wg_ip, "wg_public_key": wg_public_key},
+        json={"wg_public_key": wg_public_key},
         headers=headers,
         timeout=10,
     )
@@ -316,7 +325,7 @@ def extract_ssh_key_params(public_key_file):
         return None, None, None, None, None
 
 
-def exchange_ssh_keys(config_server, port, wg_ip, api_password):
+def exchange_ssh_keys(config_server, port, peer_uuid, wg_ip, api_password):
     ssh_dir = os.path.join(SENSOS_ADMIN_HOME, ".ssh")
     public_key_file = os.path.join(ssh_dir, "id_ed25519.pub")
     authorized_keys_file = os.path.join(ssh_dir, "authorized_keys")
@@ -327,7 +336,6 @@ def exchange_ssh_keys(config_server, port, wg_ip, api_password):
         sys.exit(f"Error: failed to extract SSH key details from {public_key_file}")
 
     payload = {
-        "wg_ip": wg_ip,
         "username": username,
         "uid": uid,
         "ssh_public_key": open(public_key_file).read().strip(),
@@ -341,7 +349,7 @@ def exchange_ssh_keys(config_server, port, wg_ip, api_password):
         sys.exit("Error: incomplete SSH key data; aborting exchange.")
     server_url = f"http://{config_server}:{port}/exchange-ssh-keys"
     print(f"🔑 Registering SSH public key with {server_url}...")
-    headers = build_basic_auth_header(api_password)
+    headers = build_basic_auth_header(api_password, username=peer_uuid)
     response = http_requests().post(server_url, json=payload, headers=headers, timeout=10)
     if response.status_code != 200:
         sys.exit(f"Error: exchange-ssh-keys failed: {response.text}")
@@ -361,7 +369,7 @@ def configure_wireguard(args, api_password):
     if wg_public_key is None:
         sys.exit("Error: WireGuard key generation failed.")
 
-    wg_ip, hostname, server_pubkey, wg_public_ip, wg_port, peer_uuid = register_peer(
+    wg_ip, hostname, server_pubkey, wg_public_ip, wg_port, peer_uuid, peer_api_password = register_peer(
         args.config_server,
         args.port,
         args.network,
@@ -384,13 +392,13 @@ def configure_wireguard(args, api_password):
 
     write_wireguard_config(wg_ip, server_pubkey, wg_public_ip, wg_port, args.network, args.wg_keepalive)
     change_hostname(hostname)
-    return wg_ip, wg_public_ip, wg_port, peer_uuid
+    return wg_ip, wg_public_ip, wg_port, peer_uuid, peer_api_password
 
 
-def configure_ssh(args, api_password, wg_ip):
+def configure_ssh(args, peer_uuid, api_password, wg_ip):
     generate_ssh_keys(args.force)
     if wg_ip:
-        exchange_ssh_keys(args.config_server, args.port, wg_ip, api_password)
+        exchange_ssh_keys(args.config_server, args.port, peer_uuid, wg_ip, api_password)
     else:
         sys.exit("Error: no WG IP available; cannot exchange SSH keys.")
 
@@ -533,7 +541,7 @@ def main():
 
     ensure_network_exists(args.config_server, args.port, api_password, args.network)
 
-    client_wg_ip, wg_public_ip, wg_port, peer_uuid = configure_wireguard(args, api_password)
+    client_wg_ip, wg_public_ip, wg_port, peer_uuid, peer_api_password = configure_wireguard(args, api_password)
     if not client_wg_ip:
         sys.exit("Error: WireGuard configuration failed.")
 
@@ -547,7 +555,10 @@ def main():
 
     write_client_settings(args, server_wg_ip, client_wg_ip, endpoint_ip, wg_port, peer_uuid=peer_uuid)
 
-    configure_ssh(args, api_password, client_wg_ip)
+    write_api_password(peer_api_password)
+    print(f"✅ Peer API password saved securely in {API_PASSWORD_FILE}.")
+
+    configure_ssh(args, peer_uuid, peer_api_password, client_wg_ip)
 
     try:
         a, b, _, _ = map(int, client_wg_ip.split("."))

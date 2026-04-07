@@ -164,9 +164,8 @@ def collect_network_interfaces() -> dict[str, dict]:
     return interfaces
 
 
-def build_hardware_profile_payload(wg_ip: str, hostname: str | None = None) -> dict:
+def build_hardware_profile_payload(hostname: str | None = None) -> dict:
     return {
-        "wg_ip": wg_ip,
         "hostname": hostname or socket.gethostname(),
         "model": collect_model(),
         "kernel_version": platform.release(),
@@ -179,10 +178,10 @@ def build_hardware_profile_payload(wg_ip: str, hostname: str | None = None) -> d
     }
 
 
-def upload_hardware_profile(server_ip: str, port: str, api_password: str, payload: dict):
+def upload_hardware_profile(server_ip: str, port: str, peer_uuid: str, api_password: str, payload: dict):
     url = f"http://{server_ip}:{port}/upload-hardware-profile"
     headers = {
-        **build_basic_auth_header(api_password),
+        **build_basic_auth_header(api_password, username=peer_uuid),
         "Content-Type": "application/json",
     }
     return http_requests().post(url, headers=headers, json=payload, timeout=15)
@@ -192,24 +191,23 @@ def main() -> int:
     config = read_network_conf()
     server_ip = config.get("SERVER_WG_IP")
     port = config.get("SERVER_PORT") or DEFAULT_PORT
-    wg_ip = config.get("CLIENT_WG_IP")
+    peer_uuid = require_peer_uuid(config)
 
     require_nonempty(server_ip, "SERVER_WG_IP")
     require_nonempty(port, "SERVER_PORT")
-    require_nonempty(wg_ip, "CLIENT_WG_IP")
 
     api_password = read_api_password()
     if not api_password:
         raise SystemExit("Error: client API password required to upload hardware profile.")
 
-    payload = build_hardware_profile_payload(wg_ip)
-    response = upload_hardware_profile(server_ip, port, api_password, payload)
+    payload = build_hardware_profile_payload()
+    response = upload_hardware_profile(server_ip, port, peer_uuid, api_password, payload)
     if response.status_code != 200:
         raise SystemExit(
             f"Error: upload-hardware-profile failed: {response.status_code} {response.text}"
         )
 
-    print(f"✅ Hardware profile uploaded for {wg_ip}.")
+    print(f"✅ Hardware profile uploaded for peer {peer_uuid}.")
     return 0
 
 

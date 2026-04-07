@@ -68,7 +68,6 @@ def read_load_averages() -> tuple[float, float, float]:
 
 def build_client_status_payload(
     *,
-    wireguard_ip: str,
     version: str,
     hostname: str,
     uptime_seconds: int,
@@ -81,7 +80,6 @@ def build_client_status_payload(
     status_message: str = "OK",
 ) -> dict:
     return {
-        "wireguard_ip": wireguard_ip,
         "hostname": hostname,
         "uptime_seconds": uptime_seconds,
         "disk_available_gb": disk_available_gb,
@@ -95,14 +93,14 @@ def build_client_status_payload(
     }
 
 
-def collect_client_status_payload(config: dict, version: str) -> dict:
+def collect_client_status_payload(config: dict, version: str) -> tuple[dict, str]:
     server_wg_ip = config.get("SERVER_WG_IP")
     server_port = config.get("SERVER_PORT")
-    wireguard_ip = config.get("CLIENT_WG_IP")
+    peer_uuid = require_peer_uuid(config)
 
-    if not server_wg_ip or not server_port or not wireguard_ip:
+    if not server_wg_ip or not server_port:
         raise SystemExit(
-            f"[ERROR] SERVER_WG_IP, SERVER_PORT, or CLIENT_WG_IP missing in {CONFIG_FILE}."
+            f"[ERROR] SERVER_WG_IP or SERVER_PORT missing in {CONFIG_FILE}."
         )
 
     disk_available_gb = shutil.disk_usage("/").free // (1024 ** 3)
@@ -110,7 +108,6 @@ def collect_client_status_payload(config: dict, version: str) -> dict:
     load_1m, load_5m, load_15m = read_load_averages()
 
     return build_client_status_payload(
-        wireguard_ip=wireguard_ip,
         hostname=socket.gethostname(),
         uptime_seconds=read_uptime_seconds(),
         disk_available_gb=disk_available_gb,
@@ -120,17 +117,17 @@ def collect_client_status_payload(config: dict, version: str) -> dict:
         load_5m=load_5m,
         load_15m=load_15m,
         version=version,
-    )
+    ), peer_uuid
 
 
-def post_status_update(server_ip: str, port: str, api_password: str, payload: dict, timeout: int = 10):
+def post_status_update(server_ip: str, port: str, peer_uuid: str, api_password: str, payload: dict, timeout: int = 10):
     api_url = f"http://{server_ip}:{port}/client-status"
     req = request.Request(
         api_url,
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "Content-Type": "application/json",
-            **build_basic_auth_header(api_password),
+            **build_basic_auth_header(api_password, username=peer_uuid),
         },
         method="POST",
     )
@@ -142,13 +139,13 @@ def main() -> int:
     version = read_required_text(VERSION_FILE)
     config = read_network_conf()
     api_password = read_required_text(API_PASS_FILE)
-    payload = collect_client_status_payload(config, version)
+    payload, peer_uuid = collect_client_status_payload(config, version)
     server_ip = config["SERVER_WG_IP"]
     server_port = config["SERVER_PORT"]
 
     print(f"[INFO] Sending status to http://{server_ip}:{server_port}/client-status")
     try:
-        post_status_update(server_ip, server_port, api_password, payload)
+        post_status_update(server_ip, server_port, peer_uuid, api_password, payload)
     except error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         raise SystemExit(f"[ERROR] Status post failed: HTTP {exc.code}: {body}") from exc

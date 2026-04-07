@@ -57,6 +57,7 @@ class ApiContractTests(unittest.TestCase):
                 "wg_public_ip": "198.51.100.20",
                 "wg_port": 51820,
                 "peer_uuid": "peer-123",
+                "peer_api_password": "peer-secret",
             },
             text='{"wg_ip":"10.42.1.9"}',
         )
@@ -83,6 +84,7 @@ class ApiContractTests(unittest.TestCase):
                 "198.51.100.20",
                 51820,
                 "peer-123",
+                "peer-secret",
             ),
         )
         self.assertEqual(
@@ -96,34 +98,38 @@ class ApiContractTests(unittest.TestCase):
         register_mock.assert_called_once_with(
             "config.example",
             8765,
+            "peer-123",
             "10.42.1.9",
             "client-public-key",
-            "client-password",
+            "peer-secret",
         )
 
-    def test_register_wireguard_key_uses_assigned_wg_ip_payload(self):
+    def test_register_wireguard_key_uses_peer_auth_and_server_assigned_identity(self):
         response = FakeResponse(200, {}, text="ok")
         fake_requests = SimpleNamespace(post=mock.Mock(return_value=response))
         with mock.patch.object(config_network, "http_requests", return_value=fake_requests):
             config_network.register_wireguard_key(
                 "config.example",
                 8765,
+                "peer-123",
                 "10.42.1.9",
                 "client-public-key",
-                "client-password",
+                "peer-secret",
             )
 
         self.assertEqual(
             fake_requests.post.call_args.kwargs["json"],
             {
-                "wg_ip": "10.42.1.9",
                 "wg_public_key": "client-public-key",
             },
+        )
+        self.assertEqual(
+            fake_requests.post.call_args.kwargs["headers"]["Authorization"],
+            "Basic " + base64.b64encode(b"peer-123:peer-secret").decode(),
         )
 
     def test_client_status_payload_uses_current_server_field_names(self):
         payload = send_status_update.build_client_status_payload(
-            wireguard_ip="10.42.1.9",
             hostname="sensor-1",
             uptime_seconds=123,
             disk_available_gb=80,
@@ -139,7 +145,6 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(
             set(payload.keys()),
             {
-                "wireguard_ip",
                 "hostname",
                 "uptime_seconds",
                 "disk_available_gb",
@@ -153,6 +158,7 @@ class ApiContractTests(unittest.TestCase):
             },
         )
         self.assertNotIn("wg_ip", payload)
+        self.assertNotIn("wireguard_ip", payload)
 
     def test_healthz_check_is_unauthenticated(self):
         mock_get = mock.Mock(return_value=FakeResponse(200, {"status": "ok"}))
@@ -226,14 +232,12 @@ class ApiContractTests(unittest.TestCase):
                             with mock.patch.object(upload_hardware_profile, "collect_usb_devices", return_value="Bus 001 Device 001: test"):
                                 with mock.patch.object(upload_hardware_profile, "collect_network_interfaces", return_value={"eth0": {"ipv4": ["10.0.2.15"]}}):
                                     payload = upload_hardware_profile.build_hardware_profile_payload(
-                                        "10.42.1.9",
                                         hostname="sensor-1",
                                     )
 
         self.assertEqual(
             set(payload.keys()),
             {
-                "wg_ip",
                 "hostname",
                 "model",
                 "kernel_version",
@@ -251,7 +255,6 @@ class ApiContractTests(unittest.TestCase):
 
     def test_i2c_upload_payload_includes_batch_metadata_and_normalized_readings(self):
         payload = i2c_upload.build_i2c_upload_payload(
-            wireguard_ip="10.42.1.9",
             hostname="sensor-1",
             client_version="1.2.3",
             batch_id=17,
@@ -277,7 +280,6 @@ class ApiContractTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["schema_version"], 1)
-        self.assertEqual(payload["wireguard_ip"], "10.42.1.9")
         self.assertEqual(payload["hostname"], "sensor-1")
         self.assertEqual(payload["client_version"], "1.2.3")
         self.assertEqual(payload["batch_id"], 17)

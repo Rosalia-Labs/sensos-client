@@ -35,15 +35,14 @@ def http_requests():
     return REQUESTS
 
 
-def send_location(server_ip, port, wg_ip, api_password, latitude, longitude):
+def send_location(server_ip, port, peer_uuid, api_password, latitude, longitude):
     payload = {
-        "wg_ip": wg_ip,
         "latitude": latitude,
         "longitude": longitude,
     }
     url = f"http://{server_ip}:{port}/set-peer-location"
     headers = {
-        **build_basic_auth_header(api_password),
+        **build_basic_auth_header(api_password, username=peer_uuid),
         "Content-Type": "application/json",
     }
 
@@ -54,7 +53,7 @@ def send_location(server_ip, port, wg_ip, api_password, latitude, longitude):
         return
 
     if response.status_code == 200:
-        print(f"✅ Location updated to ({latitude}, {longitude}) for {wg_ip}.")
+        print(f"✅ Location updated to ({latitude}, {longitude}) for {peer_uuid}.")
         return
 
     print(f"❌ Server responded with {response.status_code}: {response.text}", file=sys.stderr)
@@ -121,14 +120,14 @@ def main():
     conf = read_network_conf()
     server_ip = args.config_server or conf.get("SERVER_WG_IP")
     port = args.port or conf.get("SERVER_PORT") or DEFAULT_PORT
-    wg_ip = conf.get("CLIENT_WG_IP")
+    peer_uuid = conf.get("PEER_UUID")
 
     if not server_ip:
         print("ℹ️ No config server configured; saved location locally only.")
         return 0
 
-    if not wg_ip:
-        print(f"❌ Missing CLIENT_WG_IP in {NETWORK_CONF}.", file=sys.stderr)
+    if not peer_uuid:
+        print(f"❌ Missing PEER_UUID in {NETWORK_CONF}.", file=sys.stderr)
         return 1
 
     api_password = read_api_password()
@@ -136,7 +135,7 @@ def main():
         print("❌ Client API password required to sync location to the server.", file=sys.stderr)
         return 1
 
-    send_location(server_ip, port, wg_ip, api_password, args.latitude, args.longitude)
+    send_location(server_ip, port, peer_uuid, api_password, args.latitude, args.longitude)
     return 0
 
 
