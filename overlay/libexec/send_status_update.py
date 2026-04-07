@@ -18,7 +18,6 @@ OVERLAY_ROOT = Path(os.environ.get("SENSOS_CLIENT_ROOT", "/sensos"))
 UTILS_FILE = OVERLAY_ROOT / "libexec" / "utils.py"
 CONFIG_FILE = OVERLAY_ROOT / "etc" / "network.conf"
 API_PASS_FILE = OVERLAY_ROOT / "keys" / "api_password"
-VERSION_FILE = OVERLAY_ROOT / "VERSION"
 
 if not UTILS_FILE.is_file():
     raise RuntimeError(f"Missing utils.py at {UTILS_FILE}")
@@ -136,7 +135,7 @@ def post_status_update(server_ip: str, port: str, peer_uuid: str, api_password: 
 
 
 def main() -> int:
-    version = read_required_text(VERSION_FILE)
+    version = read_client_version_text(str(OVERLAY_ROOT))
     config = read_network_conf()
     api_password = read_required_text(API_PASS_FILE)
     payload, peer_uuid = collect_client_status_payload(config, version)

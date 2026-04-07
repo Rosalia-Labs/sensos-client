@@ -17,6 +17,7 @@ CLIENT_API_USERNAME = "sensos"
 API_PASSWORD_FILE = os.path.join(CLIENT_ROOT, "keys", "api_password")
 DEFAULTS_CONF = os.path.join(CLIENT_ROOT, "etc", "defaults.conf")
 NETWORK_CONF = os.path.join(CLIENT_ROOT, "etc", "network.conf")
+INSTALL_STATE_FILE = os.path.join(CLIENT_ROOT, "etc", "install-state.env")
 LOG_DIR = os.path.join(CLIENT_ROOT, "log")
 DEFAULT_PORT = "8765"
 HEALTHZ_PATH = "/healthz"
@@ -197,6 +198,25 @@ def read_network_conf():
         print(f"❌ {NETWORK_CONF} not found", file=sys.stderr)
         return {}
     return read_kv_config(NETWORK_CONF)
+
+
+def read_client_version_text(client_root=CLIENT_ROOT):
+    version_path = os.path.join(client_root, "VERSION")
+    if os.path.isfile(version_path):
+        with open(version_path, encoding="utf-8") as handle:
+            value = handle.read().strip()
+        if value:
+            return value
+
+    install_state_path = os.path.join(client_root, "etc", "install-state.env")
+    install_state = read_kv_config(install_state_path)
+    value = install_state.get("INSTALLED_VERSION", "").strip()
+    if value:
+        return value
+
+    raise SystemExit(
+        f"[ERROR] Could not determine client version from {version_path} or {install_state_path}."
+    )
 
 
 def read_api_password():

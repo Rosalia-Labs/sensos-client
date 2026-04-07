@@ -18,7 +18,6 @@ SCRIPT_DIR = SCRIPT_FILE.parent
 OVERLAY_ROOT = Path(os.environ.get("SENSOS_CLIENT_ROOT", "/sensos"))
 UTILS_FILE = OVERLAY_ROOT / "libexec" / "utils.py"
 CONFIG_FILE = OVERLAY_ROOT / "etc" / "i2c-uploads.conf"
-VERSION_FILE = OVERLAY_ROOT / "VERSION"
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from i2c_data import (
@@ -300,7 +299,7 @@ def main() -> int:
     config = read_i2c_upload_config()
     network_config = read_network_conf()
     api_password = require_nonempty(read_api_password(), "client API password")
-    client_version = read_required_text(VERSION_FILE)
+    client_version = read_client_version_text(str(OVERLAY_ROOT))
 
     print(
         "[INFO] Starting continuous I2C uploader "
