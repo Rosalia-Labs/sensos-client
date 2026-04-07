@@ -188,7 +188,7 @@ sudo journalctl -u sensos-birdnet.service -f
 Or inspect the thinning worker separately:
 
 ```bash
-sudo journalctl -u thin-data.service -f
+sudo journalctl -u sensos-thin-data.service -f
 ```
 
 Inspect service definition:

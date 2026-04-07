@@ -28,6 +28,26 @@ LEGACY_DEPLOY_SYSTEMD_DIR="${DEPLOY_ROOT}/systemd"
 
 HOST_BIN_DIR="/usr/local/bin"
 HOST_SYSTEMD_DIR="/etc/systemd/system"
+RETIRED_SYSTEMD_UNITS=(
+    monitor-data-space.service
+    monitor-data-space.timer
+    send-status-update.service
+    send-status-update.timer
+    thin-data.service
+    senoss-monitor-data-space.service
+    senoss-monitor-data-space.timer
+    senoss-send-status-update.service
+    senoss-send-status-update.timer
+    senoss-thin-data.service
+    senoss-arecord.service
+    senoss-birdnet.service
+    senoss-compress-audio.service
+    senoss-gps.service
+    senoss-network-capture.service
+    senoss-read-i2c.service
+    senoss-upload-i2c.service
+    senoss-server.service
+)
 
 log() {
     printf '[setup/05-overlay] %s\n' "$*"
@@ -166,6 +186,21 @@ install_host_entries() {
     done < <(find "${source_dir}" -maxdepth 1 -type f ! -name '.gitkeep' | sort)
 }
 
+retire_legacy_host_units() {
+    local unit_name
+
+    for unit_name in "${RETIRED_SYSTEMD_UNITS[@]}"; do
+        if systemctl list-unit-files --type=service --type=timer 2>/dev/null | awk '{print $1}' | grep -Fxq "${unit_name}"; then
+            systemctl disable --now "${unit_name}" >/dev/null 2>&1 || true
+            log "disabled retired host unit ${unit_name}"
+        fi
+        if [[ -e "${HOST_SYSTEMD_DIR}/${unit_name}" ]]; then
+            rm -f "${HOST_SYSTEMD_DIR}/${unit_name}"
+            log "removed retired host unit file ${HOST_SYSTEMD_DIR}/${unit_name}"
+        fi
+    done
+}
+
 reload_systemd() {
     if command -v systemctl >/dev/null 2>&1; then
         systemctl daemon-reload
@@ -190,6 +225,7 @@ main() {
     remove_legacy_symlinks
     install_host_entries "${OVERLAY_BIN_DIR}" "${HOST_BIN_DIR}" 0755
     install_host_entries "${OVERLAY_SYSTEMD_DIR}" "${HOST_SYSTEMD_DIR}" 0644
+    retire_legacy_host_units
     retire_legacy_deploy_dir "${LEGACY_DEPLOY_BIN_DIR}"
     retire_legacy_deploy_dir "${LEGACY_DEPLOY_SYSTEMD_DIR}"
     reload_systemd

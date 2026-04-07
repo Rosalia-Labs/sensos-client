@@ -447,8 +447,8 @@ apply_service_state() {
         sudo systemctl enable sensos-arecord.service
         echo "Enabling sensos-compress-audio.service..."
         sudo systemctl enable sensos-compress-audio.service
-        echo "Enabling thin-data.service..."
-        sudo systemctl enable thin-data.service
+        echo "Enabling sensos-thin-data.service..."
+        sudo systemctl enable sensos-thin-data.service
     fi
 
     if [[ "$(normalize_bool "${start_service}")" == "true" ]]; then
@@ -457,8 +457,8 @@ apply_service_state() {
         sudo systemctl start sensos-arecord.service
         echo "Starting sensos-compress-audio.service..."
         sudo systemctl start sensos-compress-audio.service
-        echo "Starting thin-data.service..."
-        sudo systemctl start thin-data.service
+        echo "Starting sensos-thin-data.service..."
+        sudo systemctl start sensos-thin-data.service
     fi
 }
 
@@ -470,7 +470,7 @@ main() {
         "Recording service is still running; note that arecord may fail if the service is using the device."
     maybe_stop_service "sensos-compress-audio.service" \
         "Compression service is still running; queued files may be moved while you reconfigure."
-    maybe_stop_service "thin-data.service" \
+    maybe_stop_service "sensos-thin-data.service" \
         "Data thinning is still running; retained audio may be pruned while you reconfigure."
 
     device_row="$(resolve_device_selection "${device}")"

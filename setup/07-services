@@ -14,16 +14,36 @@ INSTALL_STATE_FILE="${DEPLOY_ROOT}/etc/install-state.env"
 ARECORD_CONF_FILE="${DEPLOY_ROOT}/etc/arecord.conf"
 
 HOST_BASELINE_UNITS=(
-    monitor-data-space.timer
-    send-status-update.timer
+    sensos-monitor-data-space.timer
+    sensos-send-status-update.timer
     nftables.service
     ssh.service
     vnstat.service
 )
 
+RETIRED_UNITS=(
+    monitor-data-space.timer
+    send-status-update.timer
+    monitor-data-space.service
+    send-status-update.service
+    thin-data.service
+    senoss-monitor-data-space.timer
+    senoss-send-status-update.timer
+    senoss-monitor-data-space.service
+    senoss-send-status-update.service
+    senoss-thin-data.service
+    senoss-arecord.service
+    senoss-birdnet.service
+    senoss-compress-audio.service
+    senoss-gps.service
+    senoss-network-capture.service
+    senoss-read-i2c.service
+    senoss-upload-i2c.service
+)
+
 OPTIONAL_AUDIO_UNITS=(
     sensos-compress-audio.service
-    thin-data.service
+    sensos-thin-data.service
 )
 
 log() {
@@ -105,6 +125,14 @@ disable_host_unit_if_present() {
     fi
 }
 
+retire_old_units() {
+    local unit_name
+
+    for unit_name in "${RETIRED_UNITS[@]}"; do
+        disable_host_unit_if_present "${unit_name}"
+    done
+}
+
 reconcile_optional_audio_units() {
     local unit_name
 
@@ -132,6 +160,7 @@ main() {
 
     systemctl daemon-reload
     log "reloaded systemd unit files"
+    retire_old_units
 
     if [[ -f "${INSTALL_STATE_FILE}" ]]; then
         log "existing install detected at ${INSTALL_STATE_FILE}; preserving host unit state"

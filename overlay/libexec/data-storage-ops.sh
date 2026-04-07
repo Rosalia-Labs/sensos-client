@@ -10,10 +10,10 @@ DATA_SERVICES=(
     "sensos-upload-i2c.service"
     "sensos-birdnet.service"
     "sensos-gps.service"
-    "thin-data.service"
+    "sensos-thin-data.service"
 )
 DATA_TIMERS=(
-    "monitor-data-space.timer"
+    "sensos-monitor-data-space.timer"
 )
 DATA_ARCHIVE_MODE_STATE_FILE="${SENSOS_DATA_ARCHIVE_MODE_STATE_FILE:-/sensos/log/archive-mode.state}"
 
