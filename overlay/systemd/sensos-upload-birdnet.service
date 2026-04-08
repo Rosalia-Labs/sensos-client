@@ -1,0 +1,16 @@
+[Unit]
+Description=Upload BirdNET results to server
+After=multi-user.target
+
+[Service]
+Type=simple
+User=sensos-runner
+ExecStart=/sensos/python/venv/bin/python /sensos/libexec/upload-birdnet-results.py
+WorkingDirectory=/sensos/data
+StandardOutput=journal
+StandardError=journal
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -417,6 +417,40 @@ Behavior:
 - `server-owns`: the server becomes authoritative after acceptance, and the client may prune old local copies later
 - `--delete-after-days` is only valid with `--ownership-model server-owns`
 
+### `config-birdnet-uploads`
+
+Configures the continuous BirdNET result upload service and its ownership
+model.
+
+Important flags:
+
+- `--ownership-model`
+- `--session-interval-sec`
+- `--batch-size`
+- `--connect-timeout-sec`
+- `--read-timeout-sec`
+- `--delete-after-days`
+- `--enable`
+- `--start`
+- `--disable`
+
+Typical use:
+
+```sh
+config-birdnet-uploads --ownership-model client-retains --session-interval-sec 3600 --enable --start
+config-birdnet-uploads --ownership-model server-owns --batch-size 100 --delete-after-days 30 --enable --start
+config-birdnet-uploads --disable
+```
+
+Behavior:
+
+- writes `/sensos/etc/birdnet-uploads.conf`
+- uploads BirdNET metadata from `/sensos/data/birdnet/birdnet.db`
+- batches by processed source file and includes nested detection and FLAC-run metadata
+- supports the same two ownership modes as I2C uploads
+- with `server-owns`, old uploaded BirdNET metadata and local FLAC clips can be pruned later using `--delete-after-days`
+- leaves the service state unchanged unless `--enable`, `--start`, or `--disable` is supplied
+
 ### `config-rpi-eeprom`
 
 Reads and updates Raspberry Pi bootloader EEPROM settings related to board power policy.

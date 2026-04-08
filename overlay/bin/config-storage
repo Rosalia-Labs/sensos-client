@@ -334,7 +334,7 @@ write_storage_metadata() {
     echo "Creating device info on the mounted storage..."
     if [[ -x "${CACHE_SYS_INFO_SCRIPT}" ]]; then
         sudo "${CACHE_SYS_INFO_SCRIPT}" \
-            --include "${CLIENT_ROOT}/etc/network.conf ${CLIENT_ROOT}/etc/location.conf ${CLIENT_ROOT}/etc/arecord.conf ${CLIENT_ROOT}/etc/i2c-sensors.conf ${CLIENT_ROOT}/etc/i2c-uploads.conf"
+            --include "${CLIENT_ROOT}/etc/network.conf ${CLIENT_ROOT}/etc/location.conf ${CLIENT_ROOT}/etc/arecord.conf ${CLIENT_ROOT}/etc/i2c-sensors.conf ${CLIENT_ROOT}/etc/i2c-uploads.conf ${CLIENT_ROOT}/etc/birdnet-uploads.conf"
     else
         echo "ℹ️  cache-sys-info.sh not migrated yet; skipping storage metadata write."
     fi

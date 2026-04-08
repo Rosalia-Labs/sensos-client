@@ -34,6 +34,9 @@ upload_hardware_profile = load_module(
 i2c_upload = load_module(
     "i2c_upload_test", OVERLAY_ROOT / "libexec" / "upload-i2c-readings.py"
 )
+birdnet_upload = load_module(
+    "birdnet_upload_test", OVERLAY_ROOT / "libexec" / "upload-birdnet-results.py"
+)
 utils = load_module("utils_test", OVERLAY_ROOT / "libexec" / "utils.py")
 
 
@@ -322,6 +325,79 @@ class ApiContractTests(unittest.TestCase):
                 '{"status":"ok","receipt_id":"receipt-123","accepted_count":1,"server_received_at":"2026-04-07T12:01:00Z"}',
                 2,
             )
+
+    def test_birdnet_upload_payload_includes_processed_files_and_nested_results(self):
+        payload = birdnet_upload.build_birdnet_upload_payload(
+            hostname="sensor-1",
+            client_version="1.2.3",
+            batch_id=23,
+            ownership_mode="client-retains",
+            processed_files=[
+                {
+                    "source_path": "audio_recordings/compressed/2026/04/07/a.flac",
+                    "sample_rate": 48000,
+                    "channels": 2,
+                    "frames": 144000,
+                    "started_at": "2026-04-07T12:00:00Z",
+                    "processed_at": "2026-04-07T12:00:04Z",
+                    "status": "done",
+                    "error": None,
+                    "output_dir": "2026/04/07",
+                    "deleted_source": True,
+                    "detections": [
+                        {
+                            "channel_index": 0,
+                            "window_index": 0,
+                            "start_frame": 0,
+                            "end_frame": 144000,
+                            "start_sec": 0.0,
+                            "end_sec": 3.0,
+                            "top_label": "Northern Cardinal (Cardinalis cardinalis)",
+                            "top_score": 0.91,
+                            "top_likely_score": 0.75,
+                        }
+                    ],
+                    "flac_runs": [
+                        {
+                            "channel_index": 0,
+                            "run_index": 0,
+                            "label": "Northern Cardinal (Cardinalis cardinalis)",
+                            "label_dir": "audio_recordings/processed/2026/04/07/Northern_Cardinal",
+                            "start_frame": 0,
+                            "end_frame": 144000,
+                            "start_sec": 0.0,
+                            "end_sec": 3.0,
+                            "peak_score": 0.91,
+                            "peak_likely_score": 0.75,
+                            "flac_path": "audio_recordings/processed/2026/04/07/Northern_Cardinal/clip.flac",
+                            "deleted_at": None,
+                        }
+                    ],
+                }
+            ],
+        )
+
+        self.assertEqual(payload["schema_version"], 1)
+        self.assertEqual(payload["batch_id"], 23)
+        self.assertEqual(payload["source_count"], 1)
+        self.assertEqual(payload["first_source_path"], "audio_recordings/compressed/2026/04/07/a.flac")
+        self.assertEqual(payload["processed_files"][0]["detections"][0]["window_index"], 0)
+        self.assertEqual(payload["processed_files"][0]["flac_runs"][0]["flac_path"], "audio_recordings/processed/2026/04/07/Northern_Cardinal/clip.flac")
+
+    def test_birdnet_upload_response_requires_receipt_and_full_acceptance(self):
+        parsed = birdnet_upload.parse_upload_response(
+            '{"status":"ok","receipt_id":"receipt-123","accepted_count":1,"server_received_at":"2026-04-07T12:01:00Z"}',
+            1,
+        )
+
+        self.assertEqual(
+            parsed,
+            {
+                "receipt_id": "receipt-123",
+                "accepted_count": 1,
+                "server_received_at": "2026-04-07T12:01:00Z",
+            },
+        )
 
     def test_config_network_defaults_steady_state_port_to_8765_not_setup_port(self):
         argv = [
