@@ -309,6 +309,47 @@ Behavior:
 - may ask to stop active recording/compression/thinning services before reconfiguring when run interactively
 - writes recording config and can enable/start `sensos-arecord.service`
 
+### `debug-audio-monitor`
+
+Temporarily stops `sensos-arecord.service`, captures live audio from the same
+configured device, and restarts the recording service when the debug session
+ends.
+
+Important flags:
+
+- `--duration`
+- `--play-local`
+- `--skip-service-stop`
+- `--device`
+- `--format`
+- `--channels`
+- `--rate`
+
+Typical use:
+
+```sh
+debug-audio-monitor --play-local
+debug-audio-monitor --duration 30 > /tmp/monitor.wav
+ssh <host> "debug-audio-monitor --duration 30" | play -q -t wav -
+```
+
+Playback helpers for the SSH streaming example:
+
+- `play` comes from `sox`
+- on macOS, install it with Homebrew: `brew install sox`
+- on macOS, install it with MacPorts: `sudo port install sox`
+- on Debian-family systems, `play` is usually provided by the `sox` package
+- `aplay` is an alternative local player on Linux and is usually provided by `alsa-utils`
+
+Behavior:
+
+- reads `/sensos/etc/arecord.conf` and reuses that device/format/channel/rate by default
+- stops `sensos-arecord.service` first if it is active, unless `--skip-service-stop` is set
+- restarts `sensos-arecord.service` automatically on normal exit or interruption if it had been active when the command started
+- writes control/status messages to stderr so stdout stays clean for the WAV stream
+- requires stdout to be piped or redirected unless `--play-local` is used
+- is intended for brief setup/debug listening windows rather than normal operation
+
 ### `config-i2c-sensors`
 
 Configures periodic I2C sensor polling and optionally enables/starts the reader service.

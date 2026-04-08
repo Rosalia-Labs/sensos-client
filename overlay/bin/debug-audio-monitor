@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+set -euo pipefail
+
+SCRIPT_FILE="$(realpath "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_FILE}")" && pwd)"
+CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-/sensos}"
+PARSE_SWITCHES_LIB="${CLIENT_ROOT}/libexec/parse-switches.sh"
+CONFIG_FILE="${CLIENT_ROOT}/etc/arecord.conf"
+SERVICE_NAME="sensos-arecord.service"
+
+[[ -f "${PARSE_SWITCHES_LIB}" ]] || {
+    printf 'ERROR: missing parse-switches library at %s\n' "${PARSE_SWITCHES_LIB}" >&2
+    exit 1
+}
+source "${PARSE_SWITCHES_LIB}"
+
+register_option --device device "Override recording device from arecord.conf" ""
+register_option --format format "Override sample format from arecord.conf" ""
+register_option --channels channels "Override channel count from arecord.conf" ""
+register_option --rate rate "Override sample rate from arecord.conf" ""
+register_option --duration duration "Capture duration in seconds; 0 means until interrupted" "0"
+register_option --play-local play_local "Play audio locally on the client with sox 'play'" "false"
+register_option --skip-service-stop skip_service_stop "Do not stop sensos-arecord.service first" "false"
+
+script_name="$(basename "$0")"
+parse_switches "$script_name" "$@"
+
+log() {
+    printf '[debug-audio-monitor] %s\n' "$*" >&2
+}
+
+die() {
+    printf '[debug-audio-monitor] ERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+have_cmd() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+require_cmd() {
+    have_cmd "$1" || die "missing required command: $1"
+}
+
+normalize_bool() {
+    case "${1,,}" in
+        1|true|yes|on) printf 'true\n' ;;
+        *) printf 'false\n' ;;
+    esac
+}
+
+load_config() {
+    [[ -f "${CONFIG_FILE}" ]] || die "missing arecord configuration at ${CONFIG_FILE}; run config-arecord first"
+    # shellcheck disable=SC1090
+    source "${CONFIG_FILE}"
+
+    : "${DEVICE:?Missing DEVICE in ${CONFIG_FILE}}"
+    : "${FORMAT:?Missing FORMAT in ${CONFIG_FILE}}"
+    : "${CHANNELS:?Missing CHANNELS in ${CONFIG_FILE}}"
+    : "${RATE:?Missing RATE in ${CONFIG_FILE}}"
+}
+
+SERVICE_WAS_ACTIVE=false
+
+stop_recording_service_if_needed() {
+    if [[ "$(normalize_bool "${skip_service_stop}")" == "true" ]]; then
+        log "skipping ${SERVICE_NAME} stop because --skip-service-stop was set"
+        return 0
+    fi
+
+    if ! have_cmd systemctl; then
+        log "systemctl not available; assuming ${SERVICE_NAME} is not managed here"
+        return 0
+    fi
+
+    if systemctl is-active --quiet "${SERVICE_NAME}"; then
+        SERVICE_WAS_ACTIVE=true
+        log "stopping ${SERVICE_NAME}"
+        sudo systemctl stop "${SERVICE_NAME}"
+    else
+        log "${SERVICE_NAME} is not active"
+    fi
+}
+
+restart_recording_service_if_needed() {
+    if [[ "${SERVICE_WAS_ACTIVE}" != "true" ]]; then
+        return 0
+    fi
+
+    if ! have_cmd systemctl; then
+        log "cannot restart ${SERVICE_NAME}: systemctl not available"
+        return 0
+    fi
+
+    log "restarting ${SERVICE_NAME}"
+    sudo systemctl start "${SERVICE_NAME}" || log "failed to restart ${SERVICE_NAME}; restart it manually"
+}
+
+cleanup() {
+    restart_recording_service_if_needed
+}
+
+run_monitor() {
+    local resolved_device resolved_format resolved_channels resolved_rate
+    local -a arecord_cmd=()
+
+    resolved_device="${device:-$DEVICE}"
+    resolved_format="${format:-$FORMAT}"
+    resolved_channels="${channels:-$CHANNELS}"
+    resolved_rate="${rate:-$RATE}"
+
+    arecord_cmd=(
+        arecord
+        -D "${resolved_device}"
+        -f "${resolved_format}"
+        -c "${resolved_channels}"
+        -r "${resolved_rate}"
+        -t wav
+    )
+
+    if [[ "${duration}" != "0" ]]; then
+        arecord_cmd+=(-d "${duration}")
+    fi
+
+    log "monitoring device=${resolved_device} format=${resolved_format} channels=${resolved_channels} rate=${resolved_rate} duration=${duration}"
+
+    if [[ "$(normalize_bool "${play_local}")" == "true" ]]; then
+        require_cmd play
+        "${arecord_cmd[@]}" - | play -q -t wav -
+        return 0
+    fi
+
+    if [[ -t 1 ]]; then
+        die "stdout is a terminal; pipe the WAV stream to a player or use --play-local"
+    fi
+
+    "${arecord_cmd[@]}" -
+}
+
+main() {
+    require_cmd arecord
+    load_config
+    trap cleanup EXIT INT TERM HUP
+    stop_recording_service_if_needed
+    run_monitor
+}
+
+main "$@"
