@@ -166,6 +166,8 @@ Main gotchas:
 - in that QEMU workflow, do not assume the setup API port and the WireGuard endpoint port are the same thing; the client should enroll through `18765`, then use the returned WireGuard endpoint, and finally use `SERVER_WG_IP:8765` for steady-state API calls
 - `--network` is now required and must be supplied explicitly for every enrollment
 - `--subnet` is normally not required for device enrollment
+- `--note` should usually be set to a unique human-readable device/location label such as `dock-3-hydrophone` or `barn-north-camera`; server-side client views now prefer this note over the raw WireGuard IP when naming clients
+- if a device is re-enrolled or otherwise gets a new WireGuard IP, keep the same `--note` so the server-side name stays continuous across IP changes
 - in the current server implementation, the server searches for the first available host IP starting at the requested subnet offset; with the normal default of `1`, allocation starts at `x.x.1.1`
 - subnet `0` is reserved for admin containers and computers, so normal device enrollments should start at subnet `1` or later
 
