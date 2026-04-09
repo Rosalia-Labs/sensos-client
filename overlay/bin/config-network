@@ -52,9 +52,12 @@ def parse_args():
     script_name = script_name.replace("-", "_")
 
     arg_defs = [
-        (["--config-server"], {"help": "Configuration server hostname or IP (required)", "dest": "config_server"}),
-        (["--setup-port", "--port"], {"help": "Setup-time enrollment API port (default: 8765)", "dest": "port", "type": int, "default": 8765}),
-        (["--config-port"], {"help": "Steady-state API port to store for post-setup WireGuard access (default: 8765)", "dest": "config_port", "type": int}),
+        (["--setup-server"], {"help": "Setup-time enrollment server hostname or IP (required)", "dest": "config_server"}),
+        (["--config-server"], {"help": argparse.SUPPRESS, "dest": "config_server"}),
+        (["--setup-port"], {"help": "Setup-time enrollment API port (default: 8765)", "dest": "port", "type": int, "default": 8765}),
+        (["--port"], {"help": argparse.SUPPRESS, "dest": "port", "type": int}),
+        (["--api-port"], {"help": "Steady-state API port to store for post-setup WireGuard access (default: 8765)", "dest": "config_port", "type": int}),
+        (["--config-port"], {"help": argparse.SUPPRESS, "dest": "config_port", "type": int}),
         (["--network"], {"help": "Network name (required)", "dest": "network"}),
         (["--subnet"], {"help": "Subnet offset for WireGuard IP assignment (default: 1, i.e., x.x.1.1)", "dest": "subnet", "type": int, "default": 1}),
         (["--wg-endpoint"], {"help": "WireGuard endpoint as IP[:port] (optional override)", "dest": "wg_endpoint"}),
@@ -137,8 +140,8 @@ def generate_wireguard_keys(network_name, force):
 
 def register_peer(config_server, port, network_name, wg_public_key, api_password, subnet, note=""):
     require_nonempty(wg_public_key, "wg_public_key")
-    require_nonempty(config_server, "--config-server")
-    require_nonempty(port, "--port")
+    require_nonempty(config_server, "--setup-server")
+    require_nonempty(port, "--setup-port")
     server_url = f"http://{config_server}:{port}/api/v1/client/peers/enroll"
     print(f"📡 Registering device on network '{network_name}' with {server_url}...")
 
@@ -529,7 +532,7 @@ def main():
     setup_logging()
     args = parse_args()
 
-    require_nonempty(args.config_server, "--config-server")
+    require_nonempty(args.config_server, "--setup-server")
 
     existing_files = sensos_config_files_exist(args)
     if not args.force and existing_files:

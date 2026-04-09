@@ -161,7 +161,7 @@ ssh -L 8765:localhost:8765 <server>
 Then inside the guest:
 
 ```bash
-config-network --config-server 10.0.2.2 --network testing
+config-network --setup-server 10.0.2.2 --network testing
 ```
 
 In that direct-host case, the server should still publish the real reachable
@@ -181,10 +181,10 @@ test/qemu/run-debian-trixie-arm64 run
 Then the client VM can enroll through the setup API with:
 
 ```bash
-config-network --config-server 10.0.2.2 --setup-port 18765 --config-port 8765 --network testing
+config-network --setup-server 10.0.2.2 --setup-port 18765 --api-port 8765 --network testing
 ```
 
-If you omit `--config-port`, the client now still stores steady-state API port
+If you omit `--api-port`, the client now still stores steady-state API port
 `8765` in `/sensos/etc/network.conf`. The setup API port `18765` is only for
 enrollment. `--port` still works as a backward-compatible alias for
 `--setup-port`.

@@ -214,7 +214,7 @@ Expected answer:
 
 Operational note:
 
-- `--config-server` is the address used during setup
+- `--setup-server` is the address used during setup
 - the deployed device may need a different reachable endpoint
 - in the standard SensOS QEMU workflow, setup uses `10.0.2.2:18765`, while the
   first WireGuard test network should use the server-published endpoint

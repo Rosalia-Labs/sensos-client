@@ -134,9 +134,9 @@ Primary network enrollment command. This is the core command that registers the 
 
 Important flags from the source:
 
-- `--config-server`
-- `--setup-port` (`--port` is still accepted)
-- `--config-port`
+- `--setup-server`
+- `--setup-port` (`--port` is still accepted as a legacy alias)
+- `--api-port` (`--config-port` is still accepted as a legacy alias)
 - `--network`
 - `--subnet`
 - `--wg-endpoint`
@@ -148,20 +148,21 @@ Important flags from the source:
 Typical use:
 
 ```sh
-config-network --config-server <server-ip-or-name> --network <network-name>
-config-network --config-server <server-ip-or-name> --network sensos --subnet 1
-config-network --config-server <server-ip-or-name> --setup-port 18765 --config-port 8765 --network sensos
-config-network --config-server 10.0.2.2 --setup-port 18765 --config-port 8765 --network testing
-config-network --config-server 10.0.2.2 --setup-port 18765 --network testing
+config-network --setup-server <server-ip-or-name> --network <network-name>
+config-network --setup-server <server-ip-or-name> --network sensos --subnet 1
+config-network --setup-server <server-ip-or-name> --setup-port 18765 --api-port 8765 --network sensos
+config-network --setup-server 10.0.2.2 --setup-port 18765 --api-port 8765 --network testing
+config-network --setup-server 10.0.2.2 --setup-port 18765 --network testing
 ```
 
 Main gotchas:
 
-- `--config-server` is only the server address reachable from the current setup environment.
+- `--setup-server` is only the server address reachable from the current setup environment
 - `--setup-port` is the setup-time enrollment API port only
 - `--port` remains as a backward-compatible alias for `--setup-port`
-- `--config-port` is the steady-state in-tunnel API port saved into `/sensos/etc/network.conf` for later WireGuard-side API calls such as `config-location`, status updates, and hardware-profile upload
-- if `--config-port` is omitted, it defaults to `8765` even when setup enrollment uses a forwarded port such as `18765`
+- `--api-port` is the steady-state in-tunnel API port saved into `/sensos/etc/network.conf` for later WireGuard-side API calls such as `config-location`, status updates, and hardware-profile upload
+- `--config-port` remains as a backward-compatible alias for `--api-port`
+- if `--api-port` is omitted, it defaults to `8765` even when setup enrollment uses a forwarded port such as `18765`
 - the server will usually return a `wg_endpoint` suitable for the chosen network, but if the deployed device must reach a different public or routed endpoint, you need to override it with `--wg-endpoint`
 - in the standard SensOS QEMU workflow, the setup API target from the client VM is `10.0.2.2:18765`, while the first WireGuard test network should be published by the server as `10.0.2.2:51281`
 - in that QEMU workflow, do not assume the setup API port and the WireGuard endpoint port are the same thing; the client should enroll through `18765`, then use the returned WireGuard endpoint, and finally use `SERVER_WG_IP:8765` for steady-state API calls
@@ -774,7 +775,7 @@ A common operator sequence looks like:
 
 ```sh
 config-time
-config-network --config-server <server>
+config-network --setup-server <server>
 config-location --latitude <lat> --longitude <lon>
 config-storage
 config-arecord --device plughw:1,0 --start-service true
