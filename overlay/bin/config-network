@@ -508,7 +508,7 @@ def upload_initial_hardware_profile():
         print("⚠️ Hardware profile uploader not found; skipping initial upload.")
         return
     print("🧰 Uploading hardware profile...")
-    output, rc = privileged_shell(shlex.quote(uploader), silent=True)
+    output, rc = privileged_shell(f"{shlex.quote(uploader)} --transport setup", silent=True)
     if rc == 0:
         print("✅ Hardware profile uploaded.")
         return

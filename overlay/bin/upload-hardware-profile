@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 import os
@@ -37,6 +38,20 @@ def http_requests():
     if REQUESTS is None:
         REQUESTS = require_requests()
     return REQUESTS
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog=SCRIPT_FILE.name,
+        description="Upload the local hardware profile to the server.",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=["auto", "steady-state", "setup"],
+        default="auto",
+        help="API transport to use: WireGuard steady-state, setup-time API, or auto fallback order (default: auto).",
+    )
+    return parser.parse_args()
 
 
 def read_first_line(path: str) -> str | None:
@@ -187,28 +202,64 @@ def upload_hardware_profile(server_ip: str, port: str, peer_uuid: str, api_passw
     return http_requests().put(url, headers=headers, json=payload, timeout=15)
 
 
-def main() -> int:
-    config = read_network_conf()
-    server_ip = config.get("SERVER_WG_IP")
-    port = config.get("SERVER_PORT") or DEFAULT_PORT
-    peer_uuid = require_peer_uuid(config)
+def resolve_upload_targets(config: dict, transport: str) -> list[tuple[str, str]]:
+    targets: list[tuple[str, str]] = []
 
-    require_nonempty(server_ip, "SERVER_WG_IP")
-    require_nonempty(port, "SERVER_PORT")
+    steady_host = config.get("SERVER_WG_IP")
+    steady_port = config.get("SERVER_PORT") or DEFAULT_PORT
+    setup_host = config.get("SETUP_API_HOST")
+    setup_port = config.get("SETUP_API_PORT") or DEFAULT_PORT
+
+    if transport in ("auto", "steady-state") and steady_host:
+        targets.append((steady_host, str(steady_port)))
+    if transport in ("auto", "setup") and setup_host:
+        candidate = (setup_host, str(setup_port))
+        if candidate not in targets:
+            targets.append(candidate)
+
+    if transport == "steady-state":
+        require_nonempty(steady_host, "SERVER_WG_IP")
+        require_nonempty(steady_port, "SERVER_PORT")
+    elif transport == "setup":
+        require_nonempty(setup_host, "SETUP_API_HOST")
+        require_nonempty(setup_port, "SETUP_API_PORT")
+    elif not targets:
+        require_nonempty(steady_host or setup_host, "SERVER_WG_IP or SETUP_API_HOST")
+
+    return targets
+
+
+def main() -> int:
+    args = parse_args()
+    config = read_network_conf()
+    peer_uuid = require_peer_uuid(config)
 
     api_password = read_api_password()
     if not api_password:
         raise SystemExit("Error: client API password required to upload hardware profile.")
 
     payload = build_hardware_profile_payload()
-    response = upload_hardware_profile(server_ip, port, peer_uuid, api_password, payload)
-    if response.status_code != 200:
-        raise SystemExit(
-            f"Error: upload-hardware-profile failed: {response.status_code} {response.text}"
-        )
+    targets = resolve_upload_targets(config, args.transport)
+    request_errors = []
 
-    print(f"✅ Hardware profile uploaded for peer {peer_uuid}.")
-    return 0
+    for server_ip, port in targets:
+        try:
+            response = upload_hardware_profile(server_ip, port, peer_uuid, api_password, payload)
+        except Exception as exc:
+            request_errors.append(f"{server_ip}:{port}: {exc}")
+            continue
+
+        if response.status_code != 200:
+            raise SystemExit(
+                f"Error: upload-hardware-profile failed via {server_ip}:{port}: "
+                f"{response.status_code} {response.text}"
+            )
+
+        print(f"✅ Hardware profile uploaded for peer {peer_uuid} via {server_ip}:{port}.")
+        return 0
+
+    detail = "; ".join(request_errors) if request_errors else "no usable API target configured"
+    raise SystemExit(f"Error: upload-hardware-profile could not reach any API target: {detail}")
 
 
 if __name__ == "__main__":

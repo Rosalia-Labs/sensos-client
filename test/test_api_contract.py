@@ -1,6 +1,8 @@
 import base64
+import contextlib
 import importlib.machinery
 import importlib.util
+import io
 import os
 import sys
 import unittest
@@ -472,6 +474,87 @@ class ApiContractTests(unittest.TestCase):
         self.assertIn("SERVER_PORT=8765\n", written)
         self.assertIn("WG_ENDPOINT_IP=10.0.2.2\n", written)
         self.assertIn("WG_ENDPOINT_PORT=51281\n", written)
+
+    def test_upload_hardware_profile_resolve_targets_auto_prefers_steady_state_then_setup(self):
+        targets = upload_hardware_profile.resolve_upload_targets(
+            {
+                "SERVER_WG_IP": "10.254.0.1",
+                "SERVER_PORT": "8765",
+                "SETUP_API_HOST": "10.0.2.2",
+                "SETUP_API_PORT": "18765",
+            },
+            "auto",
+        )
+
+        self.assertEqual(targets, [("10.254.0.1", "8765"), ("10.0.2.2", "18765")])
+
+    def test_upload_hardware_profile_setup_transport_uses_setup_api_target(self):
+        with mock.patch.object(
+            upload_hardware_profile,
+            "read_network_conf",
+            return_value={
+                "SERVER_WG_IP": "10.254.0.1",
+                "SERVER_PORT": "8765",
+                "SETUP_API_HOST": "10.0.2.2",
+                "SETUP_API_PORT": "18765",
+                "PEER_UUID": "peer-123",
+            },
+        ):
+            with mock.patch.object(upload_hardware_profile, "read_api_password", return_value="secret"):
+                with mock.patch.object(
+                    upload_hardware_profile,
+                    "build_hardware_profile_payload",
+                    return_value={"hostname": "node-1"},
+                ):
+                    with mock.patch.object(
+                        upload_hardware_profile,
+                        "upload_hardware_profile",
+                        return_value=FakeResponse(200, {}, text="ok"),
+                    ) as upload_mock:
+                        with mock.patch.object(sys, "argv", ["upload-hardware-profile", "--transport", "setup"]):
+                            with contextlib.redirect_stdout(io.StringIO()):
+                                rc = upload_hardware_profile.main()
+
+        self.assertEqual(rc, 0)
+        upload_mock.assert_called_once_with(
+            "10.0.2.2",
+            "18765",
+            "peer-123",
+            "secret",
+            {"hostname": "node-1"},
+        )
+
+    def test_upload_hardware_profile_auto_falls_back_to_setup_after_connect_failure(self):
+        with mock.patch.object(
+            upload_hardware_profile,
+            "read_network_conf",
+            return_value={
+                "SERVER_WG_IP": "10.254.0.1",
+                "SERVER_PORT": "8765",
+                "SETUP_API_HOST": "10.0.2.2",
+                "SETUP_API_PORT": "18765",
+                "PEER_UUID": "peer-123",
+            },
+        ):
+            with mock.patch.object(upload_hardware_profile, "read_api_password", return_value="secret"):
+                with mock.patch.object(
+                    upload_hardware_profile,
+                    "build_hardware_profile_payload",
+                    return_value={"hostname": "node-1"},
+                ):
+                    with mock.patch.object(
+                        upload_hardware_profile,
+                        "upload_hardware_profile",
+                        side_effect=[Exception("timed out"), FakeResponse(200, {}, text="ok")],
+                    ) as upload_mock:
+                        with mock.patch.object(sys, "argv", ["upload-hardware-profile"]):
+                            with contextlib.redirect_stdout(io.StringIO()):
+                                rc = upload_hardware_profile.main()
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(upload_mock.call_count, 2)
+        self.assertEqual(upload_mock.call_args_list[0].args[0:2], ("10.254.0.1", "8765"))
+        self.assertEqual(upload_mock.call_args_list[1].args[0:2], ("10.0.2.2", "18765"))
 
     def test_config_location_prompts_for_missing_values_when_interactive(self):
         args = SimpleNamespace(latitude=None, longitude=None)
