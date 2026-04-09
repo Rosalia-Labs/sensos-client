@@ -80,12 +80,13 @@ Behavior:
 
 - in normal mode, it must be run from a clean git worktree
 - in normal mode, the current branch must have an upstream
+- in normal mode, it exits early when `git pull --ff-only` does not change `HEAD`, unless `--force-package-updates` was requested
 - only use it for a machine that already has a successful SensOS install
 - if `./install` failed and you just need newer repo contents before retrying, run `git pull` manually and then rerun `./install`; do not use `./upgrade` as install recovery
 - runs migrations between installed and repo versions
 - reruns setup after pull
-- `--force-package-updates` forces both APT metadata/package reconciliation and Python dependency reinstall
-- `--offline` skips `git pull` and upgrades from the repo contents already on disk; this is useful when files were copied from a laptop to a client without internet access
+- `--force-package-updates` forces both APT metadata/package reconciliation and Python dependency reinstall, even when `git pull` does not change `HEAD`
+- `--offline` skips `git pull` and upgrades from the repo contents already on disk; this is useful when files were copied from a laptop to a client without internet access, or when you want to force a local upgrade without new git changes
 - even in offline mode, the run can still fail if package or Python dependency changes require network access
 
 ## Core Bring-Up Commands
