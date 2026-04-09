@@ -37,10 +37,13 @@ usage() {
     cat <<EOF
 Usage:
   $(basename "$0") install
+  $(basename "$0") update
   $(basename "$0") run
 
 Commands:
   install   Boot the Debian ARM64 installer ISO and write to the base disk image.
+  update    Boot the installed base image read/write so guest changes persist.
+            Shut the guest down cleanly before exiting QEMU or writes may be lost.
   run       Boot the installed base image with -snapshot, discarding changes on shutdown.
 
 Artifacts are kept under:
@@ -229,6 +232,15 @@ run_snapshot() {
         -snapshot
 }
 
+run_update() {
+    require_base_image
+    ensure_firmware_vars
+
+    run_qemu update yes \
+        -boot order=c \
+        -drive "if=virtio,file=${BASE_IMAGE},format=qcow2"
+}
+
 main() {
     local command="${1:-}"
 
@@ -240,6 +252,11 @@ main() {
             ensure_artifact_dirs
             ensure_firmware_code
             run_install
+            ;;
+        update)
+            ensure_artifact_dirs
+            ensure_firmware_code
+            run_update
             ;;
         run)
             ensure_artifact_dirs

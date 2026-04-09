@@ -47,7 +47,18 @@ system disk so Debian cannot accidentally install itself onto the test data
 disk.
 
 3. Do any one-time guest bootstrap during the install boot or after its first
-reboot, then use disposable run boots when you want a non-sticky test session:
+reboot. After that, use `update` when you want to keep guest changes without
+doing a full reinstall:
+
+```bash
+test/qemu/run-debian-trixie-arm64 update
+```
+
+The `update` command boots the installed VM read/write, so changes to the base
+system disk and attached data disk persist. Shut the guest down cleanly from
+inside the VM before exiting QEMU or writes may be lost.
+
+4. Use disposable `run` boots when you want a non-sticky test session:
 
 ```bash
 test/qemu/run-debian-trixie-arm64 run
@@ -89,8 +100,8 @@ completes, log out and back in again if you want the new group membership in
 that shell before generating test audio directly into `/sensos/data`.
 
 Because `run` is disposable, anything you want to keep should be completed
-during the install flow before switching to `run`, and that install-phase boot
-must end with a clean guest shutdown.
+during either the initial install flow or a later `update` boot, and any
+persistent boot must end with a clean guest shutdown.
 
 ## Data disk
 
