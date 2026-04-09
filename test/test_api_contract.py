@@ -569,6 +569,63 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(updated.latitude, 30.2672)
         self.assertEqual(updated.longitude, -97.7431)
 
+    def test_config_location_send_location_uses_put(self):
+        response = FakeResponse(200, {}, text="ok")
+        fake_requests = SimpleNamespace(put=mock.Mock(return_value=response))
+        with mock.patch.object(config_location, "http_requests", return_value=fake_requests):
+            with contextlib.redirect_stdout(io.StringIO()):
+                config_location.send_location(
+                    "10.0.2.2",
+                    "18765",
+                    "peer-123",
+                    "secret",
+                    30.0,
+                    -90.0,
+                )
+
+        fake_requests.put.assert_called_once()
+        self.assertEqual(
+            fake_requests.put.call_args.args[0],
+            "http://10.0.2.2:18765/api/v1/client/peer/location",
+        )
+        self.assertEqual(
+            fake_requests.put.call_args.kwargs["json"],
+            {"latitude": 30.0, "longitude": -90.0},
+        )
+
+    def test_config_location_accepts_setup_server_and_setup_port_aliases(self):
+        argv = [
+            "config-location",
+            "--latitude",
+            "30",
+            "--longitude",
+            "-90",
+            "--setup-server",
+            "10.0.2.2",
+            "--setup-port",
+            "18765",
+        ]
+        with mock.patch.object(config_location, "write_local_location_conf"):
+            with mock.patch.object(
+                config_location,
+                "read_network_conf",
+                return_value={"PEER_UUID": "peer-123"},
+            ):
+                with mock.patch.object(config_location, "read_api_password", return_value="secret"):
+                    with mock.patch.object(config_location, "send_location") as send_mock:
+                        with mock.patch.object(sys, "argv", argv):
+                            rc = config_location.main()
+
+        self.assertEqual(rc, 0)
+        send_mock.assert_called_once_with(
+            "10.0.2.2",
+            "18765",
+            "peer-123",
+            "secret",
+            30.0,
+            -90.0,
+        )
+
     def test_config_location_errors_for_missing_values_when_non_interactive(self):
         args = SimpleNamespace(latitude=None, longitude=None)
         with mock.patch.object(config_location, "is_interactive", return_value=False):

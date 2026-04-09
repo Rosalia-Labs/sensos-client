@@ -188,13 +188,14 @@ Important flags:
 
 - `--latitude`
 - `--longitude`
-- `--config-server`
-- `--port`
+- `--setup-server` (`--config-server` is still accepted as a legacy alias)
+- `--setup-port` (`--port` is still accepted as a legacy alias)
 
 Typical use:
 
 ```sh
 config-location --latitude 30.2672 --longitude -97.7431
+config-location --latitude 30 --longitude -90 --setup-server 10.0.2.2 --setup-port 18765
 ```
 
 Behavior:
@@ -202,6 +203,8 @@ Behavior:
 - always writes `/sensos/etc/location.conf`
 - if `--latitude` or `--longitude` is missing and stdin is interactive, prompts for the missing values
 - if `--latitude` or `--longitude` is missing and stdin is not interactive, exits with a clear error
+- uses `PUT /api/v1/client/peer/location` when syncing to the server
+- `--setup-server` and `--setup-port` override the default steady-state API target from `network.conf`
 - syncs location to the server when `network.conf`, `CLIENT_WG_IP`, and the client API password are available
 
 ### `config-storage`

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Rosalia Labs LLC
 
+import argparse
 import importlib.util
 import os
 import sys
@@ -47,7 +48,7 @@ def send_location(server_ip, port, peer_uuid, api_password, latitude, longitude)
     }
 
     try:
-        response = http_requests().post(url, headers=headers, json=payload, timeout=5)
+        response = http_requests().put(url, headers=headers, json=payload, timeout=5)
     except Exception as exc:
         print(f"❌ Request failed: {exc}", file=sys.stderr)
         return
@@ -109,8 +110,10 @@ def main():
     arg_defs = [
         (["--latitude"], {"type": float, "help": "Latitude"}),
         (["--longitude"], {"type": float, "help": "Longitude"}),
-        (["--config-server"], {"help": "Override config server hostname or IP"}),
-        (["--port"], {"help": "Override server port"}),
+        (["--setup-server"], {"help": "Override setup-time API server hostname or IP", "dest": "config_server"}),
+        (["--config-server"], {"help": argparse.SUPPRESS, "dest": "config_server"}),
+        (["--setup-port"], {"help": "Override setup-time API port", "dest": "port"}),
+        (["--port"], {"help": argparse.SUPPRESS, "dest": "port"}),
     ]
     args = parse_args_with_defaults(arg_defs, ["global", "config_location"])
     args = fill_missing_location_args(args)
