@@ -260,10 +260,15 @@ def read_client_version_text(client_root=CLIENT_ROOT):
 
 
 def read_api_password():
-    if not os.path.exists(API_PASSWORD_FILE):
+    value = read_file(API_PASSWORD_FILE)
+    if value is None:
         print("❌ Client API password file missing", file=sys.stderr)
         return None
-    return read_file(API_PASSWORD_FILE)
+    value = value.strip()
+    if not value:
+        print("❌ Client API password file is empty", file=sys.stderr)
+        return None
+    return value
 
 
 def write_api_password(api_password: str):

@@ -346,7 +346,7 @@ def main() -> None:
     setup_logging("upload_birdnet_results.log")
     config = read_birdnet_upload_config()
     network_config = read_network_conf()
-    api_password = read_api_password()
+    api_password = require_nonempty(read_api_password(), "client API password")
     client_version = read_client_version_text(str(OVERLAY_ROOT))
 
     print(
