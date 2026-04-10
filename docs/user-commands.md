@@ -367,15 +367,15 @@ Important flags:
 - `--scd30-interval`
 - `--scd4x-interval`
 - `--ads1015-interval`
-- `--enable`
-- `--start`
+- `--enable-service`
+- `--start-service`
 - `--disable`
 
 Typical use:
 
 ```sh
 config-i2c-sensors
-config-i2c-sensors --interval 60 --scd30-interval 120 --enable --start
+config-i2c-sensors --interval 60 --scd30-interval 120 --enable-service --start-service
 config-i2c-sensors --disable
 ```
 
@@ -384,7 +384,7 @@ Behavior:
 - writes `/sensos/etc/i2c-sensors.conf`
 - ensures `/sensos/data/microenv` exists with shared permissions
 - installs optional I2C/GPIO Python dependencies on demand before enabling the reader service
-- leaves the service state unchanged unless `--enable`, `--start`, or `--disable` is supplied
+- leaves the service state unchanged unless `--enable-service`, `--start-service`, or `--disable` is supplied
 - warns if time sync or location is missing
 
 ### `config-i2c-uploads`
@@ -399,22 +399,22 @@ Important flags:
 - `--connect-timeout-sec`
 - `--read-timeout-sec`
 - `--delete-after-days`
-- `--enable`
-- `--start`
+- `--enable-service`
+- `--start-service`
 - `--disable`
 
 Typical use:
 
 ```sh
-config-i2c-uploads --ownership-model client-retains --session-interval-sec 3600 --enable --start
-config-i2c-uploads --ownership-model server-owns --batch-size 1000 --delete-after-days 30 --enable --start
+config-i2c-uploads --ownership-model client-retains --session-interval-sec 3600 --enable-service --start-service
+config-i2c-uploads --ownership-model server-owns --batch-size 1000 --delete-after-days 30 --enable-service --start-service
 config-i2c-uploads --disable
 ```
 
 Behavior:
 
 - writes `/sensos/etc/i2c-uploads.conf`
-- leaves the service state unchanged unless `--enable`, `--start`, or `--disable` is supplied
+- leaves the service state unchanged unless `--enable-service`, `--start-service`, or `--disable` is supplied
 - uploads only numeric readings from `/sensos/data/microenv/i2c_readings.db`
 - tracks upload batches, server receipts, and local pruning decisions in the same SQLite database
 - supports two ownership modes:
@@ -435,15 +435,15 @@ Important flags:
 - `--connect-timeout-sec`
 - `--read-timeout-sec`
 - `--delete-after-days`
-- `--enable`
-- `--start`
+- `--enable-service`
+- `--start-service`
 - `--disable`
 
 Typical use:
 
 ```sh
-config-birdnet-uploads --ownership-model client-retains --session-interval-sec 3600 --enable --start
-config-birdnet-uploads --ownership-model server-owns --batch-size 100 --delete-after-days 30 --enable --start
+config-birdnet-uploads --ownership-model client-retains --session-interval-sec 3600 --enable-service --start-service
+config-birdnet-uploads --ownership-model server-owns --batch-size 100 --delete-after-days 30 --enable-service --start-service
 config-birdnet-uploads --disable
 ```
 
@@ -454,7 +454,7 @@ Behavior:
 - batches by processed source file and includes nested detection and FLAC-run metadata
 - supports the same two ownership modes as I2C uploads
 - with `server-owns`, old uploaded BirdNET metadata and local FLAC clips can be pruned later using `--delete-after-days`
-- leaves the service state unchanged unless `--enable`, `--start`, or `--disable` is supplied
+- leaves the service state unchanged unless `--enable-service`, `--start-service`, or `--disable` is supplied
 
 ### `config-rpi-eeprom`
 

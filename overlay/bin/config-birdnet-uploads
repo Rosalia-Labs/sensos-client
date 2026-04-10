@@ -36,8 +36,8 @@ register_option --batch-size batch_size "Maximum processed BirdNET files per upl
 register_option --connect-timeout-sec connect_timeout_sec "HTTP connect timeout (seconds)" "10"
 register_option --read-timeout-sec read_timeout_sec "HTTP read timeout (seconds)" "60"
 register_option --delete-after-days delete_after_days "Delete local server-owned BirdNET results older than this many days" ""
-register_option --enable enable_service "Enable systemd service" "false"
-register_option --start start_service "Start systemd service" "false"
+register_option --enable-service enable_service "Enable systemd service" "false"
+register_option --start-service start_service "Start systemd service" "false"
 register_option --disable disable_service "Disable and stop systemd service" "false"
 
 parse_switches "$script_name" "$@"
@@ -57,7 +57,7 @@ if [[ -n "${delete_after_days}" && "${ownership_model}" != "server-owns" ]]; the
 fi
 
 if [[ "$disable_service" == "true" && ( "$enable_service" == "true" || "$start_service" == "true" ) ]]; then
-    echo "--disable cannot be combined with --enable or --start"
+    echo "--disable cannot be combined with --enable-service or --start-service"
     exit 1
 fi
 
