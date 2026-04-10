@@ -107,6 +107,7 @@ def fill_missing_location_args(args):
 
 
 def main():
+    ensure_sensos_admin()
     arg_defs = [
         (["--latitude"], {"type": float, "help": "Latitude"}),
         (["--longitude"], {"type": float, "help": "Longitude"}),

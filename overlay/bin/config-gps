@@ -24,19 +24,10 @@ UTILS_SPEC.loader.exec_module(UTILS_MODULE)
 parse_args_with_defaults = UTILS_MODULE.parse_args_with_defaults
 create_dir = UTILS_MODULE.create_dir
 write_file = UTILS_MODULE.write_file
+ensure_sensos_admin = UTILS_MODULE.ensure_sensos_admin
 
 CONFIG_PATH = os.path.join(CLIENT_ROOT, "etc", "gps.conf")
 SERVICE_NAME = "sensos-gps.service"
-
-
-def require_sensos_admin() -> None:
-    if os.geteuid() == 0:
-        return
-    username = os.environ.get("USER") or subprocess.run(
-        ["id", "-un"], text=True, capture_output=True, check=False
-    ).stdout.strip()
-    if username != "sensos-admin":
-        raise SystemExit("ERROR: this script must be run as sensos-admin or root.")
 
 
 def systemctl(*args: str) -> None:
@@ -55,7 +46,7 @@ def install_optional_python_dependencies() -> None:
 
 
 def main() -> int:
-    require_sensos_admin()
+    ensure_sensos_admin()
     arg_defs = [
         (["--disable"], {"action": "store_true", "help": "Disable GPS service and stop updates."}),
         (["--backend"], {"default": "i2c", "choices": ["i2c"], "help": "GPS backend type."}),

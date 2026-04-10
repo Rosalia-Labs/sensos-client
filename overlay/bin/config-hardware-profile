@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import importlib.util
 import json
 import os
 import subprocess
@@ -29,6 +30,17 @@ OVERLAY_ROOT = resolve_overlay_root()
 PROFILES_DIR = OVERLAY_ROOT / "profiles"
 STATE_FILE = OVERLAY_ROOT / "etc" / "hardware-profile-state.json"
 CONFIG_RPI_EEPROM = SCRIPT_DIR / "config-rpi-eeprom"
+UTILS_FILE = OVERLAY_ROOT / "libexec" / "utils.py"
+
+if not UTILS_FILE.is_file():
+    raise SystemExit(f"missing utils.py at {UTILS_FILE}")
+
+UTILS_SPEC = importlib.util.spec_from_file_location("sensos_overlay_utils", UTILS_FILE)
+UTILS_MODULE = importlib.util.module_from_spec(UTILS_SPEC)
+assert UTILS_SPEC.loader is not None
+UTILS_SPEC.loader.exec_module(UTILS_MODULE)
+
+ensure_sensos_admin = UTILS_MODULE.ensure_sensos_admin
 
 
 def parse_args() -> argparse.Namespace:
@@ -205,6 +217,7 @@ def main() -> int:
         return cmd_show(args.show)
     if args.status:
         return cmd_status()
+    ensure_sensos_admin()
     if args.apply:
         return cmd_apply(args.apply)
     if args.unapply:

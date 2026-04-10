@@ -3,6 +3,7 @@
 # Copyright (c) 2025 Rosalia Labs LLC
 
 import argparse
+import importlib.util
 import os
 import subprocess
 import sys
@@ -11,8 +12,20 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 CHRONY_CONF = Path("/etc/chrony/chrony.conf")
-SENSOS_CHRONY_CONF = Path(os.environ.get("SENSOS_CLIENT_ROOT", "/sensos")) / "etc" / "chrony.conf"
+OVERLAY_ROOT = Path(os.environ.get("SENSOS_CLIENT_ROOT", "/sensos"))
+SENSOS_CHRONY_CONF = OVERLAY_ROOT / "etc" / "chrony.conf"
+UTILS_FILE = OVERLAY_ROOT / "libexec" / "utils.py"
 DEFAULT_DISPLAY_TIMEZONE = "America/Chicago"
+
+if not UTILS_FILE.is_file():
+    raise SystemExit(f"missing utils.py at {UTILS_FILE}")
+
+UTILS_SPEC = importlib.util.spec_from_file_location("sensos_overlay_utils", UTILS_FILE)
+UTILS_MODULE = importlib.util.module_from_spec(UTILS_SPEC)
+assert UTILS_SPEC.loader is not None
+UTILS_SPEC.loader.exec_module(UTILS_MODULE)
+
+ensure_sensos_admin = UTILS_MODULE.ensure_sensos_admin
 
 
 def parse_args() -> argparse.Namespace:
@@ -277,6 +290,7 @@ def build_entered_datetime(args: argparse.Namespace, display_tz: str) -> tuple[s
 
 
 def main() -> int:
+    ensure_sensos_admin()
     args = parse_args()
     timezone_name = display_timezone_name()
 

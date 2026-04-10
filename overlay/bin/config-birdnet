@@ -3,12 +3,14 @@
 # Copyright (c) 2025 Rosalia Labs LLC
 
 import argparse
+import importlib.util
 import os
 import subprocess
 import sys
 from pathlib import Path
 
 CLIENT_ROOT = Path(os.environ.get("SENSOS_CLIENT_ROOT", "/sensos"))
+UTILS_FILE = CLIENT_ROOT / "libexec" / "utils.py"
 CONFIG_FILE = CLIENT_ROOT / "etc" / "birdnet.env"
 MODEL_ROOT = CLIENT_ROOT / "birdnet" / "BirdNET_v2.4_tflite"
 SERVICE_NAME = "sensos-birdnet.service"
@@ -23,17 +25,19 @@ BACKEND_ALIASES = {
 }
 INPUT_MODE_CHOICES = ("mono", "split-channels")
 
+if not UTILS_FILE.is_file():
+    raise RuntimeError(f"Missing utils.py at {UTILS_FILE}")
+
+UTILS_SPEC = importlib.util.spec_from_file_location("sensos_overlay_utils", UTILS_FILE)
+UTILS_MODULE = importlib.util.module_from_spec(UTILS_SPEC)
+assert UTILS_SPEC.loader is not None
+UTILS_SPEC.loader.exec_module(UTILS_MODULE)
+
+ensure_sensos_admin = UTILS_MODULE.ensure_sensos_admin
+
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, text=True, capture_output=True)
-
-
-def require_sensos_admin() -> None:
-    if os.geteuid() == 0:
-        return
-    username = os.environ.get("USER") or run(["id", "-un"]).stdout.strip()
-    if username != "sensos-admin":
-        raise SystemExit("ERROR: this script must be run as sensos-admin or root.")
 
 
 def parse_args() -> argparse.Namespace:
@@ -159,7 +163,7 @@ def systemctl(*args: str) -> None:
 
 
 def main() -> int:
-    require_sensos_admin()
+    ensure_sensos_admin()
     args = parse_args()
 
     if args.disable:

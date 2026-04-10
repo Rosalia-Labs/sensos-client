@@ -41,6 +41,46 @@ def require_cmd(cmd: str):
         sys.exit(f"Error: required command not found in PATH: {cmd}")
 
 
+def _current_username() -> str:
+    return os.environ.get("USER") or subprocess.run(
+        ["id", "-un"], text=True, capture_output=True, check=False
+    ).stdout.strip()
+
+
+def _help_only_invocation(argv: list[str]) -> bool:
+    return bool(argv) and all(arg in ("-h", "--help", "help") for arg in argv)
+
+
+def ensure_sensos_admin(argv: list[str] | None = None) -> None:
+    argv = list(sys.argv[1:] if argv is None else argv)
+
+    if os.geteuid() == 0 or _current_username() == "sensos-admin":
+        return
+
+    if _help_only_invocation(argv):
+        return
+
+    if os.environ.get("SENSOS_ADMIN_REEXEC") == "1":
+        sys.exit("Error: failed to re-run as sensos-admin.")
+
+    script_path = os.path.realpath(sys.argv[0])
+    preserve_env = ["SENSOS_CLIENT_ROOT", "SENSOS_ADMIN_REEXEC"]
+    print("Re-running as sensos-admin...", file=sys.stderr)
+    os.execvp(
+        "sudo",
+        [
+            "sudo",
+            f"--preserve-env={','.join(preserve_env)}",
+            "-u",
+            "sensos-admin",
+            "env",
+            "SENSOS_ADMIN_REEXEC=1",
+            script_path,
+            *argv,
+        ],
+    )
+
+
 def require_nonempty(value, what: str):
     if value is None or (isinstance(value, str) and value.strip() == ""):
         sys.exit(f"Error: required value not set: {what}")

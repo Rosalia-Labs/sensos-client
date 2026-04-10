@@ -20,6 +20,10 @@ LOCATION_FILE="${CLIENT_ROOT}/etc/location.conf"
 PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
 CACHE_SYS_INFO_SCRIPT="${OVERLAY_ROOT}/libexec/cache-sys-info.sh"
 DATA_STORAGE_OPS_LIB="${OVERLAY_ROOT}/libexec/data-storage-ops.sh"
+SENSOS_ADMIN_HELPER_LIB="${OVERLAY_ROOT}/libexec/ensure-sensos-admin.sh"
+PARTED_BIN=""
+PARTPROBE_BIN=""
+MKFS_EXT4_BIN=""
 
 [[ -f "${PARSE_SWITCHES_LIB}" ]] || {
     echo "❌ Missing parse-switches library at ${PARSE_SWITCHES_LIB}"
@@ -31,6 +35,13 @@ source "${PARSE_SWITCHES_LIB}"
     exit 1
 }
 source "${DATA_STORAGE_OPS_LIB}"
+[[ -f "${SENSOS_ADMIN_HELPER_LIB}" ]] || {
+    echo "❌ Missing sensos-admin helper at ${SENSOS_ADMIN_HELPER_LIB}" >&2
+    exit 1
+}
+source "${SENSOS_ADMIN_HELPER_LIB}"
+
+ensure_sensos_admin_user "${SCRIPT_FILE}" "$@"
 
 register_option --device device "Block device to format/mount" ""
 register_option --wipe wipe "Create a new GPT table, make a single ext4 filesystem, and erase existing data" "false"
@@ -52,12 +63,35 @@ require_cmd() {
     command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
 }
 
+resolve_cmd_path() {
+    local cmd_name="$1"
+    local candidate=""
+
+    if candidate="$(command -v "${cmd_name}" 2>/dev/null)"; then
+        printf '%s\n' "${candidate}"
+        return 0
+    fi
+
+    for candidate in "/usr/sbin/${cmd_name}" "/sbin/${cmd_name}" "/usr/bin/${cmd_name}" "/bin/${cmd_name}"; do
+        if [[ -x "${candidate}" ]]; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 require_storage_provisioning_tools() {
     local missing=()
 
-    command -v parted >/dev/null 2>&1 || missing+=("parted")
-    command -v partprobe >/dev/null 2>&1 || missing+=("partprobe")
-    command -v mkfs.ext4 >/dev/null 2>&1 || missing+=("mkfs.ext4")
+    PARTED_BIN="$(resolve_cmd_path parted || true)"
+    PARTPROBE_BIN="$(resolve_cmd_path partprobe || true)"
+    MKFS_EXT4_BIN="$(resolve_cmd_path mkfs.ext4 || true)"
+
+    [[ -n "${PARTED_BIN}" ]] || missing+=("parted")
+    [[ -n "${PARTPROBE_BIN}" ]] || missing+=("partprobe")
+    [[ -n "${MKFS_EXT4_BIN}" ]] || missing+=("mkfs.ext4")
 
     if [[ ${#missing[@]} -gt 0 ]]; then
         die "Missing required storage provisioning command(s): ${missing[*]}. Run ./install or setup/01-packages first, or install the needed Debian packages such as parted and e2fsprogs."
@@ -237,15 +271,15 @@ prepare_disk_ext4() {
     require_storage_provisioning_tools
 
     echo "🛠️  Creating GPT partition table and a single ext4 filesystem on ${target_device}..."
-    sudo parted -s "${target_device}" mklabel gpt
-    sudo parted -s -a optimal "${target_device}" mkpart primary ext4 0% 100%
+    sudo "${PARTED_BIN}" -s "${target_device}" mklabel gpt
+    sudo "${PARTED_BIN}" -s -a optimal "${target_device}" mkpart primary ext4 0% 100%
     sync
-    sudo partprobe "${target_device}" || sudo udevadm settle
+    sudo "${PARTPROBE_BIN}" "${target_device}" || sudo udevadm settle
     sleep 1
 
     PARTITION="$(wait_for_partition "${target_device}")" || die "Could not find partition on ${target_device}."
     echo "🧼 Creating ext4 filesystem on ${PARTITION}..."
-    sudo mkfs.ext4 -F "${PARTITION}"
+    sudo "${MKFS_EXT4_BIN}" -F "${PARTITION}"
 }
 
 select_partition() {
@@ -283,8 +317,9 @@ ensure_partition_has_filesystem() {
     fi
 
     if is_interactive && confirm_yes_no "No filesystem found on ${PARTITION}. Create a new ext4 filesystem? This erases all data on the partition." true; then
+        require_storage_provisioning_tools
         echo "🧼 Creating ext4 filesystem on ${PARTITION}..."
-        sudo mkfs.ext4 -F "${PARTITION}"
+        sudo "${MKFS_EXT4_BIN}" -F "${PARTITION}"
         return 0
     fi
 

@@ -13,17 +13,20 @@ resolve_overlay_root() {
 OVERLAY_ROOT="$(resolve_overlay_root)"
 SCRIPT_NAME="$(basename "$0")"
 PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
+SENSOS_ADMIN_HELPER_LIB="${OVERLAY_ROOT}/libexec/ensure-sensos-admin.sh"
 
 [[ -f "${PARSE_SWITCHES_LIB}" ]] || {
     echo "❌ Missing parse-switches library at ${PARSE_SWITCHES_LIB}" >&2
     exit 1
 }
 source "${PARSE_SWITCHES_LIB}"
-
-if [[ "$(id -un)" != "sensos-admin" ]]; then
-    echo "ERROR: this script must be run as sensos-admin." >&2
+[[ -f "${SENSOS_ADMIN_HELPER_LIB}" ]] || {
+    echo "❌ Missing sensos-admin helper at ${SENSOS_ADMIN_HELPER_LIB}" >&2
     exit 1
-fi
+}
+source "${SENSOS_ADMIN_HELPER_LIB}"
+
+ensure_sensos_admin_user "${SCRIPT_FILE}" "$@"
 
 require_command() {
     command -v "$1" >/dev/null 2>&1 || {

@@ -4,7 +4,6 @@
 
 import os
 import sys
-import pwd
 import importlib.util
 import datetime
 import shutil
@@ -516,11 +515,7 @@ def upload_initial_hardware_profile():
 
 
 def main():
-    username = pwd.getpwuid(os.geteuid()).pw_name
-    if username not in ("sensos-admin", "root"):
-        print(f"\n❌ This script must be run as 'sensos-admin' or 'root', not '{username}'.", file=sys.stderr)
-        print("   Please switch users: sudo -u sensos-admin ... or run as root\n", file=sys.stderr)
-        sys.exit(1)
+    ensure_sensos_admin()
 
     require_dir(WG_DIR, "WireGuard directory")
     require_dir(SENSOS_ETC_DIR, "SensOS etc directory")

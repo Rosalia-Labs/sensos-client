@@ -15,12 +15,20 @@ CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${OVERLAY_ROOT}}"
 
 script_name="$(basename "$0")"
 PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
+SENSOS_ADMIN_HELPER_LIB="${OVERLAY_ROOT}/libexec/ensure-sensos-admin.sh"
 
 [[ -f "${PARSE_SWITCHES_LIB}" ]] || {
     echo "❌ Missing parse-switches library at ${PARSE_SWITCHES_LIB}"
     exit 1
 }
 source "${PARSE_SWITCHES_LIB}"
+[[ -f "${SENSOS_ADMIN_HELPER_LIB}" ]] || {
+    echo "❌ Missing sensos-admin helper at ${SENSOS_ADMIN_HELPER_LIB}" >&2
+    exit 1
+}
+source "${SENSOS_ADMIN_HELPER_LIB}"
+
+ensure_sensos_admin_user "${SCRIPT_FILE}" "$@"
 
 warn_clock_and_location() {
     local clock_ok=0
