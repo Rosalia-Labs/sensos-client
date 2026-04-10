@@ -2,14 +2,19 @@
 
 import argparse
 import math
+import os
 import random
 import struct
+import subprocess
+import tempfile
 import wave
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 DEFAULT_OUTPUT_ROOT = Path("/sensos/data/audio_recordings/queued")
 DEFAULT_SAMPLE_RATE = 48_000
+DEFAULT_OUTPUT_OWNER = "sensos-admin"
+DEFAULT_OUTPUT_GROUP = "sensos-data"
 
 
 def parse_args() -> argparse.Namespace:
@@ -157,7 +162,6 @@ def generate_samples(preset: str, duration_sec: float, sample_rate: int, rng: ra
 
 def output_path(root: Path, timestamp: datetime, latitude: float | None, longitude: float | None) -> Path:
     dated = root / timestamp.strftime("%Y/%m/%d")
-    dated.mkdir(parents=True, exist_ok=True)
     location_token = (
         f"{format_coord_token(latitude, 'N', 'S')}{format_coord_token(longitude, 'E', 'W')}"
         if latitude is not None and longitude is not None
@@ -186,6 +190,56 @@ def ensure_output_root_ready(root: Path) -> None:
     )
 
 
+def run_checked(cmd: list[str]) -> None:
+    result = subprocess.run(cmd, check=False)
+    if result.returncode != 0:
+        raise SystemExit(result.returncode)
+
+
+def path_is_writable(path: Path) -> bool:
+    return os.access(path, os.W_OK)
+
+
+def ensure_parent_ready(path: Path) -> bool:
+    parent = path.parent
+    if parent.exists():
+        return path_is_writable(parent)
+
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+        return True
+    except PermissionError:
+        run_checked(
+            [
+                "sudo",
+                "install",
+                "-d",
+                "-m",
+                "2775",
+                "-o",
+                DEFAULT_OUTPUT_OWNER,
+                "-g",
+                DEFAULT_OUTPUT_GROUP,
+                str(parent),
+            ]
+        )
+        return False
+
+
+def write_wav_privileged(path: Path, frames: bytes, sample_rate: int) -> None:
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+
+    try:
+        write_wav(tmp_path, frames, sample_rate)
+        run_checked(["sudo", "mv", str(tmp_path), str(path)])
+        run_checked(["sudo", "chown", f"{DEFAULT_OUTPUT_OWNER}:{DEFAULT_OUTPUT_GROUP}", str(path)])
+        run_checked(["sudo", "chmod", "664", str(path)])
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+
 def write_wav(path: Path, frames: bytes, sample_rate: int) -> None:
     with wave.open(str(path), "wb") as wav_file:
         wav_file.setnchannels(1)
@@ -212,7 +266,11 @@ def main() -> int:
         timestamp = start + timedelta(seconds=index * args.spacing_sec)
         path = output_path(args.output_root, timestamp, args.latitude, args.longitude)
         frames = generate_samples(args.preset, args.duration_sec, args.sample_rate, rng)
-        write_wav(path, frames, args.sample_rate)
+        direct_write_ok = ensure_parent_ready(path)
+        if direct_write_ok:
+            write_wav(path, frames, args.sample_rate)
+        else:
+            write_wav_privileged(path, frames, args.sample_rate)
         print(path)
 
     return 0
