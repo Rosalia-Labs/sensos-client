@@ -52,6 +52,18 @@ require_cmd() {
     command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
 }
 
+require_storage_provisioning_tools() {
+    local missing=()
+
+    command -v parted >/dev/null 2>&1 || missing+=("parted")
+    command -v partprobe >/dev/null 2>&1 || missing+=("partprobe")
+    command -v mkfs.ext4 >/dev/null 2>&1 || missing+=("mkfs.ext4")
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        die "Missing required storage provisioning command(s): ${missing[*]}. Run ./install or setup/01-packages first, or install the needed Debian packages such as parted and e2fsprogs."
+    fi
+}
+
 ensure_data_layout() {
     local dir_path
     local -a required_dirs=(
@@ -222,9 +234,7 @@ unmount_path_if_needed() {
 prepare_disk_ext4() {
     local target_device="$1"
 
-    require_cmd parted
-    require_cmd partprobe
-    require_cmd mkfs.ext4
+    require_storage_provisioning_tools
 
     echo "🛠️  Creating GPT partition table and a single ext4 filesystem on ${target_device}..."
     sudo parted -s "${target_device}" mklabel gpt
