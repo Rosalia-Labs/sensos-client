@@ -22,6 +22,12 @@ source "${DATA_STORAGE_OPS_LIB}"
 
 TOP_N=10
 TARGET_PATH="${DATA_MOUNT}"
+AUDIO_ROOT="${DATA_MOUNT}/audio_recordings"
+QUEUED_ROOT="${AUDIO_ROOT}/queued"
+COMPRESSED_ROOT="${AUDIO_ROOT}/compressed"
+PROCESSED_ROOT="${AUDIO_ROOT}/processed"
+BIRDNET_ROOT="${DATA_MOUNT}/birdnet"
+BIRDNET_DB="${BIRDNET_ROOT}/birdnet.db"
 
 usage() {
     cat <<EOF
@@ -53,6 +59,18 @@ print_header() {
 
 print_simple_metric() {
     printf '%-18s %s\n' "$1" "$2"
+}
+
+path_within_target() {
+    local candidate="$1"
+    case "${candidate}" in
+        "${TARGET_PATH}"|${TARGET_PATH}/*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
 collect_counts() {
@@ -136,6 +154,104 @@ print_recent_files() {
     fi
 }
 
+stage_file_count() {
+    local root="$1"
+    if [[ ! -d "${root}" ]]; then
+        printf '0'
+        return
+    fi
+    find "${root}" -type f 2>/dev/null | wc -l | tr -d ' '
+}
+
+stage_total_size() {
+    local root="$1"
+    if [[ ! -d "${root}" ]]; then
+        printf '0'
+        return
+    fi
+    du -sh "${root}" 2>/dev/null | awk '{print $1}'
+}
+
+stage_mtime_summary() {
+    local root="$1"
+    local order="$2"
+
+    if [[ ! -d "${root}" ]]; then
+        printf '%s\n' "-"
+        return
+    fi
+
+    if ! find "${root}" -type f -print -quit 2>/dev/null | grep -q .; then
+        printf '%s\n' "-"
+        return
+    fi
+
+    find "${root}" -type f -printf '%T@\t%TY-%Tm-%Td %TH:%TM\t%p\n' 2>/dev/null \
+        | sort "${order}" \
+        | head -n 1 \
+        | cut -f2-
+}
+
+print_stage_summary() {
+    local label="$1"
+    local root="$2"
+
+    printf '\n'
+    print_header "${label}"
+    print_simple_metric "path" "${root}"
+    print_simple_metric "files" "$(stage_file_count "${root}")"
+    print_simple_metric "size" "$(stage_total_size "${root}")"
+    print_simple_metric "oldest file" "$(stage_mtime_summary "${root}" -n)"
+    print_simple_metric "newest file" "$(stage_mtime_summary "${root}" -nr)"
+}
+
+print_birdnet_db_summary() {
+    local pending_uploads processed_ok processed_error db_size
+
+    [[ -f "${BIRDNET_DB}" ]] || return 0
+    command -v sqlite3 >/dev/null 2>&1 || return 0
+
+    pending_uploads="$(sqlite3 "${BIRDNET_DB}" "select count(*) from processed_files where coalesce(server_copy,0)=0 and status='ok';" 2>/dev/null || printf 'unknown')"
+    processed_ok="$(sqlite3 "${BIRDNET_DB}" "select count(*) from processed_files where status='ok';" 2>/dev/null || printf 'unknown')"
+    processed_error="$(sqlite3 "${BIRDNET_DB}" "select count(*) from processed_files where status<>'ok';" 2>/dev/null || printf 'unknown')"
+    db_size="$(du -sh "${BIRDNET_DB}" 2>/dev/null | awk '{print $1}')"
+
+    printf '\n'
+    print_header "BirdNET DB"
+    print_simple_metric "db path" "${BIRDNET_DB}"
+    print_simple_metric "db size" "${db_size}"
+    print_simple_metric "processed ok" "${processed_ok}"
+    print_simple_metric "processed error" "${processed_error}"
+    print_simple_metric "pending upload" "${pending_uploads}"
+}
+
+print_audio_pipeline_summary() {
+    local any_stage="false"
+
+    path_within_target "${AUDIO_ROOT}" || return 0
+
+    for stage_root in "${QUEUED_ROOT}" "${COMPRESSED_ROOT}" "${PROCESSED_ROOT}"; do
+        if [[ -d "${stage_root}" ]]; then
+            any_stage="true"
+            break
+        fi
+    done
+
+    [[ "${any_stage}" == "true" ]] || return 0
+
+    printf '\n'
+    print_header "Audio Pipeline"
+    print_simple_metric "queued files" "$(stage_file_count "${QUEUED_ROOT}")"
+    print_simple_metric "compressed files" "$(stage_file_count "${COMPRESSED_ROOT}")"
+    print_simple_metric "processed files" "$(stage_file_count "${PROCESSED_ROOT}")"
+    print_simple_metric "birdnet db" "$(if [[ -f "${BIRDNET_DB}" ]]; then printf 'present'; else printf 'missing'; fi)"
+
+    print_stage_summary "Queued Stage" "${QUEUED_ROOT}"
+    print_stage_summary "Compressed Stage" "${COMPRESSED_ROOT}"
+    print_stage_summary "Processed Stage" "${PROCESSED_ROOT}"
+    print_birdnet_db_summary
+}
+
 main() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -183,6 +299,7 @@ main() {
     require_dir "${TARGET_PATH}"
 
     print_filesystem_summary "${TARGET_PATH}"
+    print_audio_pipeline_summary
     print_top_level_sizes "${TARGET_PATH}" "${TOP_N}"
     print_largest_files "${TARGET_PATH}" "${TOP_N}"
     print_recent_files "${TARGET_PATH}" "${TOP_N}"
