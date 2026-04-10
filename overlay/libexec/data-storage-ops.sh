@@ -33,12 +33,17 @@ data_ops_unit_exists() {
     systemctl list-unit-files --type=service --type=timer 2>/dev/null | awk '{print $1}' | grep -Fxq "${unit_name}"
 }
 
+data_ops_unit_is_active() {
+    local unit_name="$1"
+    data_ops_unit_exists "${unit_name}" && systemctl is-active --quiet "${unit_name}"
+}
+
 data_ops_stop_unit_if_present() {
     local unit_name="$1"
 
     if data_ops_unit_exists "${unit_name}"; then
+        echo "Checking ${unit_name}"
         data_ops_run_systemctl stop "${unit_name}" >/dev/null 2>&1 || true
-        echo "Stopped ${unit_name}"
     fi
 }
 
@@ -46,8 +51,8 @@ data_ops_start_unit_if_present() {
     local unit_name="$1"
 
     if data_ops_unit_exists "${unit_name}"; then
+        echo "Checking ${unit_name}"
         data_ops_run_systemctl start "${unit_name}" >/dev/null 2>&1 || true
-        echo "Started ${unit_name}"
     fi
 }
 
@@ -75,11 +80,35 @@ data_ops_start_data_units() {
     done
 }
 
+data_ops_start_selected_units() {
+    local unit_name
+
+    for unit_name in "$@"; do
+        data_ops_start_unit_if_present "${unit_name}"
+    done
+}
+
+data_ops_list_active_units() {
+    local unit_name
+
+    for unit_name in "${DATA_SERVICES[@]}"; do
+        if data_ops_unit_is_active "${unit_name}"; then
+            printf '%s\n' "${unit_name}"
+        fi
+    done
+
+    for unit_name in "${DATA_TIMERS[@]}"; do
+        if data_ops_unit_is_active "${unit_name}"; then
+            printf '%s\n' "${unit_name}"
+        fi
+    done
+}
+
 data_ops_any_data_writer_active() {
     local unit_name
 
     for unit_name in "${DATA_SERVICES[@]}"; do
-        if data_ops_unit_exists "${unit_name}" && systemctl is-active --quiet "${unit_name}"; then
+        if data_ops_unit_is_active "${unit_name}"; then
             return 0
         fi
     done
