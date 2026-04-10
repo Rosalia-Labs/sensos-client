@@ -113,7 +113,7 @@ main() {
             mount_state="unmounted"
         fi
 
-        if data_ops_any_data_unit_active; then
+        if data_ops_any_data_writer_active; then
             writers_state="active"
         else
             writers_state="inactive"

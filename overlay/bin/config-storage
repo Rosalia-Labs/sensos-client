@@ -357,7 +357,7 @@ finalize_mount_permissions() {
 }
 
 main() {
-    if data_ops_any_data_unit_active && ! data_ops_archive_mode_is_active; then
+    if data_ops_any_data_writer_active && ! data_ops_archive_mode_is_active; then
         echo "❌ Refusing to run ${script_name} while /sensos/data writers are active."
         echo "Enter archive mode first:"
         echo "  archive-mode --enter"

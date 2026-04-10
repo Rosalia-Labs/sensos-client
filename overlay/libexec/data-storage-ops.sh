@@ -75,10 +75,10 @@ data_ops_start_data_units() {
     done
 }
 
-data_ops_any_data_unit_active() {
+data_ops_any_data_writer_active() {
     local unit_name
 
-    for unit_name in "${DATA_SERVICES[@]}" "${DATA_TIMERS[@]}"; do
+    for unit_name in "${DATA_SERVICES[@]}"; do
         if data_ops_unit_exists "${unit_name}" && systemctl is-active --quiet "${unit_name}"; then
             return 0
         fi
