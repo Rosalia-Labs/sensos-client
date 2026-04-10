@@ -1,6 +1,7 @@
 build-essential
 alsa-utils
 chrony
+curl
 gpiod|libgpiod-tools
 iftop
 jq
