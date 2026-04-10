@@ -16,6 +16,15 @@ DATA_TIMERS=(
     "sensos-monitor-data-space.timer"
 )
 DATA_ARCHIVE_MODE_STATE_FILE="${SENSOS_DATA_ARCHIVE_MODE_STATE_FILE:-/sensos/log/archive-mode.state}"
+DATA_LAYOUT_TOP_LEVEL_DIRS=(
+    "audio_recordings"
+    "birdnet"
+)
+DATA_LAYOUT_AUDIO_SUBDIRS=(
+    "queued"
+    "compressed"
+    "processed"
+)
 
 data_ops_require_cmd() {
     command -v "$1" >/dev/null 2>&1 || {
@@ -187,4 +196,42 @@ data_ops_reset_data_root() {
     sudo chown sensos-admin:sensos-data "${DATA_MOUNT}"
     sudo chmod 2775 "${DATA_MOUNT}"
     echo "Cleared ${DATA_MOUNT}"
+}
+
+data_ops_has_meaningful_data_content() {
+    local entry=""
+    local name=""
+
+    [[ -d "${DATA_MOUNT}" ]] || return 1
+
+    while IFS= read -r entry; do
+        name="$(basename "${entry}")"
+        case "${name}" in
+            audio_recordings)
+                if sudo find "${entry}" -mindepth 1 -maxdepth 1 ! \( \
+                    -type d \( -name queued -o -name compressed -o -name processed \) \
+                \) | read -r; then
+                    return 0
+                fi
+                if sudo find "${entry}" \( -path "${entry}/queued" -o -path "${entry}/compressed" -o -path "${entry}/processed" \) \
+                    -prune -o -mindepth 2 -print | read -r; then
+                    return 0
+                fi
+                ;;
+            birdnet)
+                if sudo find "${entry}" -mindepth 1 | read -r; then
+                    return 0
+                fi
+                ;;
+            *)
+                return 0
+                ;;
+        esac
+    done < <(sudo find "${DATA_MOUNT}" -mindepth 1 -maxdepth 1 -type d | sort)
+
+    if sudo find "${DATA_MOUNT}" -mindepth 1 -maxdepth 1 ! -type d | read -r; then
+        return 0
+    fi
+
+    return 1
 }

@@ -306,12 +306,6 @@ ensure_partition_has_filesystem() {
     local fstype
     fstype="$(get_filesystem_type "${PARTITION}")"
 
-    if [[ "${wipe}" == "true" ]]; then
-        unmount_path_if_needed "${PARTITION}"
-        prepare_disk_ext4 "${device}"
-        return 0
-    fi
-
     if [[ -n "${fstype}" ]]; then
         return 0
     fi

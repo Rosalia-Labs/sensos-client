@@ -200,7 +200,7 @@ main() {
 
     if [[ "${clear_data}" == "true" ]]; then
         data_ops_reset_data_root
-    elif sudo find "${DATA_MOUNT}" -mindepth 1 -maxdepth 1 | read -r; then
+    elif data_ops_has_meaningful_data_content; then
         echo "WARNING: ${DATA_MOUNT} still contains data."
         echo "If you intend to start a fresh epoch, either:"
         echo "  archive-mode --exit --clear-data"
