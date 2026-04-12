@@ -66,6 +66,14 @@ Practical first-install networking note:
 ssh sensos@raspberrypi.local
 ```
 
+- If you also need to port-forward the setup API from the laptop so the Pi can reach it through that shared link, bind the local forward on `0.0.0.0`, not just `localhost`:
+
+```sh
+ssh -L 0.0.0.0:8765:localhost:8765 <server>
+```
+
+- That exposes port `8765` on the laptop's shared Ethernet-side interface so the Pi can connect to it.
+
 Behavior:
 
 - must be run as the bootstrap user, not `root`
