@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+set -euo pipefail
+
+resolve_overlay_root() {
+    printf '%s\n' "${SENSOS_CLIENT_ROOT:-/sensos}"
+}
+
+OVERLAY_ROOT="$(resolve_overlay_root)"
+UNIT_DIR="${OVERLAY_ROOT}/systemd"
+
+have_cmd() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+collect_units() {
+    local -a units=()
+    local path name
+
+    if [[ -d "${UNIT_DIR}" ]]; then
+        for path in "${UNIT_DIR}"/sensos-*.service "${UNIT_DIR}"/sensos-*.timer; do
+            [[ -e "${path}" ]] || continue
+            name="$(basename "${path}")"
+            units+=("${name}")
+        done
+    fi
+
+    if [[ -f /etc/systemd/system/sensos-hotspot.service ]] || [[ -f /lib/systemd/system/sensos-hotspot.service ]]; then
+        units+=("sensos-hotspot.service")
+    fi
+
+    if ((${#units[@]} == 0)); then
+        return 0
+    fi
+
+    printf '%s\n' "${units[@]}" | sort -u
+}
+
+print_unit_status() {
+    local unit="$1"
+    local loaded enabled active sub desc
+
+    loaded="$(systemctl show -P LoadState "${unit}" 2>/dev/null || true)"
+    enabled="$(systemctl is-enabled "${unit}" 2>/dev/null || true)"
+    active="$(systemctl is-active "${unit}" 2>/dev/null || true)"
+    sub="$(systemctl show -P SubState "${unit}" 2>/dev/null || true)"
+    desc="$(systemctl show -P Description "${unit}" 2>/dev/null || true)"
+
+    [[ -n "${loaded}" ]] || loaded="unknown"
+    [[ -n "${enabled}" ]] || enabled="unknown"
+    [[ -n "${active}" ]] || active="unknown"
+    [[ -n "${sub}" ]] || sub="-"
+    [[ -n "${desc}" ]] || desc="-"
+
+    printf '%-35s enabled=%-10s active=%-10s sub=%-12s load=%-10s %s\n' \
+        "${unit}" "${enabled}" "${active}" "${sub}" "${loaded}" "${desc}"
+}
+
+main() {
+    local -a units=()
+    local unit
+
+    if ! have_cmd systemctl; then
+        echo "ERROR: systemctl not found" >&2
+        exit 1
+    fi
+
+    mapfile -t units < <(collect_units)
+
+    if ((${#units[@]} == 0)); then
+        echo "No SensOS systemd units found."
+        return 0
+    fi
+
+    for unit in "${units[@]}"; do
+        print_unit_status "${unit}"
+    done
+}
+
+main "$@"

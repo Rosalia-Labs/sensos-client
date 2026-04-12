@@ -381,6 +381,25 @@ debug-audio-monitor --duration 30 > /tmp/monitor.wav
 ssh <host> "debug-audio-monitor --duration 30" | play -q -t wav -
 ```
 
+### `debug-services`
+
+Prints a one-line status summary for each SensOS systemd service or timer
+installed on the device.
+
+Typical use:
+
+```sh
+debug-services
+```
+
+Behavior:
+
+- inspects the SensOS-managed `systemd` unit inventory from the installed overlay
+- includes the bootstrap `sensos-hotspot.service` when present
+- prints one line per unit with enabled state, active state, substate, load
+  state, and description
+- useful for quickly spotting disabled, failed, or unexpectedly inactive units
+
 Playback helpers for the SSH streaming example:
 
 - `play` comes from `sox`
