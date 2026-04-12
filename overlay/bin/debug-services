@@ -11,6 +11,23 @@ resolve_overlay_root() {
 OVERLAY_ROOT="$(resolve_overlay_root)"
 UNIT_DIR="${OVERLAY_ROOT}/systemd"
 
+SENSOS_UNITS=(
+    "sensos-arecord.service"
+    "sensos-birdnet.service"
+    "sensos-compress-audio.service"
+    "sensos-gps.service"
+    "sensos-hotspot.service"
+    "sensos-monitor-data-space.service"
+    "sensos-monitor-data-space.timer"
+    "sensos-network-capture.service"
+    "sensos-read-i2c.service"
+    "sensos-send-status-update.service"
+    "sensos-send-status-update.timer"
+    "sensos-thin-data.service"
+    "sensos-upload-birdnet.service"
+    "sensos-upload-i2c.service"
+)
+
 have_cmd() {
     command -v "$1" >/dev/null 2>&1
 }
@@ -19,20 +36,14 @@ collect_units() {
     local -a units=()
     local path name
 
+    units=("${SENSOS_UNITS[@]}")
+
     if [[ -d "${UNIT_DIR}" ]]; then
         for path in "${UNIT_DIR}"/sensos-*.service "${UNIT_DIR}"/sensos-*.timer; do
             [[ -e "${path}" ]] || continue
             name="$(basename "${path}")"
             units+=("${name}")
         done
-    fi
-
-    if [[ -f /etc/systemd/system/sensos-hotspot.service ]] || [[ -f /lib/systemd/system/sensos-hotspot.service ]]; then
-        units+=("sensos-hotspot.service")
-    fi
-
-    if ((${#units[@]} == 0)); then
-        return 0
     fi
 
     printf '%s\n' "${units[@]}" | sort -u
@@ -48,13 +59,13 @@ print_unit_status() {
     sub="$(systemctl show -P SubState "${unit}" 2>/dev/null || true)"
     desc="$(systemctl show -P Description "${unit}" 2>/dev/null || true)"
 
-    [[ -n "${loaded}" ]] || loaded="unknown"
-    [[ -n "${enabled}" ]] || enabled="unknown"
-    [[ -n "${active}" ]] || active="unknown"
+    [[ -n "${loaded}" ]] || loaded="not-found"
+    [[ -n "${enabled}" ]] || enabled="not-found"
+    [[ -n "${active}" ]] || active="inactive"
     [[ -n "${sub}" ]] || sub="-"
     [[ -n "${desc}" ]] || desc="-"
 
-    printf '%-35s enabled=%-10s active=%-10s sub=%-12s load=%-10s %s\n' \
+    printf '%-33s en=%-8s ac=%-8s sub=%-10s ld=%-9s %s\n' \
         "${unit}" "${enabled}" "${active}" "${sub}" "${loaded}" "${desc}"
 }
 

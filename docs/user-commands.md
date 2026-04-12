@@ -394,8 +394,9 @@ debug-services
 
 Behavior:
 
-- inspects the SensOS-managed `systemd` unit inventory from the installed overlay
-- includes the bootstrap `sensos-hotspot.service` when present
+- always prints one line for each known SensOS-managed service or timer, even if
+  it is currently disabled, inactive, or not found on the machine
+- includes the bootstrap `sensos-hotspot.service` in that fixed inventory
 - prints one line per unit with enabled state, active state, substate, load
   state, and description
 - useful for quickly spotting disabled, failed, or unexpectedly inactive units
