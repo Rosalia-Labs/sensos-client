@@ -100,6 +100,37 @@ show_recent_logs() {
     fi
 }
 
+show_direct_diagnosis() {
+    local has_i2c_boot=0
+    local has_i2c_module=0
+
+    if [[ -f "${BOOT_CONFIG_FILE}" ]] && grep -Eq '^[[:space:]]*dtparam=i2c_arm=on([[:space:]]*|$)' "${BOOT_CONFIG_FILE}"; then
+        has_i2c_boot=1
+    fi
+    if [[ -f "${MODULES_FILE}" ]] && grep -Eq '^[[:space:]]*i2c-dev([[:space:]]*|$)' "${MODULES_FILE}"; then
+        has_i2c_module=1
+    fi
+
+    section "Diagnosis"
+    if [[ -e /dev/i2c-1 ]]; then
+        printf '/dev/i2c-1 is present. Linux I2C appears to be enabled.\n'
+        return
+    fi
+
+    printf 'Linux I2C is not enabled: /dev/i2c-1 is missing.\n'
+    if [[ "${has_i2c_boot}" -eq 0 ]]; then
+        printf 'Missing boot config line: dtparam=i2c_arm=on\n'
+    fi
+    if [[ "${has_i2c_module}" -eq 0 ]]; then
+        printf 'Missing persistent module line: i2c-dev\n'
+    fi
+    printf 'Expected host state:\n'
+    printf '  - /boot/firmware/config.txt contains dtparam=i2c_arm=on\n'
+    printf '  - /etc/modules contains i2c-dev\n'
+    printf '  - /dev/i2c-1 exists\n'
+    printf 'Typical Raspberry Pi OS fix: sudo raspi-config nonint do_i2c 0 && sudo reboot\n'
+}
+
 main() {
     local module_pattern='(^Module|i2c|spi|w1)'
 
@@ -128,6 +159,8 @@ main() {
 
     section "Device Nodes"
     ls -l /dev/i2c* 2>/dev/null || printf 'no /dev/i2c* nodes found\n'
+
+    show_direct_diagnosis
 
     section "Runner Access"
     show_runner_access
