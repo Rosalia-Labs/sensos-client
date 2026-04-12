@@ -181,11 +181,11 @@ select_device_interactively() {
     mapfile -t device_rows < <(list_recording_devices)
     [[ "${#device_rows[@]}" -gt 0 ]] || die "No recording devices found."
 
-    echo "Available recording devices:"
+    echo "Available recording devices:" >&2
     local i
     for i in "${!device_rows[@]}"; do
         IFS='|' read -r _ _ description <<<"${device_rows[$i]}"
-        printf "  %d) %s\n" "${i}" "${description}"
+        printf "  %d) %s\n" "${i}" "${description}" >&2
     done
 
     while true; do
@@ -194,7 +194,7 @@ select_device_interactively() {
             printf '%s\n' "${device_rows[$idx]}"
             return 0
         fi
-        echo "❌ Invalid index."
+        echo "❌ Invalid index." >&2
     done
 }
 
@@ -281,9 +281,9 @@ select_format() {
         combined_formats+=("${fmt}${annotation}")
     done
 
-    echo "Available formats:"
+    echo "Available formats:" >&2
     for idx in "${!combined_formats[@]}"; do
-        printf "  %d) %s\n" "${idx}" "${combined_formats[$idx]}"
+        printf "  %d) %s\n" "${idx}" "${combined_formats[$idx]}" >&2
     done
 
     while true; do
@@ -292,7 +292,7 @@ select_format() {
             printf '%s\n' "$(echo "${combined_formats[$idx]}" | sed 's/ (native)$//')"
             return 0
         fi
-        echo "❌ Invalid index."
+        echo "❌ Invalid index." >&2
     done
 }
 
@@ -342,15 +342,15 @@ select_channels() {
     done
     channel_options+=("enter number (${plughw_low}-${plughw_high})")
 
-    echo "Available channel options:"
+    echo "Available channel options:" >&2
     for idx in "${!channel_options[@]}"; do
-        printf "  %d) %s\n" "${idx}" "${channel_options[$idx]}"
+        printf "  %d) %s\n" "${idx}" "${channel_options[$idx]}" >&2
     done
 
     while true; do
         read -r -p "Select channel option index: " idx
         if [[ ! "${idx}" =~ ^[0-9]+$ ]] || [[ "${idx}" -lt 0 ]] || [[ "${idx}" -ge "${#channel_options[@]}" ]]; then
-            echo "❌ Invalid index."
+            echo "❌ Invalid index." >&2
             continue
         fi
 
@@ -361,7 +361,7 @@ select_channels() {
                     printf '%s\n' "${requested_channels}"
                     return 0
                 fi
-                echo "❌ Invalid channel count."
+                echo "❌ Invalid channel count." >&2
             done
         fi
 
@@ -399,8 +399,8 @@ select_rate() {
         die "Missing required value: --rate. Run interactively to choose a sample rate, or pass --rate explicitly."
     fi
 
-    echo "Native sample rate range: [${native_low} - ${native_high}]"
-    echo "Extended sample rate range: [${plughw_low} - ${plughw_high}]"
+    echo "Native sample rate range: [${native_low} - ${native_high}]" >&2
+    echo "Extended sample rate range: [${plughw_low} - ${plughw_high}]" >&2
 
     while true; do
         requested_rate="$(require_value_or_prompt "" "--rate" "Enter sample rate in Hz" "48000")"
@@ -408,7 +408,7 @@ select_rate() {
             printf '%s\n' "${requested_rate}"
             return 0
         fi
-        echo "❌ Sample rate must be within ${plughw_low}-${plughw_high}."
+        echo "❌ Sample rate must be within ${plughw_low}-${plughw_high}." >&2
     done
 }
 
