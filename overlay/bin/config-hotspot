@@ -19,6 +19,8 @@ LOG_DIR="${CLIENT_ROOT}/log"
 LOG_FILE="${LOG_DIR}/access_point.log"
 PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
 SENSOS_ADMIN_HELPER_LIB="${OVERLAY_ROOT}/libexec/ensure-sensos-admin.sh"
+HOTSPOT_ENV_FILE="/etc/default/sensos-hotspot"
+HOTSPOT_SERVICE="sensos-hotspot.service"
 
 [[ -f "${PARSE_SWITCHES_LIB}" ]] || {
     echo "❌ Missing parse-switches library at ${PARSE_SWITCHES_LIB}" >&2
@@ -42,6 +44,55 @@ require_command() {
 
 have_command() {
     command -v "$1" >/dev/null 2>&1
+}
+
+load_bootstrap_hotspot_settings() {
+    BOOTSTRAP_HOTSPOT_ENABLED="1"
+    BOOTSTRAP_HOTSPOT_CONNECTION_NAME="sensos-hotspot"
+    BOOTSTRAP_HOTSPOT_INTERFACE="wlan0"
+
+    if [[ -f "${HOTSPOT_ENV_FILE}" ]]; then
+        # shellcheck disable=SC1090
+        source "${HOTSPOT_ENV_FILE}"
+        BOOTSTRAP_HOTSPOT_ENABLED="${HOTSPOT_ENABLED:-1}"
+        BOOTSTRAP_HOTSPOT_CONNECTION_NAME="${HOTSPOT_CONNECTION_NAME:-sensos-hotspot}"
+        BOOTSTRAP_HOTSPOT_INTERFACE="${HOTSPOT_INTERFACE:-wlan0}"
+    fi
+}
+
+retire_bootstrap_hotspot() {
+    local active_ap="$1"
+    local active_iface="$2"
+
+    load_bootstrap_hotspot_settings
+
+    if [[ "${active_iface}" != "${BOOTSTRAP_HOTSPOT_INTERFACE}" ]]; then
+        echo "[$(date -Is)] Active AP is on ${active_iface}; leaving bootstrap hotspot config for ${BOOTSTRAP_HOTSPOT_INTERFACE} unchanged." >&3
+        return 0
+    fi
+
+    echo "[$(date -Is)] Retiring bootstrap hotspot config on ${active_iface}." >&3
+
+    if [[ -f "${HOTSPOT_ENV_FILE}" ]]; then
+        if grep -q '^HOTSPOT_ENABLED=' "${HOTSPOT_ENV_FILE}"; then
+            sudo sed -i.bak 's/^HOTSPOT_ENABLED=.*/HOTSPOT_ENABLED=0/' "${HOTSPOT_ENV_FILE}"
+        else
+            printf 'HOTSPOT_ENABLED=0\n' | sudo tee -a "${HOTSPOT_ENV_FILE}" >/dev/null
+        fi
+        echo "[$(date -Is)] Wrote HOTSPOT_ENABLED=0 to ${HOTSPOT_ENV_FILE}." >&3
+    fi
+
+    sudo systemctl disable --now "${HOTSPOT_SERVICE}" 2>/dev/null || true
+    sudo systemctl disable --now auto-hotspot.service 2>/dev/null || true
+
+    if nmcli -t -f NAME connection show | grep -Fxq "${BOOTSTRAP_HOTSPOT_CONNECTION_NAME}"; then
+        if [[ "${BOOTSTRAP_HOTSPOT_CONNECTION_NAME}" != "${active_ap}" ]]; then
+            echo "[$(date -Is)] Deleting bootstrap hotspot profile '${BOOTSTRAP_HOTSPOT_CONNECTION_NAME}'." >&3
+            sudo nmcli connection delete "${BOOTSTRAP_HOTSPOT_CONNECTION_NAME}" || true
+        else
+            echo "[$(date -Is)] Bootstrap hotspot profile already matches the active SensOS AP; no separate profile cleanup needed." >&3
+        fi
+    fi
 }
 
 read_network_value() {
@@ -215,8 +266,7 @@ nmcli -f GENERAL.CONNECTION,IP4.ADDRESS device show "${IFACE}" >&3 || true
 nmcli -f GENERAL,IP4,802-11-wireless connection show "${AP_CON}" >&3 || true
 
 if sudo nmcli -t -f NAME connection show --active | grep -Fxq "sensosap"; then
-    echo "[$(date -Is)] AP '${AP_CON}' active; disabling auto-hotspot.service if present." >&3
-    sudo systemctl disable --now auto-hotspot.service 2>/dev/null || true
+    retire_bootstrap_hotspot "${AP_CON}" "${IFACE}"
 fi
 
 echo "[$(date -Is)] AP '${AP_CON}' active on ${IFACE} (autoconnect enabled)." >&3

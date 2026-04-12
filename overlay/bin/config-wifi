@@ -14,6 +14,8 @@ OVERLAY_ROOT="$(resolve_overlay_root)"
 SCRIPT_NAME="$(basename "$0")"
 PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
 SENSOS_ADMIN_HELPER_LIB="${OVERLAY_ROOT}/libexec/ensure-sensos-admin.sh"
+HOTSPOT_ENV_FILE="/etc/default/sensos-hotspot"
+HOTSPOT_SERVICE="sensos-hotspot.service"
 
 [[ -f "${PARSE_SWITCHES_LIB}" ]] || {
     echo "❌ Missing parse-switches library at ${PARSE_SWITCHES_LIB}" >&2
@@ -33,6 +35,52 @@ require_command() {
         echo "ERROR: missing required command: $1" >&2
         exit 1
     }
+}
+
+load_hotspot_settings() {
+    HOTSPOT_ENABLED_VALUE="1"
+    HOTSPOT_CONNECTION_NAME_VALUE="sensos-hotspot"
+    HOTSPOT_INTERFACE_VALUE="wlan0"
+
+    if [[ -f "${HOTSPOT_ENV_FILE}" ]]; then
+        # shellcheck disable=SC1090
+        source "${HOTSPOT_ENV_FILE}"
+        HOTSPOT_ENABLED_VALUE="${HOTSPOT_ENABLED:-1}"
+        HOTSPOT_CONNECTION_NAME_VALUE="${HOTSPOT_CONNECTION_NAME:-sensos-hotspot}"
+        HOTSPOT_INTERFACE_VALUE="${HOTSPOT_INTERFACE:-wlan0}"
+    fi
+}
+
+disable_hotspot_reclaim_on_next_boot() {
+    local target_iface="$1"
+
+    load_hotspot_settings
+
+    if [[ "${target_iface}" != "${HOTSPOT_INTERFACE_VALUE}" ]]; then
+        return 0
+    fi
+
+    echo "Wi-Fi client is using hotspot-managed interface '${target_iface}'; preventing hotspot reclaim on next boot."
+
+    if [[ -f "${HOTSPOT_ENV_FILE}" ]]; then
+        if grep -q '^HOTSPOT_ENABLED=' "${HOTSPOT_ENV_FILE}"; then
+            sudo sed -i.bak 's/^HOTSPOT_ENABLED=.*/HOTSPOT_ENABLED=0/' "${HOTSPOT_ENV_FILE}"
+        else
+            printf 'HOTSPOT_ENABLED=0\n' | sudo tee -a "${HOTSPOT_ENV_FILE}" >/dev/null
+        fi
+        echo "Disabled HOTSPOT_ENABLED in ${HOTSPOT_ENV_FILE}."
+    fi
+
+    sudo systemctl disable "${HOTSPOT_SERVICE}" 2>/dev/null || true
+    sudo systemctl disable auto-hotspot.service 2>/dev/null || true
+
+    if nmcli -t -f NAME connection show | grep -Fxq "${HOTSPOT_CONNECTION_NAME_VALUE}"; then
+        sudo nmcli connection modify "${HOTSPOT_CONNECTION_NAME_VALUE}" connection.autoconnect no || true
+        sudo nmcli connection modify "${HOTSPOT_CONNECTION_NAME_VALUE}" connection.autoconnect-priority -999 || true
+        echo "Disabled autoconnect for hotspot profile '${HOTSPOT_CONNECTION_NAME_VALUE}'."
+    fi
+
+    echo "Hotspot changes were staged for the next boot; the active session is left alone for now."
 }
 
 clear_tc_limits() {
@@ -128,7 +176,10 @@ sudo nmcli con mod "${NM_CON_NAME}" ipv4.method auto || true
 sudo nmcli con mod "${NM_CON_NAME}" ipv6.method ignore || true
 
 sudo nmcli con mod "${NM_CON_NAME}" connection.autoconnect yes
+sudo nmcli con mod "${NM_CON_NAME}" connection.autoconnect-priority 50 || true
 echo "Autoconnect enabled."
+
+disable_hotspot_reclaim_on_next_boot "${iface}"
 
 if [[ -z "${limit_up_kbit}" && -z "${limit_down_kbit}" ]]; then
     echo "No traffic caps requested; clearing any existing traffic caps on ${iface}"
