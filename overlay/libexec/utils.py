@@ -10,6 +10,9 @@ import tempfile
 import subprocess
 import configparser
 import argparse
+import stat
+import pwd
+import grp
 
 CLIENT_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", "/sensos")
 CLIENT_API_USERNAME = "sensos"
@@ -121,8 +124,18 @@ def remove_file(path):
 def create_dir(path, owner="root", group=None, mode=0o755):
     group = group or owner
     privileged_shell(f"mkdir -p {shlex.quote(str(path))}", silent=True)
-    privileged_shell(f"chmod {oct(mode)[2:]} {shlex.quote(str(path))}", silent=True)
-    privileged_shell(f"chown {owner}:{group} {shlex.quote(str(path))}", silent=True)
+    try:
+        st = os.stat(path)
+        current_mode = stat.S_IMODE(st.st_mode)
+        desired_uid = pwd.getpwnam(owner).pw_uid
+        desired_gid = grp.getgrnam(group).gr_gid
+        if current_mode != mode:
+            privileged_shell(f"chmod {oct(mode)[2:]} {shlex.quote(str(path))}", silent=True)
+        if st.st_uid != desired_uid or st.st_gid != desired_gid:
+            privileged_shell(f"chown {owner}:{group} {shlex.quote(str(path))}", silent=True)
+    except Exception:
+        privileged_shell(f"chmod {oct(mode)[2:]} {shlex.quote(str(path))}", silent=True)
+        privileged_shell(f"chown {owner}:{group} {shlex.quote(str(path))}", silent=True)
 
 
 def read_file(filepath):

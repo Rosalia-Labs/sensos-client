@@ -120,9 +120,12 @@ def state_value(value: object) -> str:
     return str(value)
 
 
-def write_state(status: str, message: str, fix: dict[str, object] | None = None) -> None:
-    create_dir(str(STATE_DIR), owner="sensos-admin", group="sensos-data", mode=0o2775)
-    previous = read_kv_config(str(STATE_PATH))
+def state_lines(
+    status: str,
+    message: str,
+    previous: dict[str, str],
+    fix: dict[str, object] | None = None,
+) -> list[str]:
     lines = []
     lines.append(f"STATUS={status}")
     lines.append(f"MESSAGE={message}")
@@ -151,6 +154,20 @@ def write_state(status: str, message: str, fix: dict[str, object] | None = None)
             value = previous.get(key)
             if value:
                 lines.append(f"{key}={value}")
+    return lines
+
+
+def write_state(status: str, message: str, fix: dict[str, object] | None = None) -> None:
+    create_dir(str(STATE_DIR), owner="sensos-admin", group="sensos-data", mode=0o2775)
+    previous = read_kv_config(str(STATE_PATH))
+    lines = state_lines(status, message, previous, fix)
+    prior_lines = [
+        f"{key}={value}"
+        for key, value in previous.items()
+        if key != "UPDATED_AT"
+    ]
+    if lines == prior_lines:
+        return
     lines.append(f"UPDATED_AT={current_utc().replace(microsecond=0).isoformat().replace('+00:00', 'Z')}")
     write_file(str(STATE_PATH), "\n".join(lines) + "\n", mode=0o664, user="sensos-admin", group="sensos-data")
 
