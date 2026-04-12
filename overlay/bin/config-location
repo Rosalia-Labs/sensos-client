@@ -36,12 +36,12 @@ def http_requests():
     return REQUESTS
 
 
-def send_location(server_ip, port, peer_uuid, api_password, latitude, longitude):
+def send_location(server_host, port, peer_uuid, api_password, latitude, longitude):
     payload = {
         "latitude": latitude,
         "longitude": longitude,
     }
-    url = f"http://{server_ip}:{port}/api/v1/client/peer/location"
+    url = f"http://{server_host}:{port}/api/v1/client/peer/location"
     headers = {
         **build_basic_auth_header(api_password, username=peer_uuid),
         "Content-Type": "application/json",
@@ -122,11 +122,11 @@ def main():
     write_local_location_conf(args.latitude, args.longitude)
 
     conf = read_network_conf()
-    server_ip = args.config_server or conf.get("SERVER_WG_IP")
+    server_host = args.config_server or conf.get("SERVER_WG_IP")
     port = args.port or conf.get("SERVER_PORT") or DEFAULT_PORT
     peer_uuid = conf.get("PEER_UUID")
 
-    if not server_ip:
+    if not server_host:
         print("ℹ️ No config server configured; saved location locally only.")
         return 0
 
@@ -139,7 +139,7 @@ def main():
         print("❌ Client API password required to sync location to the server.", file=sys.stderr)
         return 1
 
-    send_location(server_ip, port, peer_uuid, api_password, args.latitude, args.longitude)
+    send_location(server_host, port, peer_uuid, api_password, args.latitude, args.longitude)
     return 0
 
 

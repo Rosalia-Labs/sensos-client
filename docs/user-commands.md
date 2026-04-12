@@ -167,9 +167,9 @@ Important flags from the source:
 Typical use:
 
 ```sh
-config-network --setup-server <server-ip-or-name> --network <network-name>
-config-network --setup-server <server-ip-or-name> --network sensos --subnet 1
-config-network --setup-server <server-ip-or-name> --setup-port 18765 --api-port 8765 --network sensos
+config-network --setup-server <server-host-or-ip> --network <network-name>
+config-network --setup-server <server-host-or-ip> --network sensos --subnet 1
+config-network --setup-server <server-host-or-ip> --setup-port 18765 --api-port 8765 --network sensos
 config-network --setup-server 10.0.2.2 --setup-port 18765 --api-port 8765 --network testing
 config-network --setup-server 10.0.2.2 --setup-port 18765 --network testing
 ```
@@ -177,12 +177,14 @@ config-network --setup-server 10.0.2.2 --setup-port 18765 --network testing
 Main gotchas:
 
 - `--setup-server` is only the server address reachable from the current setup environment
+- hostnames are fine here when the client can resolve them; literal IPs are also fine and can be simpler in lab or QEMU testing
 - `--setup-port` is the setup-time enrollment API port only
 - `--port` remains as a backward-compatible alias for `--setup-port`
 - `--api-port` is the steady-state in-tunnel API port saved into `/sensos/etc/network.conf` for later WireGuard-side API calls such as `config-location`, status updates, and hardware-profile upload
 - `--config-port` remains as a backward-compatible alias for `--api-port`
 - if `--api-port` is omitted, it defaults to `8765` even when setup enrollment uses a forwarded port such as `18765`
 - the server will usually return a `wg_endpoint` suitable for the chosen network, but if the deployed device must reach a different public or routed endpoint, you need to override it with `--wg-endpoint`
+- `--wg-endpoint` accepts a host, `host:port`, or `[ipv6-literal]:port`
 - in the standard SensOS QEMU workflow, the setup API target from the client VM is `10.0.2.2:18765`, while the first WireGuard test network should be published by the server as `10.0.2.2:51281`
 - in that QEMU workflow, do not assume the setup API port and the WireGuard endpoint port are the same thing; the client should enroll through `18765`, then use the returned WireGuard endpoint, and finally use `SERVER_WG_IP:8765` for steady-state API calls
 - `--network` is now required and must be supplied explicitly for every enrollment

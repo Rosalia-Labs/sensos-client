@@ -158,7 +158,7 @@ def parse_upload_response(body: str, expected_count: int) -> dict:
 
 
 def post_birdnet_batch(
-    server_ip: str,
+    server_host: str,
     port: str,
     peer_uuid: str,
     api_password: str,
@@ -168,7 +168,7 @@ def post_birdnet_batch(
     read_timeout_sec: int,
 ) -> tuple[int, str]:
     timeout = max(connect_timeout_sec, read_timeout_sec)
-    url = f"http://{server_ip}:{port}/api/v1/client/peer/birdnet/batches"
+    url = f"http://{server_host}:{port}/api/v1/client/peer/birdnet/batches"
     req = request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
@@ -246,7 +246,7 @@ def source_rows_to_payload(conn, rows) -> list[dict]:
 
 
 def run_upload_session(config: dict, network_config: dict, api_password: str, client_version: str) -> None:
-    server_ip = require_nonempty(network_config.get("SERVER_WG_IP"), "SERVER_WG_IP")
+    server_host = require_nonempty(network_config.get("SERVER_WG_IP"), "SERVER_WG_IP")
     server_port = require_nonempty(network_config.get("SERVER_PORT"), "SERVER_PORT")
     peer_uuid = require_peer_uuid(network_config)
     hostname = socket.gethostname()
@@ -284,10 +284,10 @@ def run_upload_session(config: dict, network_config: dict, api_password: str, cl
     try:
         print(
             f"[INFO] Uploading BirdNET batch {batch_id} with {len(payload_sources)} processed files "
-            f"to http://{server_ip}:{server_port}/api/v1/client/peer/birdnet/batches"
+            f"to http://{server_host}:{server_port}/api/v1/client/peer/birdnet/batches"
         )
         response_status, response_body = post_birdnet_batch(
-            server_ip,
+            server_host,
             server_port,
             peer_uuid,
             api_password,

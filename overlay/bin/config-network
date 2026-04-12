@@ -8,6 +8,7 @@ import pwd
 import importlib.util
 import datetime
 import shutil
+import re
 
 SCRIPT_FILE = os.path.realpath(__file__)
 SCRIPT_DIR = os.path.dirname(SCRIPT_FILE)
@@ -60,7 +61,7 @@ def parse_args():
         (["--config-port"], {"help": argparse.SUPPRESS, "dest": "config_port", "type": int}),
         (["--network"], {"help": "Network name (required)", "dest": "network"}),
         (["--subnet"], {"help": "Subnet offset for WireGuard IP assignment (default: 1, i.e., x.x.1.1)", "dest": "subnet", "type": int, "default": 1}),
-        (["--wg-endpoint"], {"help": "WireGuard endpoint as IP[:port] (optional override)", "dest": "wg_endpoint"}),
+        (["--wg-endpoint"], {"help": "WireGuard endpoint as host, host:port, or [ipv6-literal]:port (optional override)", "dest": "wg_endpoint"}),
         (["--wg-keepalive"], {"help": "WireGuard persistent keepalive interval (default: disabled=0)", "dest": "wg_keepalive", "type": int, "default": 0}),
         (["--disable-ssh-passwords"], {"action": "store_true", "help": "Disable SSH password authentication (default: enabled)", "dest": "disable_ssh_passwords"}),
         (["--note"], {"help": "Optional note or description to register with the device (default: empty)", "dest": "note"}),
@@ -215,6 +216,29 @@ def register_wireguard_key(config_server, port, peer_uuid, wg_ip, wg_public_key,
     if response.status_code != 200:
         sys.exit(f"Error: register-wireguard-key failed: {response.text}")
     print(f"✅ WireGuard key registered for {wg_ip}.")
+
+
+def parse_wireguard_endpoint(override: str) -> tuple[str, int | None]:
+    value = require_nonempty(override, "--wg-endpoint").strip()
+
+    if value.startswith("["):
+        match = re.fullmatch(r"\[(.+)\](?::([0-9]+))?", value)
+        if not match:
+            sys.exit(
+                "Error: invalid --wg-endpoint format. Use host, host:port, "
+                "or [ipv6-literal]:port."
+            )
+        host = match.group(1)
+        port_text = match.group(2)
+        return host, int(port_text) if port_text else None
+
+    if value.count(":") == 1:
+        host, port_text = value.rsplit(":", 1)
+        if port_text.isdigit():
+            return host, int(port_text)
+        return value, None
+
+    return value, None
 
 
 def change_hostname(new_hostname):
@@ -384,15 +408,12 @@ def configure_wireguard(args, api_password):
     )
 
     if args.wg_endpoint:
-        override = args.wg_endpoint
-        ip_only = override
-        if ":" in override:
-            ip_only, port_str = override.split(":", 1)
-            if port_str.isdigit():
-                print(f"⚠️ Overriding WireGuard port: {wg_port} → {port_str}")
-                wg_port = int(port_str)
-        print(f"⚠️ Overriding WireGuard endpoint IP: {wg_public_ip} → {ip_only}")
-        wg_public_ip = ip_only
+        endpoint_host, endpoint_port = parse_wireguard_endpoint(args.wg_endpoint)
+        if endpoint_port is not None:
+            print(f"⚠️ Overriding WireGuard port: {wg_port} → {endpoint_port}")
+            wg_port = endpoint_port
+        print(f"⚠️ Overriding WireGuard endpoint host: {wg_public_ip} → {endpoint_host}")
+        wg_public_ip = endpoint_host
 
     write_wireguard_config(wg_ip, server_pubkey, wg_public_ip, wg_port, args.network, args.wg_keepalive)
     change_hostname(hostname)
