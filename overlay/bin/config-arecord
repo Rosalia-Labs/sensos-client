@@ -443,6 +443,13 @@ test_configuration() {
 }
 
 apply_service_state() {
+    local -a managed_units=(
+        "sensos-arecord.service"
+        "sensos-compress-audio.service"
+        "sensos-thin-data.service"
+    )
+    local unit_name
+
     if [[ "$(normalize_bool "${enable_service}")" == "true" ]]; then
         sudo systemctl daemon-reload
         echo "Enabling sensos-arecord.service..."
@@ -461,7 +468,15 @@ apply_service_state() {
         sudo systemctl start sensos-compress-audio.service
         echo "Starting sensos-thin-data.service..."
         sudo systemctl start sensos-thin-data.service
+        return 0
     fi
+
+    for unit_name in "${managed_units[@]}"; do
+        if systemctl is-active --quiet "${unit_name}"; then
+            echo "Stopping ${unit_name} because --start-service was not requested."
+            sudo systemctl stop "${unit_name}"
+        fi
+    done
 }
 
 main() {

@@ -352,7 +352,10 @@ Behavior:
 - if required recording selections are missing and stdin is interactive, prompts for the missing device/format/channel/rate values
 - if required recording selections are missing and stdin is not interactive, exits with a clear missing-flags error
 - may ask to stop active recording/compression/thinning services before reconfiguring when run interactively
-- writes recording config and can enable/start `sensos-arecord.service`
+- writes recording config and can enable/start the recording pipeline services
+- `--enable-service` enables `sensos-arecord.service`, `sensos-compress-audio.service`, and `sensos-thin-data.service` for future boot
+- `--start-service` is what starts those services immediately; without it, `config-arecord` leaves them stopped at the end
+- later `./install` and `./upgrade` runs preserve or disable those three audio services as a group based on whether `/sensos/etc/arecord.conf` exists; they should not implicitly start recording on their own
 
 ### `debug-audio-monitor`
 

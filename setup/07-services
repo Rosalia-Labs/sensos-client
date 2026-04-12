@@ -41,6 +41,7 @@ RETIRED_UNITS=(
 )
 
 OPTIONAL_AUDIO_UNITS=(
+    sensos-arecord.service
     sensos-compress-audio.service
     sensos-thin-data.service
 )
@@ -168,6 +169,8 @@ main() {
         done
         reconcile_optional_audio_units
     else
+        log "fresh install detected; reconciling optional audio unit state"
+        reconcile_optional_audio_units
         for unit_name in "${HOST_BASELINE_UNITS[@]}"; do
             enable_host_unit_if_present "${unit_name}"
         done
