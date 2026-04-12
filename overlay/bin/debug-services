@@ -51,22 +51,20 @@ collect_units() {
 
 print_unit_status() {
     local unit="$1"
-    local loaded enabled active sub desc
+    local loaded enabled active sub
 
     loaded="$(systemctl show -P LoadState "${unit}" 2>/dev/null || true)"
     enabled="$(systemctl is-enabled "${unit}" 2>/dev/null || true)"
     active="$(systemctl is-active "${unit}" 2>/dev/null || true)"
     sub="$(systemctl show -P SubState "${unit}" 2>/dev/null || true)"
-    desc="$(systemctl show -P Description "${unit}" 2>/dev/null || true)"
 
     [[ -n "${loaded}" ]] || loaded="not-found"
     [[ -n "${enabled}" ]] || enabled="not-found"
     [[ -n "${active}" ]] || active="inactive"
     [[ -n "${sub}" ]] || sub="-"
-    [[ -n "${desc}" ]] || desc="-"
 
-    printf '%-33s en=%-8s ac=%-8s sub=%-10s ld=%-9s %s\n' \
-        "${unit}" "${enabled}" "${active}" "${sub}" "${loaded}" "${desc}"
+    printf '%-33s en=%-8s ac=%-8s sub=%-10s ld=%-9s\n' \
+        "${unit}" "${enabled}" "${active}" "${sub}" "${loaded}"
 }
 
 main() {
