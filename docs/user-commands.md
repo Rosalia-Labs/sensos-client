@@ -57,6 +57,15 @@ Typical use:
 ./install --offline
 ```
 
+Practical first-install networking note:
+
+- If the Pi does not yet have direct internet access, you can share your laptop's internet connection to its Ethernet port or Ethernet dongle, plug the Pi into that port, SSH in, and run the install through the laptop's Wi-Fi connection.
+- The main trick is finding the Pi on that temporary link. `sensos@raspberrypi.local` worked in practice for first access:
+
+```sh
+ssh sensos@raspberrypi.local
+```
+
 Behavior:
 
 - must be run as the bootstrap user, not `root`
