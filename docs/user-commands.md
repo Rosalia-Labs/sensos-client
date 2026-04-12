@@ -343,7 +343,7 @@ Typical use:
 
 ```sh
 config-arecord
-config-arecord --device plughw:1,0 --channels 2 --rate 48000 --start-service true
+config-arecord --device plughw:1,0 --channels 2 --rate 48000 --start-service
 ```
 
 Behavior:
@@ -438,7 +438,7 @@ Typical use:
 
 ```sh
 config-i2c-sensors
-config-i2c-sensors --interval 60 --scd30-interval 120 --enable-service --start-service
+config-i2c-sensors --interval 60 --scd30-interval 120 --start-service
 config-i2c-sensors --disable
 ```
 
@@ -447,7 +447,8 @@ Behavior:
 - writes `/sensos/etc/i2c-sensors.conf`
 - ensures `/sensos/data/microenv` exists with shared permissions
 - installs optional I2C/GPIO Python dependencies on demand before enabling the reader service
-- leaves the service state unchanged unless `--enable-service`, `--start-service`, or `--disable` is supplied
+- enables the reader service for future boot by default
+- leaves the reader service stopped unless `--start-service` is supplied
 - warns if time sync or location is missing
 
 ### `config-i2c-uploads`
@@ -469,15 +470,16 @@ Important flags:
 Typical use:
 
 ```sh
-config-i2c-uploads --ownership-model client-retains --session-interval-sec 3600 --enable-service --start-service
-config-i2c-uploads --ownership-model server-owns --batch-size 1000 --delete-after-days 30 --enable-service --start-service
+config-i2c-uploads --ownership-model client-retains --session-interval-sec 3600 --start-service
+config-i2c-uploads --ownership-model server-owns --batch-size 1000 --delete-after-days 30 --start-service
 config-i2c-uploads --disable
 ```
 
 Behavior:
 
 - writes `/sensos/etc/i2c-uploads.conf`
-- leaves the service state unchanged unless `--enable-service`, `--start-service`, or `--disable` is supplied
+- enables the upload service for future boot by default
+- leaves the upload service stopped unless `--start-service` is supplied
 - uploads only numeric readings from `/sensos/data/microenv/i2c_readings.db`
 - tracks upload batches, server receipts, and local pruning decisions in the same SQLite database
 - supports two ownership modes:
@@ -505,8 +507,8 @@ Important flags:
 Typical use:
 
 ```sh
-config-birdnet-uploads --ownership-model client-retains --session-interval-sec 3600 --enable-service --start-service
-config-birdnet-uploads --ownership-model server-owns --batch-size 100 --delete-after-days 30 --enable-service --start-service
+config-birdnet-uploads --ownership-model client-retains --session-interval-sec 3600 --start-service
+config-birdnet-uploads --ownership-model server-owns --batch-size 100 --delete-after-days 30 --start-service
 config-birdnet-uploads --disable
 ```
 
@@ -517,7 +519,8 @@ Behavior:
 - batches by processed source file and includes nested detection and FLAC-run metadata
 - supports the same two ownership modes as I2C uploads
 - with `server-owns`, old uploaded BirdNET metadata and local FLAC clips can be pruned later using `--delete-after-days`
-- leaves the service state unchanged unless `--enable-service`, `--start-service`, or `--disable` is supplied
+- enables the upload service for future boot by default
+- leaves the upload service stopped unless `--start-service` is supplied
 
 ### `config-rpi-eeprom`
 
@@ -603,7 +606,7 @@ Behavior:
 - configures `ipv4.method shared`, so the Pi serves DHCP to the connected laptop
 - keeps the Pi-side address at `10.42.0.1/24` by default to match the hotspot subnet
 - enables autoconnect so the profile comes back after reboot
-- attempts to bring the link up immediately unless `--start false` is passed
+- attempts to bring the link up immediately by default; use `--no-start` to skip that
 
 ### `config-wifi`
 
@@ -622,7 +625,7 @@ Important flags:
 Typical use:
 
 ```sh
-config-wifi --ssid MySSID --password 'secretpass' --iface wlan1 --start true
+config-wifi --ssid MySSID --password 'secretpass' --iface wlan1 --start
 ```
 
 Behavior:
@@ -651,7 +654,7 @@ Important flags:
 Typical use:
 
 ```sh
-config-modem --service 1nce --start true
+config-modem --service 1nce --start
 config-modem --service soracom --device cdc-wdm0
 ```
 
@@ -715,7 +718,7 @@ Important flags:
 Typical use:
 
 ```sh
-config-gps --start-service true
+config-gps --start-service
 config-gps --interval 60 --location-drift-m 50
 config-gps --time-conflict-sec 300
 ```
@@ -727,6 +730,8 @@ Behavior:
 - can update time and location automatically from GPS
 - when NTP does not appear healthy, a valid GPS fix becomes the active time source
 - reports a GPS/NTP time conflict instead of overriding a synchronized clock when the difference is too large
+- enables `sensos-gps.service` for future boot by default
+- leaves the GPS service stopped unless `--start-service` is supplied
 - controls `sensos-gps.service`
 
 ### `config-birdnet`
@@ -757,6 +762,8 @@ Behavior:
 - writes `/sensos/etc/birdnet.env`
 - can download BirdNET models before enabling
 - supports `mono` and `split-channels` multichannel input handling
+- enables `sensos-birdnet.service` for future boot by default
+- leaves the BirdNET service stopped unless `--start-service` is supplied
 - controls `sensos-birdnet.service`
 
 ### `install-birdnet-models`
@@ -870,16 +877,16 @@ config-time
 config-network --setup-server <server>
 config-location --latitude <lat> --longitude <lon>
 config-storage
-config-arecord --device plughw:1,0 --start-service true
-config-i2c-sensors --start-service true
+config-arecord --device plughw:1,0 --start-service
+config-i2c-sensors --start-service
 config-birdnet --start-service
 ```
 
 Then add optional features as needed:
 
 ```sh
-config-wifi --ssid <ssid> --password <pass> --start true
-config-modem --service 1nce --start true
-config-gps --start-service true
+config-wifi --ssid <ssid> --password <pass> --start
+config-modem --service 1nce --start
+config-gps --start-service
 config-birdnet --download-models --start-service
 ```

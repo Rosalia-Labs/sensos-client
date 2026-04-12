@@ -3,4 +3,8 @@ Description=Stop data-producing services when /sensos/data is critically full
 
 [Service]
 Type=oneshot
+RemainAfterExit=yes
 ExecStart=/sensos/libexec/monitor-data-space.sh
+
+[Install]
+WantedBy=multi-user.target

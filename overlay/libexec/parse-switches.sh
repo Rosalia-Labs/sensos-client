@@ -120,7 +120,7 @@ show_usage() {
     IFS=$'\n' keys=($(sort <<<"${keys[*]}"))
     unset IFS
 
-    local opt varname safe_varname default help hint
+    local opt varname safe_varname default help hint usage
     for opt in "${keys[@]}"; do
         safe_varname="${__cli_options_varname[$opt]}"
         varname="${safe_varname}"
@@ -128,10 +128,12 @@ show_usage() {
         help="${__cli_options_help[$opt]}"
 
         hint=""
+        usage="$opt [value]"
         if [[ ${__cli_options_is_bool["$opt"]:-0} -eq 1 ]]; then
+            usage="$opt"
             hint=" (boolean; use --no-${opt#--} to negate)"
         fi
-        printf "  %-24s %-50s %s\n" "$opt [value]" "$help$hint" "(default: $default)"
+        printf "  %-24s %-50s %s\n" "$usage" "$help$hint" "(default: $default)"
     done
 
     echo "  --help                  Show this help message"

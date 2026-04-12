@@ -3,4 +3,8 @@ Description=Send device status update
 
 [Service]
 Type=oneshot
+RemainAfterExit=yes
 ExecStart=/sensos/libexec/send-status-update.sh
+
+[Install]
+WantedBy=multi-user.target

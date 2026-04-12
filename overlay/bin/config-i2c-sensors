@@ -73,7 +73,7 @@ register_option --bme280-0x77-interval bme280_0x77_interval "Interval for BME280
 register_option --scd30-interval scd30_interval "Interval for SCD30 (seconds)" ""
 register_option --scd4x-interval scd4x_interval "Interval for SCD4X (seconds)" ""
 register_option --ads1015-interval ads1015_interval "Interval for ADS1015 (seconds)" ""
-register_option --enable-service enable_service "Enable systemd service" "false"
+register_option --enable-service enable_service "Enable systemd service" "true"
 register_option --start-service start_service "Start systemd service" "false"
 register_option --disable disable_service "Disable and stop systemd service" "false"
 
