@@ -18,6 +18,7 @@ SCRIPT_DIR = SCRIPT_FILE.parent
 OVERLAY_ROOT = Path(os.environ.get("SENSOS_CLIENT_ROOT", "/sensos"))
 UTILS_FILE = OVERLAY_ROOT / "libexec" / "utils.py"
 CONFIG_FILE = OVERLAY_ROOT / "etc" / "birdnet-uploads.conf"
+DEFAULT_MAX_REQUEST_BYTES = 900_000
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from birdnet_data import (
@@ -96,6 +97,8 @@ def read_birdnet_upload_config() -> dict:
         "ownership_mode": ownership_mode,
         "session_interval_sec": require_int(config, "SESSION_INTERVAL_SEC"),
         "batch_size": require_int(config, "BATCH_SIZE"),
+        "max_request_bytes": optional_int(config, "MAX_REQUEST_BYTES")
+        or DEFAULT_MAX_REQUEST_BYTES,
         "connect_timeout_sec": require_int(config, "CONNECT_TIMEOUT_SEC"),
         "read_timeout_sec": require_int(config, "READ_TIMEOUT_SEC"),
         "delete_after_days": delete_after_days,
@@ -169,9 +172,10 @@ def post_birdnet_batch(
 ) -> tuple[int, str]:
     timeout = max(connect_timeout_sec, read_timeout_sec)
     url = f"http://{server_host}:{port}/api/v1/client/peer/birdnet/batches"
+    encoded_payload = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     req = request.Request(
         url,
-        data=json.dumps(payload).encode("utf-8"),
+        data=encoded_payload,
         headers={
             "Content-Type": "application/json",
             **build_basic_auth_header(api_password, username=peer_uuid),
@@ -245,6 +249,52 @@ def source_rows_to_payload(conn, rows) -> list[dict]:
     return payload_sources
 
 
+def payload_size_bytes(payload: dict) -> int:
+    return len(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+
+
+def limit_processed_files_for_payload(
+    *,
+    hostname: str,
+    client_version: str,
+    ownership_mode: str,
+    processed_files: list[dict],
+    max_request_bytes: int,
+) -> list[dict]:
+    selected: list[dict] = []
+    for entry in processed_files:
+        trial = selected + [entry]
+        payload = build_birdnet_upload_payload(
+            hostname=hostname,
+            client_version=client_version,
+            batch_id=0,
+            ownership_mode=ownership_mode,
+            processed_files=trial,
+        )
+        if payload_size_bytes(payload) > max_request_bytes:
+            break
+        selected = trial
+
+    if selected:
+        return selected
+
+    if not processed_files:
+        return []
+
+    payload = build_birdnet_upload_payload(
+        hostname=hostname,
+        client_version=client_version,
+        batch_id=0,
+        ownership_mode=ownership_mode,
+        processed_files=[processed_files[0]],
+    )
+    size_bytes = payload_size_bytes(payload)
+    raise ValueError(
+        "single BirdNET processed file exceeds MAX_REQUEST_BYTES "
+        f"({size_bytes} > {max_request_bytes})"
+    )
+
+
 def run_upload_session(config: dict, network_config: dict, api_password: str, client_version: str) -> None:
     server_host = require_nonempty(network_config.get("SERVER_WG_IP"), "SERVER_WG_IP")
     server_port = require_nonempty(network_config.get("SERVER_PORT"), "SERVER_PORT")
@@ -268,8 +318,16 @@ def run_upload_session(config: dict, network_config: dict, api_password: str, cl
             print("[INFO] No pending BirdNET results to upload.")
             return
 
-        batch_id = create_upload_batch(conn, rows, config["ownership_mode"])
         payload_sources = source_rows_to_payload(conn, rows)
+        payload_sources = limit_processed_files_for_payload(
+            hostname=hostname,
+            client_version=client_version,
+            ownership_mode=config["ownership_mode"],
+            processed_files=payload_sources,
+            max_request_bytes=config["max_request_bytes"],
+        )
+        rows = rows[: len(payload_sources)]
+        batch_id = create_upload_batch(conn, rows, config["ownership_mode"])
 
     payload = build_birdnet_upload_payload(
         hostname=hostname,
@@ -282,9 +340,10 @@ def run_upload_session(config: dict, network_config: dict, api_password: str, cl
     response_status = None
     response_body = None
     try:
+        request_bytes = payload_size_bytes(payload)
         print(
             f"[INFO] Uploading BirdNET batch {batch_id} with {len(payload_sources)} processed files "
-            f"to http://{server_host}:{server_port}/api/v1/client/peer/birdnet/batches"
+            f"({request_bytes} bytes) to http://{server_host}:{server_port}/api/v1/client/peer/birdnet/batches"
         )
         response_status, response_body = post_birdnet_batch(
             server_host,

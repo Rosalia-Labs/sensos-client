@@ -401,6 +401,96 @@ class ApiContractTests(unittest.TestCase):
             },
         )
 
+    def test_birdnet_upload_limits_batch_to_fit_max_request_bytes(self):
+        processed_files = [
+            {
+                "source_path": f"audio_recordings/compressed/2026/04/07/{name}.flac",
+                "sample_rate": 48000,
+                "channels": 2,
+                "frames": 144000,
+                "started_at": "2026-04-07T12:00:00Z",
+                "processed_at": "2026-04-07T12:00:04Z",
+                "status": "done",
+                "error": None,
+                "output_dir": "2026/04/07",
+                "deleted_source": False,
+                "detections": [
+                    {
+                        "channel_index": 0,
+                        "window_index": 0,
+                        "start_frame": 0,
+                        "end_frame": 144000,
+                        "start_sec": 0.0,
+                        "end_sec": 3.0,
+                        "top_label": "Northern Cardinal (Cardinalis cardinalis)",
+                        "top_score": 0.91,
+                        "top_likely_score": 0.75,
+                    }
+                ],
+                "flac_runs": [],
+            }
+            for name in ("a", "b")
+        ]
+        one_file_bytes = birdnet_upload.payload_size_bytes(
+            birdnet_upload.build_birdnet_upload_payload(
+                hostname="sensor-1",
+                client_version="1.2.3",
+                batch_id=0,
+                ownership_mode="client-retains",
+                processed_files=[processed_files[0]],
+            )
+        )
+
+        limited = birdnet_upload.limit_processed_files_for_payload(
+            hostname="sensor-1",
+            client_version="1.2.3",
+            ownership_mode="client-retains",
+            processed_files=processed_files,
+            max_request_bytes=one_file_bytes + 10,
+        )
+
+        self.assertEqual(len(limited), 1)
+        self.assertEqual(limited[0]["source_path"], processed_files[0]["source_path"])
+
+    def test_birdnet_upload_rejects_single_file_that_exceeds_max_request_bytes(self):
+        processed_files = [
+            {
+                "source_path": "audio_recordings/compressed/2026/04/07/a.flac",
+                "sample_rate": 48000,
+                "channels": 2,
+                "frames": 144000,
+                "started_at": "2026-04-07T12:00:00Z",
+                "processed_at": "2026-04-07T12:00:04Z",
+                "status": "done",
+                "error": None,
+                "output_dir": "2026/04/07",
+                "deleted_source": False,
+                "detections": [
+                    {
+                        "channel_index": 0,
+                        "window_index": 0,
+                        "start_frame": 0,
+                        "end_frame": 144000,
+                        "start_sec": 0.0,
+                        "end_sec": 3.0,
+                        "top_label": "Northern Cardinal (Cardinalis cardinalis)",
+                        "top_score": 0.91,
+                        "top_likely_score": 0.75,
+                    }
+                ],
+                "flac_runs": [],
+            }
+        ]
+
+        with self.assertRaises(ValueError):
+            birdnet_upload.limit_processed_files_for_payload(
+                hostname="sensor-1",
+                client_version="1.2.3",
+                ownership_mode="client-retains",
+                processed_files=processed_files,
+                max_request_bytes=32,
+            )
+
     def test_config_network_defaults_steady_state_port_to_8765_not_setup_port(self):
         argv = [
             "config-network",
