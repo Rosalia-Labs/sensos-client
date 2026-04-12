@@ -381,6 +381,26 @@ debug-audio-monitor --duration 30 > /tmp/monitor.wav
 ssh <host> "debug-audio-monitor --duration 30" | play -q -t wav -
 ```
 
+### `debug-audio-pipeline`
+
+Prints a compact one-screen summary of the recording, compression, and BirdNET
+pipeline.
+
+Typical use:
+
+```sh
+debug-audio-pipeline
+```
+
+Behavior:
+
+- shows `sensos-arecord.service`, `sensos-compress-audio.service`, and `sensos-birdnet.service`
+- shows queued WAV count plus newest and oldest queued-file ages
+- shows compressed FLAC count and newest compressed-file age
+- shows processed-output count and newest processed-file age
+- shows BirdNET DB counts for `done`, `processing`, `error`, and pending upload
+- keeps output intentionally short for SSH over low-bandwidth links
+
 ### `debug-services`
 
 Prints a one-line status summary for each SensOS systemd service or timer
