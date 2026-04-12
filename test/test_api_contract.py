@@ -328,6 +328,58 @@ class ApiContractTests(unittest.TestCase):
                 2,
             )
 
+    def test_i2c_run_upload_session_uses_server_host_in_request_path(self):
+        fake_rows = [
+            {
+                "id": 101,
+                "timestamp": "2026-04-07T12:00:00Z",
+                "device_address": "0x76",
+                "sensor_type": "BME280",
+                "key": "temperature_c",
+                "value": 22.5,
+            }
+        ]
+        fake_conn = mock.MagicMock()
+        fake_db = mock.MagicMock()
+        fake_db.__enter__.return_value = fake_conn
+
+        with mock.patch.object(i2c_upload, "connect_db", return_value=fake_db):
+            with mock.patch.object(i2c_upload, "ensure_schema"):
+                with mock.patch.object(i2c_upload, "select_pending_readings", return_value=fake_rows):
+                    with mock.patch.object(i2c_upload, "create_upload_batch", return_value=17):
+                        with mock.patch.object(
+                            i2c_upload,
+                            "post_i2c_batch",
+                            return_value=(
+                                200,
+                                '{"status":"ok","receipt_id":"receipt-123","accepted_count":1,"server_received_at":"2026-04-07T12:01:00Z"}',
+                            ),
+                        ) as post_mock:
+                            with mock.patch.object(i2c_upload, "mark_upload_success"):
+                                with mock.patch.object(i2c_upload, "socket") as socket_mock:
+                                    socket_mock.gethostname.return_value = "sensor-1"
+                                    i2c_upload.run_upload_session(
+                                        {
+                                            "ownership_mode": "client-retains",
+                                            "batch_size": 100,
+                                            "connect_timeout_sec": 5,
+                                            "read_timeout_sec": 10,
+                                            "delete_after_days": None,
+                                        },
+                                        {
+                                            "SERVER_WG_IP": "10.254.0.1",
+                                            "SERVER_PORT": "8765",
+                                            "PEER_UUID": "peer-123",
+                                        },
+                                        "peer-secret",
+                                        "1.2.3",
+                                    )
+
+        self.assertEqual(
+            post_mock.call_args.args[:4],
+            ("10.254.0.1", "8765", "peer-123", "peer-secret"),
+        )
+
     def test_birdnet_upload_payload_includes_processed_files_and_nested_results(self):
         payload = birdnet_upload.build_birdnet_upload_payload(
             hostname="sensor-1",

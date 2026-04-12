@@ -239,12 +239,12 @@ def run_upload_session(config: dict, network_config: dict, api_password: str, cl
     try:
         print(
             f"[INFO] Uploading I2C batch {batch_id} with {len(payload_readings)} readings "
-            f"to http://{server_ip}:{server_port}/api/v1/client/peer/i2c-readings/batches"
+            f"to http://{server_host}:{server_port}/api/v1/client/peer/i2c-readings/batches"
         )
         response_status, response_body = post_i2c_batch(
-                server_host,
-                server_port,
-                peer_uuid,
+            server_host,
+            server_port,
+            peer_uuid,
             api_password,
             payload,
             connect_timeout_sec=config["connect_timeout_sec"],
