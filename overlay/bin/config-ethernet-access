@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+set -euo pipefail
+
+SCRIPT_FILE="$(realpath "${BASH_SOURCE[0]}")"
+resolve_overlay_root() {
+    printf '%s\n' "${SENSOS_CLIENT_ROOT:-/sensos}"
+}
+
+OVERLAY_ROOT="$(resolve_overlay_root)"
+SCRIPT_NAME="$(basename "$0")"
+LOG_DIR="${SENSOS_CLIENT_ROOT:-${OVERLAY_ROOT}}/log"
+LOG_FILE="${LOG_DIR}/ethernet_shared.log"
+PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
+SENSOS_ADMIN_HELPER_LIB="${OVERLAY_ROOT}/libexec/ensure-sensos-admin.sh"
+
+[[ -f "${PARSE_SWITCHES_LIB}" ]] || {
+    echo "ERROR: missing parse-switches library at ${PARSE_SWITCHES_LIB}" >&2
+    exit 1
+}
+source "${PARSE_SWITCHES_LIB}"
+[[ -f "${SENSOS_ADMIN_HELPER_LIB}" ]] || {
+    echo "ERROR: missing sensos-admin helper at ${SENSOS_ADMIN_HELPER_LIB}" >&2
+    exit 1
+}
+source "${SENSOS_ADMIN_HELPER_LIB}"
+
+ensure_sensos_admin_user "${SCRIPT_FILE}" "$@"
+
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || {
+        echo "ERROR: missing required command: $1" >&2
+        exit 1
+    }
+}
+
+register_option --interface interface "Ethernet interface to use" "eth0"
+register_option --address address "IPv4 address/prefix to assign on the Pi side" "10.42.0.1/24"
+register_option --start start_now "Immediately bring the shared Ethernet link online" "true"
+register_option --connection connection_name "NetworkManager connection name" "sensos-ethernet"
+
+parse_switches "${SCRIPT_NAME}" "$@"
+
+require_command nmcli
+
+IFACE="${interface:-eth0}"
+ADDRESS="${address:-10.42.0.1/24}"
+CON_NAME="${connection_name:-sensos-ethernet}"
+
+if [[ ! "${ADDRESS}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]]; then
+    echo "ERROR: --address must look like 10.42.0.1/24" >&2
+    exit 1
+fi
+
+if ! nmcli -t -f DEVICE device status | grep -Fxq "${IFACE}"; then
+    echo "ERROR: interface '${IFACE}' not found." >&2
+    exit 1
+fi
+
+mkdir -p "${LOG_DIR}"
+exec 3>>"${LOG_FILE}"
+echo "[$(date -Is)] Configuring shared Ethernet on ${IFACE} (${ADDRESS})..." >&3
+
+if nmcli -t -f NAME connection show | grep -Fxq "${CON_NAME}"; then
+    echo "[$(date -Is)] Updating existing connection '${CON_NAME}'." >&3
+else
+    echo "[$(date -Is)] Creating connection '${CON_NAME}' on ${IFACE}." >&3
+    sudo nmcli connection add type ethernet ifname "${IFACE}" con-name "${CON_NAME}"
+fi
+
+sudo nmcli connection modify "${CON_NAME}" \
+    connection.id "${CON_NAME}" \
+    connection.interface-name "${IFACE}" \
+    connection.type ethernet \
+    ipv4.addresses "${ADDRESS}" \
+    ipv4.method shared \
+    ipv4.never-default yes \
+    ipv6.method ignore \
+    connection.autoconnect yes \
+    connection.autoconnect-priority 90
+
+if [[ "${start_now,,}" == "true" ]]; then
+    echo "[$(date -Is)] Bringing up '${CON_NAME}' on ${IFACE}." >&3
+    if ! sudo nmcli -w 30 connection up "${CON_NAME}" ifname "${IFACE}"; then
+        echo "WARNING: failed to bring up '${CON_NAME}' immediately; autoconnect remains enabled." >&2
+        echo "[$(date -Is)] WARNING: immediate activation failed for '${CON_NAME}'." >&3
+    fi
+fi
+
+nmcli -f GENERAL.CONNECTION,IP4.ADDRESS device show "${IFACE}" >&3 || true
+nmcli -f GENERAL,IP4 connection show "${CON_NAME}" >&3 || true
+
+echo "[$(date -Is)] Shared Ethernet ready on ${IFACE} with Pi address ${ADDRESS}." >&3
+exec 3>&-
+
+cat <<EOF
+Shared Ethernet configured.
+Pi side address: ${ADDRESS}
+Interface: ${IFACE}
+Connection: ${CON_NAME}
+
+When a laptop is connected directly to ${IFACE}, NetworkManager should hand out a DHCP lease on the same 10.42.0.x subnet used by the hotspot.
+EOF

@@ -516,6 +516,32 @@ Behavior:
 
 These are usually run after `config-network`.
 
+### `config-ethernet-access`
+
+Configures direct laptop-to-Pi Ethernet on a shared subnet with DHCP served by the Pi.
+
+Important flags:
+
+- `--interface`
+- `--address`
+- `--start`
+- `--connection`
+
+Typical use:
+
+```sh
+config-ethernet-access
+config-ethernet-access --interface eth0 --address 10.42.0.1/24
+```
+
+Behavior:
+
+- creates or updates a NetworkManager Ethernet connection
+- configures `ipv4.method shared`, so the Pi serves DHCP to the connected laptop
+- keeps the Pi-side address at `10.42.0.1/24` by default to match the hotspot subnet
+- enables autoconnect so the profile comes back after reboot
+- attempts to bring the link up immediately unless `--start false` is passed
+
 ### `config-wifi`
 
 Creates or updates a Wi‑Fi client connection using NetworkManager.
