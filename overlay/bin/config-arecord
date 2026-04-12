@@ -171,13 +171,7 @@ maybe_stop_service() {
 }
 
 list_recording_devices() {
-    arecord -l | awk '
-        /^card / {
-            if (match($0, /^card ([0-9]+): .*device ([0-9]+):/, m)) {
-                printf "%s|%s|%s\n", m[1], m[2], $0
-            }
-        }
-    '
+    arecord -l | sed -n 's/^card \([0-9][0-9]*\): .*device \([0-9][0-9]*\):.*/\1|\2|&/p'
 }
 
 select_device_interactively() {

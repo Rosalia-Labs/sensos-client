@@ -475,6 +475,59 @@ class ApiContractTests(unittest.TestCase):
         self.assertIn("WG_ENDPOINT_IP=10.0.2.2\n", written)
         self.assertIn("WG_ENDPOINT_PORT=51281\n", written)
 
+    def test_config_network_does_not_upload_hardware_profile_during_enrollment(self):
+        args = SimpleNamespace(
+            config_server="10.0.2.2",
+            port=18765,
+            config_port=8765,
+            network="testing",
+            force=False,
+            wg_endpoint=None,
+            wg_keepalive=0,
+            disable_ssh_passwords=False,
+        )
+
+        with mock.patch.object(config_network, "ensure_sensos_admin"):
+            with mock.patch.object(config_network, "require_dir"):
+                with mock.patch.object(config_network, "require_cmd"):
+                    with mock.patch.object(config_network, "setup_logging"):
+                        with mock.patch.object(config_network, "parse_args", return_value=args):
+                            with mock.patch.object(config_network, "sensos_config_files_exist", return_value=[]):
+                                with mock.patch.object(config_network, "get_api_password", return_value="client-password"):
+                                    with mock.patch.object(config_network, "ensure_network_exists"):
+                                        with mock.patch.object(
+                                            config_network,
+                                            "configure_wireguard",
+                                            return_value=(
+                                                "10.254.1.5",
+                                                "198.51.100.20",
+                                                51281,
+                                                "peer-123",
+                                                "peer-secret",
+                                            ),
+                                        ):
+                                            with mock.patch.object(
+                                                config_network,
+                                                "compute_api_server_wg_ip",
+                                                return_value="10.254.0.1",
+                                            ):
+                                                with mock.patch.object(config_network, "write_client_settings"):
+                                                    with mock.patch.object(config_network, "write_api_password"):
+                                                        with mock.patch.object(config_network, "configure_ssh"):
+                                                            with mock.patch.object(config_network, "enable_ssh"):
+                                                                with mock.patch.object(config_network, "vnstat_register_interface"):
+                                                                    with mock.patch.object(config_network, "restart_wireguard_service"):
+                                                                        with mock.patch.object(config_network, "enable_status_update_timer"):
+                                                                            with mock.patch.object(
+                                                                                config_network,
+                                                                                "upload_initial_hardware_profile",
+                                                                                create=True,
+                                                                            ) as upload_mock:
+                                                                                with contextlib.redirect_stdout(io.StringIO()):
+                                                                                    config_network.main()
+
+        upload_mock.assert_not_called()
+
     def test_upload_hardware_profile_resolve_targets_auto_prefers_steady_state_then_setup(self):
         targets = upload_hardware_profile.resolve_upload_targets(
             {

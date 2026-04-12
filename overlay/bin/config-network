@@ -502,19 +502,6 @@ def enable_status_update_timer():
     privileged_shell(f"systemctl start {STATUS_UPDATE_TIMER}")
 
 
-def upload_initial_hardware_profile():
-    uploader = os.path.join(SCRIPT_DIR, "upload-hardware-profile")
-    if not os.path.exists(uploader):
-        print("⚠️ Hardware profile uploader not found; skipping initial upload.")
-        return
-    print("🧰 Uploading hardware profile...")
-    output, rc = privileged_shell(f"{shlex.quote(uploader)} --transport setup", silent=True)
-    if rc == 0:
-        print("✅ Hardware profile uploaded.")
-        return
-    print("⚠️ Hardware profile upload failed; enrollment will continue.")
-
-
 def main():
     ensure_sensos_admin()
 
@@ -591,7 +578,6 @@ def main():
 
     restart_wireguard_service(args.network)
     enable_status_update_timer()
-    upload_initial_hardware_profile()
 
     print("✅ Configuration complete. Reboot now and check connectivity.")
 

@@ -191,6 +191,7 @@ Main gotchas:
 - if a device is re-enrolled or otherwise gets a new WireGuard IP, keep the same `--note` so the server-side name stays continuous across IP changes
 - in the current server implementation, the server searches for the first available host IP starting at the requested subnet offset; with the normal default of `1`, allocation starts at `x.x.1.1`
 - subnet `0` is reserved for admin containers and computers, so normal device enrollments should start at subnet `1` or later
+- `config-network` does not upload the local hardware profile anymore; that upload is intentionally a separate step so you can enroll on one Pi in the lab, then move the image or storage to the actual field hardware and upload the final hardware profile there
 
 Run this before commands that need:
 
@@ -198,6 +199,26 @@ Run this before commands that need:
 - `SERVER_WG_IP`
 - `SERVER_PORT`
 - client API password
+
+### `upload-hardware-profile`
+
+Uploads the local machine's hardware inventory to the server for the already enrolled peer.
+
+Typical use:
+
+```sh
+upload-hardware-profile
+upload-hardware-profile --transport steady-state
+upload-hardware-profile --transport setup
+```
+
+Behavior:
+
+- reads the enrolled peer identity from `/sensos/etc/network.conf`
+- reads the client API password from `/sensos/keys/api_password`
+- in `auto` mode, tries the steady-state WireGuard API first and then falls back to the setup-time API target
+- should usually be run on the final deployed hardware, not on a temporary staging Pi used only for enrollment
+- this separation matters when you do the handshake on a lab Pi, then deploy the image later onto different field hardware
 
 ### `config-location`
 
