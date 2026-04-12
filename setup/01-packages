@@ -12,6 +12,7 @@ REQUIRED_PACKAGES_FILE="${CLIENT_ROOT}/setup/packages-required.txt"
 REMOVE_PACKAGES_FILE="${CLIENT_ROOT}/setup/packages-remove.txt"
 EAGER_APT="${SENSOS_EAGER_APT:-0}"
 INSTALL_RECOMMENDS="${SENSOS_APT_INSTALL_RECOMMENDS:-0}"
+OFFLINE="${SENSOS_OFFLINE:-0}"
 
 log() {
     printf '[setup/01-packages] %s\n' "$*"
@@ -160,6 +161,36 @@ collect_missing_required_packages() {
     fi
 }
 
+package_spec_is_installed() {
+    local package_spec="$1"
+    local candidate
+    local -a package_candidates=()
+    local expanded_candidate
+
+    IFS='|' read -r -a package_candidates <<< "${package_spec}"
+
+    for candidate in "${package_candidates[@]}"; do
+        [[ -n "${candidate}" ]] || continue
+        expanded_candidate="$(expand_package_candidate "${candidate}")" || continue
+        if package_is_installed "${expanded_candidate}"; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+collect_missing_required_package_specs() {
+    local package_spec
+
+    while IFS= read -r package_spec; do
+        [[ -n "${package_spec}" ]] || continue
+        if ! package_spec_is_installed "${package_spec}"; then
+            printf '%s\n' "${package_spec}"
+        fi
+    done < <(read_package_file "${REQUIRED_PACKAGES_FILE}")
+}
+
 install_required_packages() {
     local packages=("$@")
     local apt_args=()
@@ -178,6 +209,7 @@ main() {
     local remove_packages=()
     local install_packages=()
     local required_packages=()
+    local missing_specs=()
     local apt_args=()
 
     require_root
@@ -186,6 +218,21 @@ main() {
 
     mapfile -t remove_packages < <(collect_installed_packages_from_file "${REMOVE_PACKAGES_FILE}")
     mapfile -t install_packages < <(collect_missing_required_packages)
+
+    if [[ "${OFFLINE}" == "1" ]]; then
+        mapfile -t missing_specs < <(collect_missing_required_package_specs)
+        if [[ "${#missing_specs[@]}" -gt 0 ]]; then
+            printf '[setup/01-packages] offline mode is missing required packages:\n' >&2
+            printf '  %s\n' "${missing_specs[@]}" >&2
+            die "install the required Debian packages before rerunning in offline mode, or rerun without --offline once internet is available"
+        fi
+
+        if [[ "${#remove_packages[@]}" -gt 0 ]]; then
+            log "offline mode enabled; skipping package removals"
+        fi
+        log "offline mode enabled; required Debian packages already installed, skipping apt operations"
+        return
+    fi
 
     if [[ "${EAGER_APT}" == "1" ]]; then
         log "eager APT mode enabled; refreshing package index"

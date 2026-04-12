@@ -11,6 +11,7 @@ PREFLIGHT_SCRIPT="${REPO_ROOT}/setup/00-preflight"
 INSTALL_STATE_FILE="${DEPLOY_ROOT}/etc/install-state.env"
 REINSTALL=0
 INSTALL_RECOMMENDS=0
+OFFLINE=0
 
 log() {
     printf '[install] %s\n' "$*"
@@ -33,6 +34,8 @@ Options:
                      Clear transient install artifacts before rerunning setup
   --install-recommends
                      Allow APT to install recommended packages during setup
+  --offline
+                     Skip network-dependent install steps and use only local repo/package state
 EOF
 }
 
@@ -44,6 +47,9 @@ parse_args() {
                 ;;
             --install-recommends)
                 INSTALL_RECOMMENDS=1
+                ;;
+            --offline)
+                OFFLINE=1
                 ;;
             --help|-h)
                 print_usage
@@ -78,6 +84,7 @@ sudo_run() {
         "SENSOS_EAGER_PIP=1" \
         "SENSOS_REINSTALL=${REINSTALL}" \
         "SENSOS_APT_INSTALL_RECOMMENDS=${INSTALL_RECOMMENDS}" \
+        "SENSOS_OFFLINE=${OFFLINE}" \
         "$@"
 }
 

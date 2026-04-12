@@ -14,6 +14,7 @@ VENV_DIR="${DEPLOY_ROOT}/python/venv"
 REQUIREMENTS_STAMP_FILE="${VENV_DIR}/.requirements.sha256"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 EAGER_PIP="${SENSOS_EAGER_PIP:-0}"
+OFFLINE="${SENSOS_OFFLINE:-0}"
 
 SENSOS_ADMIN_USER="sensos-admin"
 SENSOS_DATA_GROUP="sensos-data"
@@ -75,6 +76,10 @@ ensure_system_venv_support() {
     fi
 
     venv_package="$(required_system_venv_package)"
+    if [[ "${OFFLINE}" == "1" ]]; then
+        die "offline mode requires local venv support; install ${venv_package} before rerunning with --offline, or rerun without --offline once internet is available"
+    fi
+
     log "installing ${venv_package} so ${PYTHON_BIN} can create virtual environments"
     apt-get install -y "${venv_package}"
 
@@ -149,6 +154,21 @@ install_requirements_if_needed() {
     current_digest="$(requirements_digest)"
     if [[ -f "${REQUIREMENTS_STAMP_FILE}" ]]; then
         previous_digest="$(head -n 1 "${REQUIREMENTS_STAMP_FILE}" | tr -d '[:space:]')"
+    fi
+
+    if [[ "${OFFLINE}" == "1" ]]; then
+        if [[ "${VENV_CREATED}" -eq 0 && "${current_digest}" == "${previous_digest}" ]]; then
+            log "offline mode enabled; Python requirements already satisfied for current digest"
+            return
+        fi
+
+        if requirements_declared; then
+            log "offline mode enabled; skipping pip install from ${REQUIREMENTS_FILE}"
+            log "rerun ./install without --offline, or ./upgrade, once internet access is available to install deferred Python dependencies"
+        else
+            log "offline mode enabled and no Python requirements declared; skipping pip"
+        fi
+        return
     fi
 
     if [[ "${EAGER_PIP}" == "1" ]]; then

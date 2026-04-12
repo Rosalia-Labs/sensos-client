@@ -54,6 +54,7 @@ Typical use:
 ./install
 ./install --reinstall
 ./install --install-recommends
+./install --offline
 ```
 
 Behavior:
@@ -63,6 +64,7 @@ Behavior:
 - runs the full setup pipeline with eager APT and Python dependency install
 - `--reinstall` clears transient install artifacts such as managed venvs and install-state before rerunning setup; use it after a failed install if you pulled newer repo contents and want to avoid reusing partial Python/setup state
 - `--install-recommends` allows APT to install recommended packages during setup; the default install path still uses `--no-install-recommends`
+- `--offline` skips network-dependent package and pip fetches; it requires the needed Debian packages to already be installed locally, and it defers unresolved Python venv dependencies until a later online rerun
 
 ### `./upgrade`
 
