@@ -116,11 +116,12 @@ describe_host_unit_state() {
 
 disable_host_unit_if_present() {
     local unit_name="$1"
+    local log_absent="${2:-yes}"
 
     if systemctl list-unit-files --type=service --type=timer 2>/dev/null | awk '{print $1}' | grep -Fxq "${unit_name}"; then
         systemctl disable --now "${unit_name}" >/dev/null 2>&1 || true
         log "disabled host unit ${unit_name}"
-    else
+    elif [[ "${log_absent}" == "yes" ]]; then
         log "host unit not present; skipped ${unit_name}"
     fi
 }
@@ -129,7 +130,7 @@ retire_old_units() {
     local unit_name
 
     for unit_name in "${RETIRED_UNITS[@]}"; do
-        disable_host_unit_if_present "${unit_name}"
+        disable_host_unit_if_present "${unit_name}" "no"
     done
 }
 
