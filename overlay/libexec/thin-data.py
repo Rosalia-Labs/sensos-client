@@ -121,7 +121,7 @@ def connect_db() -> sqlite3.Connection:
             start_sec REAL NOT NULL,
             end_sec REAL NOT NULL,
             peak_score REAL NOT NULL,
-            peak_volume REAL NOT NULL DEFAULT 0,
+            peak_volume REAL,
             peak_likely_score REAL,
             flac_path TEXT NOT NULL,
             deleted_at TEXT,
@@ -130,7 +130,7 @@ def connect_db() -> sqlite3.Connection:
         """
     )
     ensure_column(conn, "flac_runs", "label_dir", "TEXT")
-    ensure_column(conn, "flac_runs", "peak_volume", "REAL NOT NULL DEFAULT 0")
+    ensure_column(conn, "flac_runs", "peak_volume", "REAL")
     ensure_column(conn, "flac_runs", "deleted_at", "TEXT")
     backfill_flac_run_columns(conn)
     conn.execute(
@@ -166,6 +166,7 @@ def choose_victim_file(conn: sqlite3.Connection) -> tuple[int, Path] | None:
         FROM flac_runs
         WHERE deleted_at IS NULL
         ORDER BY peak_score ASC,
+                 CASE WHEN peak_volume IS NULL THEN 1 ELSE 0 END ASC,
                  peak_volume ASC,
                  duration_sec DESC,
                  start_sec ASC,
@@ -181,7 +182,7 @@ def choose_victim_file(conn: sqlite3.Connection) -> tuple[int, Path] | None:
             trace(
                 "selected low-confidence BirdNET file: "
                 f"{abs_path} score={peak_score:.4f} "
-                f"volume={peak_volume:.4f} "
+                f"volume={'na' if peak_volume is None else f'{peak_volume:.4f}'} "
                 f"duration={duration_sec:.3f}s "
                 f"label_dir={label_dir or 'na'}"
             )

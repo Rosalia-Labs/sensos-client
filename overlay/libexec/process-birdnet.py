@@ -274,7 +274,7 @@ def connect_db() -> sqlite3.Connection:
             end_frame INTEGER NOT NULL,
             start_sec REAL NOT NULL,
             end_sec REAL NOT NULL,
-            window_volume REAL NOT NULL DEFAULT 0,
+            window_volume REAL,
             top_label TEXT NOT NULL,
             top_score REAL NOT NULL,
             top_likely_score REAL,
@@ -296,7 +296,7 @@ def connect_db() -> sqlite3.Connection:
             start_sec REAL NOT NULL,
             end_sec REAL NOT NULL,
             peak_score REAL NOT NULL,
-            peak_volume REAL NOT NULL DEFAULT 0,
+            peak_volume REAL,
             peak_likely_score REAL,
             flac_path TEXT NOT NULL,
             deleted_at TEXT,
@@ -305,11 +305,11 @@ def connect_db() -> sqlite3.Connection:
         """
     )
     ensure_column(conn, "detections", "channel_index", "INTEGER NOT NULL DEFAULT 0")
-    ensure_column(conn, "detections", "window_volume", "REAL NOT NULL DEFAULT 0")
+    ensure_column(conn, "detections", "window_volume", "REAL")
     ensure_column(conn, "detections", "top_likely_score", "REAL")
     ensure_column(conn, "flac_runs", "channel_index", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "flac_runs", "label_dir", "TEXT")
-    ensure_column(conn, "flac_runs", "peak_volume", "REAL NOT NULL DEFAULT 0")
+    ensure_column(conn, "flac_runs", "peak_volume", "REAL")
     ensure_column(conn, "flac_runs", "peak_likely_score", "REAL")
     ensure_column(conn, "flac_runs", "deleted_at", "TEXT")
     backfill_flac_run_columns(conn)
