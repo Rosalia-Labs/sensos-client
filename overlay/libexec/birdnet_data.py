@@ -97,6 +97,7 @@ def ensure_base_schema(conn: sqlite3.Connection) -> None:
             start_sec REAL NOT NULL,
             end_sec REAL NOT NULL,
             peak_score REAL NOT NULL,
+            peak_volume REAL NOT NULL DEFAULT 0,
             peak_likely_score REAL,
             flac_path TEXT NOT NULL,
             deleted_at TEXT,
@@ -109,6 +110,7 @@ def ensure_base_schema(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "detections", "top_likely_score", "REAL")
     ensure_column(conn, "flac_runs", "channel_index", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "flac_runs", "label_dir", "TEXT")
+    ensure_column(conn, "flac_runs", "peak_volume", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "flac_runs", "peak_likely_score", "REAL")
     ensure_column(conn, "flac_runs", "deleted_at", "TEXT")
     conn.execute(

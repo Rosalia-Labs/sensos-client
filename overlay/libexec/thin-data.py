@@ -5,7 +5,6 @@
 import argparse
 import importlib.util
 import os
-import random
 import shutil
 import sqlite3
 import sys
@@ -31,7 +30,6 @@ create_dir = UTILS_MODULE.create_dir
 
 DATA_ROOT = CLIENT_ROOT / "data"
 AUDIO_ROOT = DATA_ROOT / "audio_recordings"
-COMPRESSED_ROOT = AUDIO_ROOT / "compressed"
 OUTPUT_ROOT = AUDIO_ROOT / "processed"
 STATE_ROOT = DATA_ROOT / "birdnet"
 DB_PATH = STATE_ROOT / "birdnet.db"
@@ -123,6 +121,7 @@ def connect_db() -> sqlite3.Connection:
             start_sec REAL NOT NULL,
             end_sec REAL NOT NULL,
             peak_score REAL NOT NULL,
+            peak_volume REAL NOT NULL DEFAULT 0,
             peak_likely_score REAL,
             flac_path TEXT NOT NULL,
             deleted_at TEXT,
@@ -131,6 +130,7 @@ def connect_db() -> sqlite3.Connection:
         """
     )
     ensure_column(conn, "flac_runs", "label_dir", "TEXT")
+    ensure_column(conn, "flac_runs", "peak_volume", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "flac_runs", "deleted_at", "TEXT")
     backfill_flac_run_columns(conn)
     conn.execute(
@@ -154,123 +154,41 @@ def mark_missing(conn: sqlite3.Connection, run_id: int) -> None:
     conn.commit()
 
 
-def choose_victim_dir(conn: sqlite3.Connection) -> str | None:
+def choose_victim_file(conn: sqlite3.Connection) -> tuple[int, Path] | None:
     rows = conn.execute(
         """
-        SELECT
-            label_dir,
-            COUNT(*) AS file_count,
-            COALESCE(SUM(end_sec - start_sec), 0) AS total_seconds
+        SELECT id,
+               flac_path,
+               label_dir,
+               peak_score,
+               peak_volume,
+               (end_sec - start_sec) AS duration_sec
         FROM flac_runs
         WHERE deleted_at IS NULL
-          AND label_dir IS NOT NULL
-        GROUP BY label_dir
-        ORDER BY total_seconds DESC, file_count DESC
-        """
+        ORDER BY peak_score ASC,
+                 peak_volume ASC,
+                 duration_sec DESC,
+                 start_sec ASC,
+                 id ASC
+        """,
     ).fetchall()
     if not rows:
-        trace("no labelled FLAC directories remain with undeleted files")
+        trace("no BirdNET FLAC runs remain with undeleted files")
         return None
-    max_seconds = rows[0][2]
-    candidates = [
-        (label_dir, file_count)
-        for label_dir, file_count, total_seconds in rows
-        if total_seconds == max_seconds
-    ]
-    chosen, chosen_file_count = random.choice(candidates)
-    trace(
-        "selected victim directory: "
-        f"{chosen} with {max_seconds:.3f} retained second(s) across {chosen_file_count} file(s); "
-        f"{len(candidates)} director{'y' if len(candidates) == 1 else 'ies'} tied for largest retained duration"
-    )
-    return chosen
-
-
-def choose_victim_file(conn: sqlite3.Connection, label_dir: str) -> tuple[int, Path] | None:
-    rows = conn.execute(
-        """
-        SELECT id, flac_path
-        FROM flac_runs
-        WHERE deleted_at IS NULL
-          AND label_dir = ?
-        ORDER BY RANDOM()
-        """,
-        (label_dir,),
-    ).fetchall()
-    for run_id, rel_path in rows:
+    for run_id, rel_path, label_dir, peak_score, peak_volume, duration_sec in rows:
         abs_path = AUDIO_ROOT / rel_path
         if abs_path.exists():
-            trace(f"selected random file from chosen directory: {abs_path}")
+            trace(
+                "selected low-confidence BirdNET file: "
+                f"{abs_path} score={peak_score:.4f} "
+                f"volume={peak_volume:.4f} "
+                f"duration={duration_sec:.3f}s "
+                f"label_dir={label_dir or 'na'}"
+            )
             return run_id, abs_path
         mark_missing(conn, run_id)
-    trace(f"chosen directory has no remaining files on disk: {label_dir}")
+    trace("all low-confidence BirdNET candidates were already missing on disk")
     return None
-
-
-def choose_compressed_victim_dir() -> Path | None:
-    if not COMPRESSED_ROOT.exists():
-        trace("compressed root does not exist")
-        return None
-
-    leaf_counts = []
-    for dir_path in sorted(path for path in COMPRESSED_ROOT.rglob("*") if path.is_dir()):
-        files = [path for path in dir_path.iterdir() if path.is_file() and path.suffix.lower() == ".flac"]
-        if not files:
-            continue
-        leaf_counts.append((dir_path, len(files)))
-
-    if not leaf_counts:
-        trace("no compressed FLAC directories remain with files")
-        return None
-
-    max_count = max(file_count for _, file_count in leaf_counts)
-    candidates = [(dir_path, file_count) for dir_path, file_count in leaf_counts if file_count == max_count]
-    chosen_dir, chosen_count = random.choice(candidates)
-    trace(
-        "selected compressed victim directory: "
-        f"{chosen_dir} with {chosen_count} file(s); "
-        f"{len(candidates)} director{'y' if len(candidates) == 1 else 'ies'} tied for largest file count"
-    )
-    return chosen_dir
-
-
-def choose_compressed_victim_file(dir_path: Path) -> Path | None:
-    files = [path for path in dir_path.iterdir() if path.is_file() and path.suffix.lower() == ".flac"]
-    if not files:
-        trace(f"chosen compressed directory has no remaining files: {dir_path}")
-        return None
-
-    victim_file = random.choice(files)
-    trace(f"selected random compressed file from chosen directory: {victim_file}")
-    return victim_file
-
-
-def prune_empty_compressed_dirs(start: Path) -> None:
-    current = start
-    while current != COMPRESSED_ROOT and current.exists():
-        try:
-            current.rmdir()
-        except OSError:
-            break
-        current = current.parent
-
-
-def thin_compressed_once() -> bool:
-    victim_dir = choose_compressed_victim_dir()
-    if victim_dir is None:
-        return False
-
-    victim_file = choose_compressed_victim_file(victim_dir)
-    if victim_file is None:
-        return False
-
-    if INTERACTIVE_TEST_MODE and not confirm_delete(victim_file):
-        print("Test thinning stopped by user.")
-        raise SystemExit(0)
-    print(f"Thinning compressed {victim_file}")
-    victim_file.unlink(missing_ok=True)
-    prune_empty_compressed_dirs(victim_file.parent)
-    return True
 
 
 def prune_empty_dirs(start: Path) -> None:
@@ -284,11 +202,7 @@ def prune_empty_dirs(start: Path) -> None:
 
 
 def thin_once(conn: sqlite3.Connection) -> bool:
-    label_dir = choose_victim_dir(conn)
-    if label_dir is None:
-        return False
-
-    victim = choose_victim_file(conn, label_dir)
+    victim = choose_victim_file(conn)
     if victim is None:
         return False
 
@@ -305,18 +219,6 @@ def thin_once(conn: sqlite3.Connection) -> bool:
     conn.commit()
     prune_empty_dirs(victim_file.parent)
     return True
-
-
-def thin_once_with_fallback(conn: sqlite3.Connection) -> bool:
-    if thin_once(conn):
-        return True
-
-    trace(
-        "processed directory thinning exhausted before reaching target; "
-        "falling back to compressed directory thinning"
-    )
-    return thin_compressed_once()
-
 
 def main() -> None:
     global TRACE, INTERACTIVE_TEST_MODE
@@ -337,10 +239,10 @@ def main() -> None:
     if args.test:
         deleted_count = 0
         print(
-            "Test mode: first thin processed outputs by largest retained duration, "
-            "then fall back to compressed inputs by largest file-count directory if needed."
+            "Test mode: thin processed BirdNET outputs by lowest confidence score, "
+            "then lowest volume when scores tie."
         )
-        while thin_once_with_fallback(conn):
+        while thin_once(conn):
             deleted_count += 1
         print(f"Test thinning complete. Deleted {deleted_count} file(s).")
         return
@@ -356,8 +258,8 @@ def main() -> None:
                 f"Free space low: {current_free_percent:.1f}% < {MIN_FREE_PERCENT:.1f}%. Starting thinning."
             )
             while current_free_percent < TARGET_FREE_PERCENT:
-                if not thin_once_with_fallback(conn):
-                    print("No processed or compressed audio files available to thin.", file=sys.stderr)
+                if not thin_once(conn):
+                    print("No processed BirdNET audio files available to thin.", file=sys.stderr)
                     break
                 current_free_percent = free_percent(DATA_ROOT)
             print(

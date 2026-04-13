@@ -150,6 +150,7 @@ class LabelRun:
     end_frame: int
     label: str
     peak_score: float
+    peak_volume: float
     peak_likely_score: float | None
 
 
@@ -295,6 +296,7 @@ def connect_db() -> sqlite3.Connection:
             start_sec REAL NOT NULL,
             end_sec REAL NOT NULL,
             peak_score REAL NOT NULL,
+            peak_volume REAL NOT NULL DEFAULT 0,
             peak_likely_score REAL,
             flac_path TEXT NOT NULL,
             deleted_at TEXT,
@@ -307,6 +309,7 @@ def connect_db() -> sqlite3.Connection:
     ensure_column(conn, "detections", "top_likely_score", "REAL")
     ensure_column(conn, "flac_runs", "channel_index", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "flac_runs", "label_dir", "TEXT")
+    ensure_column(conn, "flac_runs", "peak_volume", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "flac_runs", "peak_likely_score", "REAL")
     ensure_column(conn, "flac_runs", "deleted_at", "TEXT")
     backfill_flac_run_columns(conn)
@@ -562,6 +565,7 @@ def build_runs(detections: List[Detection]) -> List[LabelRun]:
         end_frame=detections[0].end_frame,
         label=detections[0].label,
         peak_score=detections[0].score,
+        peak_volume=detections[0].window_volume,
         peak_likely_score=detections[0].likely_score,
     )
 
@@ -571,6 +575,7 @@ def build_runs(detections: List[Detection]) -> List[LabelRun]:
         if same_label and overlaps:
             current.end_frame = max(current.end_frame, detection.end_frame)
             current.peak_score = max(current.peak_score, detection.score)
+            current.peak_volume = max(current.peak_volume, detection.window_volume)
             if detection.likely_score is not None:
                 if current.peak_likely_score is None:
                     current.peak_likely_score = detection.likely_score
@@ -588,6 +593,7 @@ def build_runs(detections: List[Detection]) -> List[LabelRun]:
             end_frame=detection.end_frame,
             label=detection.label,
             peak_score=detection.score,
+            peak_volume=detection.window_volume,
             peak_likely_score=detection.likely_score,
         )
 
@@ -745,8 +751,8 @@ def process_audio(
     conn.executemany(
         """
         INSERT INTO flac_runs (
-            source_path, channel_index, run_index, label, label_dir, start_frame, end_frame, start_sec, end_sec, peak_score, peak_likely_score, flac_path, deleted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            source_path, channel_index, run_index, label, label_dir, start_frame, end_frame, start_sec, end_sec, peak_score, peak_volume, peak_likely_score, flac_path, deleted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
         """,
         [
             (
@@ -760,6 +766,7 @@ def process_audio(
                 run.start_frame / sample_rate,
                 run.end_frame / sample_rate,
                 run.peak_score,
+                run.peak_volume,
                 run.peak_likely_score,
                 flac_path.relative_to(INPUT_ROOT.parent).as_posix(),
             )
