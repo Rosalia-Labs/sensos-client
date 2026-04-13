@@ -467,10 +467,12 @@ config-i2c-sensors --disable
 Behavior:
 
 - writes `/sensos/etc/i2c-sensors.conf`
+- automatically applies Raspberry Pi host I2C enablement when needed
 - ensures `/sensos/data/microenv` exists with shared permissions
 - installs optional I2C/GPIO Python dependencies on demand before enabling the reader service
 - enables the reader service for future boot by default
 - leaves the reader service stopped unless `--start-service` is supplied
+- reports when a reboot is still required before `/dev/i2c-1` appears
 - warns if time sync or location is missing
 
 ### `config-i2c-uploads`

@@ -16,6 +16,7 @@ CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${OVERLAY_ROOT}}"
 script_name=$(basename "$0")
 PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
 SENSOS_ADMIN_HELPER_LIB="${OVERLAY_ROOT}/libexec/ensure-sensos-admin.sh"
+ENSURE_I2C_HOST_SCRIPT="${OVERLAY_ROOT}/libexec/ensure-i2c-host.sh"
 
 [[ -f "${PARSE_SWITCHES_LIB}" ]] || {
     echo "Missing parse-switches library at ${PARSE_SWITCHES_LIB}"
@@ -29,6 +30,11 @@ source "${PARSE_SWITCHES_LIB}"
 source "${SENSOS_ADMIN_HELPER_LIB}"
 
 ensure_sensos_admin_user "${SCRIPT_FILE}" "$@"
+
+[[ -x "${ENSURE_I2C_HOST_SCRIPT}" ]] || {
+    echo "Missing I2C host helper at ${ENSURE_I2C_HOST_SCRIPT}" >&2
+    exit 1
+}
 
 warn_clock_and_location() {
     local clock_ok=0
@@ -84,13 +90,16 @@ if [[ "$disable_service" == "true" && ( "$enable_service" == "true" || "$start_s
     exit 1
 fi
 
+echo "Ensuring Linux I2C host state is configured..."
+sudo "${ENSURE_I2C_HOST_SCRIPT}"
+
 if [[ "$start_service" == "true" && ! -e /dev/i2c-1 ]]; then
     echo "Cannot start sensos-read-i2c.service because /dev/i2c-1 is not present."
-    echo "Enable Linux I2C first. Expected host state:"
+    echo "Linux I2C host configuration has been applied automatically. Expected host state:"
     echo "  - /boot/firmware/config.txt contains: dtparam=i2c_arm=on"
     echo "  - /etc/modules contains: i2c-dev"
     echo "  - /dev/i2c-1 exists"
-    echo "On Raspberry Pi OS you can usually do this with: sudo raspi-config nonint do_i2c 0"
+    echo "A reboot may still be required before /dev/i2c-1 appears."
     exit 1
 fi
 
