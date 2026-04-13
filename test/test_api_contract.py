@@ -406,6 +406,7 @@ class ApiContractTests(unittest.TestCase):
                             "end_frame": 144000,
                             "start_sec": 0.0,
                             "end_sec": 3.0,
+                            "window_volume": 0.018,
                             "top_label": "Northern Cardinal (Cardinalis cardinalis)",
                             "top_score": 0.91,
                             "top_likely_score": 0.75,
@@ -436,6 +437,7 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(payload["source_count"], 1)
         self.assertEqual(payload["first_source_path"], "audio_recordings/compressed/2026/04/07/a.flac")
         self.assertEqual(payload["processed_files"][0]["detections"][0]["window_index"], 0)
+        self.assertEqual(payload["processed_files"][0]["detections"][0]["window_volume"], 0.018)
         self.assertEqual(payload["processed_files"][0]["flac_runs"][0]["flac_path"], "audio_recordings/processed/2026/04/07/Northern_Cardinal/clip.flac")
 
     def test_birdnet_upload_response_requires_receipt_and_full_acceptance(self):
@@ -474,6 +476,7 @@ class ApiContractTests(unittest.TestCase):
                         "end_frame": 144000,
                         "start_sec": 0.0,
                         "end_sec": 3.0,
+                        "window_volume": 0.018,
                         "top_label": "Northern Cardinal (Cardinalis cardinalis)",
                         "top_score": 0.91,
                         "top_likely_score": 0.75,
@@ -525,6 +528,7 @@ class ApiContractTests(unittest.TestCase):
                         "end_frame": 144000,
                         "start_sec": 0.0,
                         "end_sec": 3.0,
+                        "window_volume": 0.018,
                         "top_label": "Northern Cardinal (Cardinalis cardinalis)",
                         "top_score": 0.91,
                         "top_likely_score": 0.75,

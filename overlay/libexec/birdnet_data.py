@@ -75,6 +75,7 @@ def ensure_base_schema(conn: sqlite3.Connection) -> None:
             end_frame INTEGER NOT NULL,
             start_sec REAL NOT NULL,
             end_sec REAL NOT NULL,
+            window_volume REAL NOT NULL DEFAULT 0,
             top_label TEXT NOT NULL,
             top_score REAL NOT NULL,
             top_likely_score REAL,
@@ -104,6 +105,7 @@ def ensure_base_schema(conn: sqlite3.Connection) -> None:
         """
     )
     ensure_column(conn, "detections", "channel_index", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "detections", "window_volume", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "detections", "top_likely_score", "REAL")
     ensure_column(conn, "flac_runs", "channel_index", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "flac_runs", "label_dir", "TEXT")
@@ -362,7 +364,7 @@ def fetch_detections_for_sources(
     placeholders = ",".join("?" for _ in source_paths)
     rows = conn.execute(
         f"""
-        SELECT source_path, channel_index, window_index, start_frame, end_frame, start_sec, end_sec, top_label, top_score, top_likely_score
+        SELECT source_path, channel_index, window_index, start_frame, end_frame, start_sec, end_sec, window_volume, top_label, top_score, top_likely_score
         FROM detections
         WHERE source_path IN ({placeholders})
         ORDER BY source_path, channel_index, window_index

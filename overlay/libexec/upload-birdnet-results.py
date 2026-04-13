@@ -213,6 +213,7 @@ def source_rows_to_payload(conn, rows) -> list[dict]:
                         "end_frame": int(det["end_frame"]),
                         "start_sec": float(det["start_sec"]),
                         "end_sec": float(det["end_sec"]),
+                        "window_volume": float(det["window_volume"]),
                         "top_label": str(det["top_label"]),
                         "top_score": float(det["top_score"]),
                         "top_likely_score": (

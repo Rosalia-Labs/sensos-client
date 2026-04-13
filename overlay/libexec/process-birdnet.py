@@ -136,6 +136,7 @@ class Detection:
     window_index: int
     start_frame: int
     end_frame: int
+    window_volume: float
     label: str
     score: float
     likely_score: float | None
@@ -183,6 +184,14 @@ def scale_by_max_value(audio: np.ndarray) -> np.ndarray:
         return np.zeros_like(audio, dtype=np.float32)
     scale = max_val * (32768.0 / 32767.0)
     return (audio / scale).astype(np.float32)
+
+
+def normalized_window_volume(audio: np.ndarray) -> float:
+    if audio.size == 0:
+        return 0.0
+    normalized = audio.astype(np.float64) / float(np.iinfo(np.int32).max)
+    rms = float(np.sqrt(np.mean(np.square(normalized), dtype=np.float64)))
+    return min(max(rms, 0.0), 1.0)
 
 
 def invoke_birdnet_top_label(
@@ -264,6 +273,7 @@ def connect_db() -> sqlite3.Connection:
             end_frame INTEGER NOT NULL,
             start_sec REAL NOT NULL,
             end_sec REAL NOT NULL,
+            window_volume REAL NOT NULL DEFAULT 0,
             top_label TEXT NOT NULL,
             top_score REAL NOT NULL,
             top_likely_score REAL,
@@ -293,6 +303,7 @@ def connect_db() -> sqlite3.Connection:
         """
     )
     ensure_column(conn, "detections", "channel_index", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "detections", "window_volume", "REAL NOT NULL DEFAULT 0")
     ensure_column(conn, "detections", "top_likely_score", "REAL")
     ensure_column(conn, "flac_runs", "channel_index", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "flac_runs", "label_dir", "TEXT")
@@ -489,6 +500,7 @@ def collect_detections(
     if frames < WINDOW_FRAMES:
         padded = np.zeros(WINDOW_FRAMES, dtype=np.float32)
         padded[:frames] = audio_mono[:frames]
+        window_volume = normalized_window_volume(audio_mono[:frames])
         label, score, likely_score = invoke_birdnet_top_label(
             scale_by_max_value(padded),
             model,
@@ -497,13 +509,25 @@ def collect_detections(
             longitude,
             observed_on,
         )
-        return [Detection(channel_index, 0, 0, frames, label, score, likely_score)]
+        return [
+            Detection(
+                channel_index,
+                0,
+                0,
+                frames,
+                window_volume,
+                label,
+                score,
+                likely_score,
+            )
+        ]
 
     window_index = 0
     for start in range(0, frames - WINDOW_FRAMES + 1, STRIDE_FRAMES):
         end = start + WINDOW_FRAMES
+        window_audio = audio_mono[start:end]
         label, score, likely_score = invoke_birdnet_top_label(
-            scale_by_max_value(audio_mono[start:end]),
+            scale_by_max_value(window_audio),
             model,
             meta_model,
             latitude,
@@ -511,7 +535,16 @@ def collect_detections(
             observed_on,
         )
         detections.append(
-            Detection(channel_index, window_index, start, end, label, score, likely_score)
+            Detection(
+                channel_index,
+                window_index,
+                start,
+                end,
+                normalized_window_volume(window_audio),
+                label,
+                score,
+                likely_score,
+            )
         )
         window_index += 1
     return detections
@@ -689,8 +722,8 @@ def process_audio(
     conn.executemany(
         """
         INSERT INTO detections (
-            source_path, channel_index, window_index, start_frame, end_frame, start_sec, end_sec, top_label, top_score, top_likely_score
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            source_path, channel_index, window_index, start_frame, end_frame, start_sec, end_sec, window_volume, top_label, top_score, top_likely_score
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
@@ -701,6 +734,7 @@ def process_audio(
                 d.end_frame,
                 d.start_frame / sample_rate,
                 d.end_frame / sample_rate,
+                d.window_volume,
                 d.label,
                 d.score,
                 d.likely_score,
