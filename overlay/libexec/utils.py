@@ -221,13 +221,37 @@ def load_defaults(*sections, path=DEFAULTS_CONF):
     return defaults
 
 
+def _parse_bool_default(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    raise ValueError(f"Invalid boolean default: {value!r}")
+
+
+def _coerce_argparse_default(value, kwargs):
+    action = kwargs.get("action")
+    if action in (argparse.BooleanOptionalAction, "store_true", "store_false"):
+        return _parse_bool_default(value)
+
+    value_type = kwargs.get("type")
+    if value_type is not None and value is not None:
+        return value_type(value)
+
+    return value
+
+
 def parse_args_with_defaults(arg_defs, default_sections):
     defaults = load_defaults(*default_sections)
     parser = argparse.ArgumentParser()
     for args, kwargs in arg_defs:
         default_key = kwargs.get("dest", args[0].lstrip("-").replace("-", "_"))
         if default_key in defaults:
-            kwargs["default"] = defaults[default_key]
+            kwargs["default"] = _coerce_argparse_default(defaults[default_key], kwargs)
         parser.add_argument(*args, **kwargs)
     return parser.parse_args()
 

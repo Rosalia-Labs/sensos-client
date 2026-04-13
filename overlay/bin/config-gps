@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Rosalia Labs LLC
 
+import argparse
 import importlib.util
 import os
 import subprocess
@@ -45,6 +46,10 @@ def install_optional_python_dependencies() -> None:
         raise SystemExit(result.returncode)
 
 
+def bool_text(value: bool) -> str:
+    return "true" if value else "false"
+
+
 def main() -> int:
     ensure_sensos_admin()
     arg_defs = [
@@ -53,12 +58,12 @@ def main() -> int:
         (["--i2c-addr"], {"dest": "i2c_addr", "default": "0x10", "help": "I2C GPS address."}),
         (["--i2c-bus"], {"dest": "i2c_bus", "type": int, "default": 1, "help": "I2C bus number."}),
         (["--interval"], {"dest": "interval", "type": int, "default": 60, "help": "Polling interval in seconds."}),
-        (["--sync-time"], {"dest": "sync_time", "default": "true", "help": "Update system time from GPS if needed."}),
-        (["--update-location"], {"dest": "update_location", "default": "true", "help": "Update location.conf from GPS if needed."}),
+        (["--sync-time"], {"dest": "sync_time", "action": argparse.BooleanOptionalAction, "default": True, "help": "Update system time from GPS if needed."}),
+        (["--update-location"], {"dest": "update_location", "action": argparse.BooleanOptionalAction, "default": True, "help": "Update location.conf from GPS if needed."}),
         (["--location-drift-m"], {"dest": "location_drift_m", "type": float, "default": 50.0, "help": "Minimum movement before location.conf is updated."}),
         (["--time-conflict-sec"], {"dest": "time_conflict_sec", "type": float, "default": 300.0, "help": "If GPS and an already synchronized system clock differ by at least this many seconds, report a conflict instead of correcting time."}),
-        (["--enable-service"], {"dest": "enable_service", "default": "true", "help": "Enable the systemd service."}),
-        (["--start-service"], {"dest": "start_service", "default": "false", "help": "Start the systemd service now."}),
+        (["--enable-service"], {"dest": "enable_service", "action": argparse.BooleanOptionalAction, "default": True, "help": "Enable the systemd service."}),
+        (["--start-service"], {"dest": "start_service", "action": argparse.BooleanOptionalAction, "default": False, "help": "Start the systemd service now."}),
     ]
     args = parse_args_with_defaults(arg_defs, ["global", "config_gps"])
 
@@ -82,8 +87,8 @@ def main() -> int:
         f"GPS_I2C_ADDR={args.i2c_addr}\n"
         f"GPS_I2C_BUS={args.i2c_bus}\n"
         f"GPS_INTERVAL_SEC={args.interval}\n"
-        f"GPS_SYNC_TIME={args.sync_time}\n"
-        f"GPS_UPDATE_LOCATION={args.update_location}\n"
+        f"GPS_SYNC_TIME={bool_text(args.sync_time)}\n"
+        f"GPS_UPDATE_LOCATION={bool_text(args.update_location)}\n"
         f"GPS_LOCATION_DRIFT_M={args.location_drift_m}\n"
         f"GPS_TIME_CONFLICT_SEC={args.time_conflict_sec}\n"
     )
@@ -93,9 +98,9 @@ def main() -> int:
     install_optional_python_dependencies()
 
     subprocess.run(["sudo", "systemctl", "daemon-reload"], check=False)
-    if str(args.enable_service).lower() in {"1", "true", "yes", "on"}:
+    if args.enable_service:
         systemctl("enable", SERVICE_NAME)
-    if str(args.start_service).lower() in {"1", "true", "yes", "on"}:
+    if args.start_service:
         systemctl("start", SERVICE_NAME)
     return 0
 
