@@ -124,6 +124,9 @@ print_online_notes() {
 
     if [[ "${online_now}" == "no" ]]; then
         echo "- You are offline now, so anything that needs package downloads or server enrollment may need to wait."
+        echo "- If you are in the field, you may still be able to borrow connectivity from another device."
+        echo "- Common options are: phone hotspot plus `config-wifi`, or sharing internet from a laptop over Ethernet to the Pi."
+        echo "- If you can temporarily restore connectivity that way, do server enrollment and any package/model installs before going fully offline again."
     fi
 }
 
@@ -148,11 +151,7 @@ print_sequence() {
             echo "2. `config-network` later, once the device can reach the setup server"
         fi
     else
-        if [[ "${online_now}" == "yes" ]]; then
-            echo "2. `config-network --offline` once that mode exists"
-        else
-            echo "2. `config-network --offline` once that mode exists"
-        fi
+        echo "2. Skip server enrollment for now and continue with local box configuration."
     fi
 
     echo "3. `config-location`"
