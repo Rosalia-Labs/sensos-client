@@ -1,0 +1,258 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_NAME="$(basename "$0")"
+
+print_usage() {
+    cat <<EOF
+Usage: ${SCRIPT_NAME}
+
+Interactive setup guide for SensOS client bring-up.
+
+This script does not configure the machine. It only asks a few questions and
+prints recommended next steps, with special attention to:
+
+- steps that should be done while internet/server access is available
+- optional feature setup for I2C and BirdNET
+- avoiding transient lab data from generator services
+EOF
+}
+
+prompt_choice() {
+    local prompt="$1"
+    shift
+    local options=("$@")
+    local answer=""
+    local option=""
+
+    while true; do
+        echo
+        echo "${prompt}"
+        for option in "${options[@]}"; do
+            echo "  - ${option}"
+        done
+        printf '> '
+        read -r answer
+        answer="$(printf '%s' "${answer}" | tr '[:upper:]' '[:lower:]')"
+
+        for option in "${options[@]}"; do
+            if [[ "${answer}" == "${option}" ]]; then
+                printf '%s\n' "${answer}"
+                return 0
+            fi
+        done
+
+        echo "Please answer with one of: ${options[*]}"
+    done
+}
+
+prompt_yes_no() {
+    local prompt="$1"
+    local answer=""
+
+    while true; do
+        echo
+        printf '%s [y/n]\n> ' "${prompt}"
+        read -r answer
+        answer="$(printf '%s' "${answer}" | tr '[:upper:]' '[:lower:]')"
+        case "${answer}" in
+            y|yes)
+                printf 'yes\n'
+                return 0
+                ;;
+            n|no)
+                printf 'no\n'
+                return 0
+                ;;
+        esac
+        echo "Please answer y or n."
+    done
+}
+
+print_intro() {
+    cat <<'EOF'
+SensOS Start Here
+
+This guide prints a recommended bring-up sequence. It does not run any
+configuration commands.
+
+The main split is:
+
+- box configuration: time, network mode, location, storage
+- data-generator configuration: audio and I2C
+
+Generator setup is often better delayed until the final deployment stage so you
+do not create transient lab data or enable services too early.
+EOF
+}
+
+print_common_steps() {
+    cat <<'EOF'
+
+Common early steps
+
+1. Run `./sensos-client/install` on the target client first.
+2. Run `config-time`.
+3. Decide whether this device is standalone or server-connected.
+4. Decide which optional features you actually need before enabling them.
+EOF
+}
+
+print_online_notes() {
+    local network_mode="$1"
+    local online_now="$2"
+    local use_i2c="$3"
+    local use_birdnet="$4"
+
+    echo
+    echo "Online planning"
+
+    if [[ "${network_mode}" == "server-connected" ]]; then
+        echo "- `config-network` should be done while the device can reach the setup server."
+    else
+        echo "- Standalone mode does not need server enrollment, but you may still want internet now for optional package/model downloads."
+    fi
+
+    if [[ "${use_i2c}" == "yes" ]]; then
+        echo "- `config-i2c-sensors` may install APT and pip dependencies. Do it while internet is available, or make sure those dependencies were prepared earlier."
+    fi
+
+    if [[ "${use_birdnet}" == "yes" ]]; then
+        echo "- `config-birdnet` may install Python packages, and `config-birdnet --download-models` also fetches model files."
+    fi
+
+    if [[ "${online_now}" == "no" ]]; then
+        echo "- You are offline now, so anything that needs package downloads or server enrollment may need to wait."
+    fi
+}
+
+print_sequence() {
+    local network_mode="$1"
+    local online_now="$2"
+    local use_i2c="$3"
+    local use_birdnet="$4"
+    local use_arecord="$5"
+    local stage_generators_in_lab="$6"
+
+    echo
+    echo "Recommended sequence"
+    echo
+    echo "Base box setup"
+    echo "1. `config-time`"
+
+    if [[ "${network_mode}" == "server-connected" ]]; then
+        if [[ "${online_now}" == "yes" ]]; then
+            echo "2. `config-network`"
+        else
+            echo "2. `config-network` later, once the device can reach the setup server"
+        fi
+    else
+        if [[ "${online_now}" == "yes" ]]; then
+            echo "2. `config-network --offline` once that mode exists"
+        else
+            echo "2. `config-network --offline` once that mode exists"
+        fi
+    fi
+
+    echo "3. `config-location`"
+    echo "4. `config-storage`"
+
+    if [[ "${use_arecord}" == "yes" || "${use_i2c}" == "yes" || "${use_birdnet}" == "yes" ]]; then
+        echo
+        echo "Optional feature setup"
+    fi
+
+    if [[ "${use_arecord}" == "yes" ]]; then
+        if [[ "${stage_generators_in_lab}" == "yes" ]]; then
+            echo "- Delay `config-arecord` until the final deployment stage, or keep the recording services disabled/stopped until you are ready to collect real data."
+        else
+            echo "- Run `config-arecord` when you are ready to configure the real recording device."
+        fi
+    fi
+
+    if [[ "${use_i2c}" == "yes" ]]; then
+        if [[ "${online_now}" == "yes" && "${stage_generators_in_lab}" == "yes" ]]; then
+            echo "- If you need internet-dependent I2C dependency install, do `config-i2c-sensors` while online, but avoid leaving the reader service enabled on a lab box if you do not want transient lab data."
+        elif [[ "${online_now}" == "yes" ]]; then
+            echo "- Run `config-i2c-sensors` while online if dependencies are not already prepared."
+        else
+            echo "- `config-i2c-sensors` may need internet for dependencies, so defer it or pre-stage dependencies before field deployment."
+        fi
+    fi
+
+    if [[ "${use_birdnet}" == "yes" ]]; then
+        if [[ "${use_arecord}" == "yes" ]]; then
+            echo "- `config-birdnet` depends on the audio pipeline being configured meaningfully; BirdNET itself does not create data without audio input."
+        fi
+        if [[ "${online_now}" == "yes" ]]; then
+            echo "- Run `config-birdnet` while online if you need Python package install or model download."
+        else
+            echo "- Defer `config-birdnet` until internet is available, unless dependencies and models were staged earlier."
+        fi
+    fi
+}
+
+print_lab_warning() {
+    local use_i2c="$1"
+    local use_arecord="$2"
+    local use_birdnet="$3"
+    local stage_generators_in_lab="$4"
+
+    [[ "${stage_generators_in_lab}" == "yes" ]] || return 0
+
+    echo
+    echo "Lab staging warning"
+
+    if [[ "${use_i2c}" == "yes" ]]; then
+        echo "- I2C can begin generating real sensor data as soon as the reader service is enabled and started on deployment hardware."
+    fi
+
+    if [[ "${use_arecord}" == "yes" ]]; then
+        echo "- Audio capture can create transient lab recordings if the recording services are enabled too early."
+    fi
+
+    if [[ "${use_birdnet}" == "yes" ]]; then
+        echo "- BirdNET does not generate on its own; it follows the audio pipeline."
+    fi
+
+    echo "- Safer pattern: do box configuration first, stage optional dependencies while online, and only enable generator services when the device is on final hardware and ready to collect real data."
+}
+
+main() {
+    local network_mode=""
+    local online_now=""
+    local use_i2c=""
+    local use_birdnet=""
+    local use_arecord=""
+    local stage_generators_in_lab=""
+
+    case "${1:-}" in
+        -h|--help|help)
+            print_usage
+            exit 0
+            ;;
+    esac
+
+    print_intro
+    print_common_steps
+
+    network_mode="$(prompt_choice "Is this device standalone or server-connected?" "standalone" "server-connected")"
+    online_now="$(prompt_yes_no "Does the device currently have internet or setup-server reachability?")"
+    use_arecord="$(prompt_yes_no "Will this device use audio capture (`config-arecord`)?")"
+    use_i2c="$(prompt_yes_no "Will this device use I2C sensors (`config-i2c-sensors`)?")"
+    use_birdnet="$(prompt_yes_no "Will this device use BirdNET (`config-birdnet`)?")"
+    stage_generators_in_lab="$(prompt_yes_no "Are you doing feature setup in the lab before final deployment?")"
+
+    print_online_notes "${network_mode}" "${online_now}" "${use_i2c}" "${use_birdnet}"
+    print_sequence "${network_mode}" "${online_now}" "${use_i2c}" "${use_birdnet}" "${use_arecord}" "${stage_generators_in_lab}"
+    print_lab_warning "${use_i2c}" "${use_arecord}" "${use_birdnet}" "${stage_generators_in_lab}"
+
+    echo
+    echo "Practical rule"
+    echo "- Do network enrollment and any internet-dependent dependency/model installs while online."
+    echo "- Delay enabling data generators until the device is on the intended hardware and ready to collect real data."
+    echo
+}
+
+main "$@"
