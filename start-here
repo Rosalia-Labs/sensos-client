@@ -218,6 +218,30 @@ print_lab_warning() {
     echo "- Safer pattern: do box configuration first, stage optional dependencies while online, and only enable generator services when the device is on final hardware and ready to collect real data."
 }
 
+print_offline_collection_notes() {
+    local use_i2c="$1"
+    local use_arecord="$2"
+
+    echo
+    echo "Offline collection"
+
+    if [[ "${use_arecord}" == "yes" && "${use_i2c}" == "yes" ]]; then
+        echo "- A truly offline box can still collect data locally as long as `config-arecord` and `config-i2c-sensors` have been done for the generators you want to use."
+    elif [[ "${use_arecord}" == "yes" ]]; then
+        echo "- A truly offline box can still collect audio locally as long as `config-arecord` has been done and the recording pipeline is running."
+    elif [[ "${use_i2c}" == "yes" ]]; then
+        echo "- A truly offline box can still collect I2C data locally after `config-i2c-sensors` has been done."
+    else
+        echo "- A truly offline box can still operate locally, but there is no local data collection unless you enable a generator such as audio or I2C."
+    fi
+
+    if [[ "${use_i2c}" == "yes" ]]; then
+        echo "- I2C setup may still require internet at configuration time if Python or system dependencies need to be installed."
+    fi
+
+    echo "- In that mode, data stays on the device until you later copy it off or restore connectivity for uploads."
+}
+
 main() {
     local network_mode=""
     local online_now=""
@@ -246,6 +270,7 @@ main() {
     print_online_notes "${network_mode}" "${online_now}" "${use_i2c}" "${use_birdnet}"
     print_sequence "${network_mode}" "${online_now}" "${use_i2c}" "${use_birdnet}" "${use_arecord}" "${stage_generators_in_lab}"
     print_lab_warning "${use_i2c}" "${use_arecord}" "${use_birdnet}" "${stage_generators_in_lab}"
+    print_offline_collection_notes "${use_i2c}" "${use_arecord}"
 
     echo
     echo "Practical rule"
