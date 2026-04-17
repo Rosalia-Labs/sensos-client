@@ -125,6 +125,8 @@ main() {
 
         if mountpoint -q "${DATA_MOUNT}"; then
             mount_state="mounted"
+        elif data_ops_uses_root_filesystem; then
+            mount_state="rootfs"
         else
             mount_state="unmounted"
         fi
@@ -148,6 +150,7 @@ main() {
     fi
 
     data_ops_require_cmd mountpoint
+    data_ops_require_cmd findmnt
     data_ops_require_cmd sqlite3
     data_ops_require_cmd sync
     data_ops_require_cmd systemctl
@@ -190,7 +193,7 @@ main() {
     fi
 
     echo "Exiting archive mode for ${DATA_MOUNT}..."
-    if ! mountpoint -q "${DATA_MOUNT}"; then
+    if ! data_ops_storage_is_available; then
         if ! data_ops_try_mount_data; then
             echo "ERROR: ${DATA_MOUNT} is not mounted and could not be remounted automatically." >&2
             echo "Run config-storage or mount ${DATA_MOUNT} manually, then retry archive-mode --exit." >&2

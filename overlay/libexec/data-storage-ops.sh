@@ -134,6 +134,25 @@ data_ops_mount_source_for() {
     findmnt -n -o SOURCE --target "${target_path}" 2>/dev/null || true
 }
 
+data_ops_root_mount_source() {
+    findmnt -n -o SOURCE --target / 2>/dev/null || true
+}
+
+data_ops_uses_root_filesystem() {
+    local data_source root_source
+
+    [[ -d "${DATA_MOUNT}" ]] || return 1
+
+    data_source="$(data_ops_mount_source_for "${DATA_MOUNT}")"
+    root_source="$(data_ops_root_mount_source)"
+
+    [[ -n "${data_source}" && -n "${root_source}" && "${data_source}" == "${root_source}" ]]
+}
+
+data_ops_storage_is_available() {
+    mountpoint -q "${DATA_MOUNT}" || data_ops_uses_root_filesystem
+}
+
 data_ops_backing_device_for_source() {
     local source_path="$1"
     local pkname
@@ -174,7 +193,7 @@ data_ops_sync_storage() {
 }
 
 data_ops_try_mount_data() {
-    if mountpoint -q "${DATA_MOUNT}"; then
+    if data_ops_storage_is_available; then
         return 0
     fi
 

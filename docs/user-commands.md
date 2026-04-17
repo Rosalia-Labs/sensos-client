@@ -296,10 +296,10 @@ archive-mode --exit --clear-data
 
 Behavior:
 
-- `--status` reports whether archive mode is active, whether `/sensos/data` is mounted, and whether the main data writers are active
+- `--status` reports whether archive mode is active, whether `/sensos/data` is on a separate mount or on the root filesystem, and whether the main data writers are active
 - `--enter` stops the main `/sensos/data` writers, checkpoints SQLite databases, and syncs storage
 - entering archive mode writes a state marker so exit/clear operations are tied to a real prepared archive window
-- `--exit` remounts `/sensos/data` if needed and restarts the stopped services
+- `--exit` remounts `/sensos/data` if needed when it lives on separate storage, or resumes directly when `/sensos/data` is on the root filesystem
 - `--exit --clear-data` clears `/sensos/data` in place before restarting services, which is useful after copying an entire epoch off-device
 - use it for both copy-off and media-swap workflows
 - after `--enter`, either copy data off the device or swap media, then use `--exit`
