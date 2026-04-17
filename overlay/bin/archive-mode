@@ -51,13 +51,19 @@ EOF
 }
 
 write_state_marker() {
-    local active_units_serialized="${1:-}"
+    local unit_name
+
     sudo install -d -m 2775 "${STATE_DIR}"
     sudo sh -c "cat >'${STATE_FILE}'" <<EOF
 ARCHIVE_MODE_ACTIVE=1
 ARCHIVE_MODE_ENTERED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-ARCHIVE_MODE_ACTIVE_UNITS=${active_units_serialized}
+ARCHIVE_MODE_FORMAT=2
 EOF
+
+    for unit_name in "$@"; do
+        sudo sh -c 'printf "%s\n" "$1" >>"$2"' -- \
+            "ARCHIVE_MODE_ACTIVE_UNIT=${unit_name}" "${STATE_FILE}"
+    done
 }
 
 clear_state_marker() {
@@ -72,11 +78,43 @@ read_state_marker() {
     sudo cat "${STATE_FILE}"
 }
 
+load_state_marker() {
+    local line legacy_active_units
+    local legacy_units_pattern='^[-[:alnum:]@%_./:+=,\\ ]+$'
+    local -n output_units_ref=$1
+
+    output_units_ref=()
+    legacy_active_units=""
+
+    while IFS= read -r line; do
+        case "${line}" in
+            ARCHIVE_MODE_ACTIVE_UNIT=*)
+                output_units_ref+=("${line#ARCHIVE_MODE_ACTIVE_UNIT=}")
+                ;;
+            ARCHIVE_MODE_ACTIVE_UNITS=*)
+                legacy_active_units="${line#ARCHIVE_MODE_ACTIVE_UNITS=}"
+                ;;
+        esac
+    done < <(read_state_marker)
+
+    if [[ ${#output_units_ref[@]} -gt 0 || -z "${legacy_active_units}" ]]; then
+        return 0
+    fi
+
+    if [[ ! "${legacy_active_units}" =~ ${legacy_units_pattern} ]]; then
+        echo "ERROR: invalid archive mode state in ${STATE_FILE}" >&2
+        return 1
+    fi
+
+    # Legacy state files stored a shell-escaped flat list on one line.
+    # Restrict the character set before using eval to recover the array.
+    eval "output_units_ref=( ${legacy_active_units} )"
+}
+
 main() {
     local enter exit_mode clear_data status
     local archive_state mount_state writers_state
     local -a active_units=()
-    local active_units_serialized=""
 
     enter="false"
     exit_mode="false"
@@ -172,15 +210,10 @@ main() {
             active_units+=("${unit_name}")
         done < <(data_ops_list_active_units)
 
-        if [[ ${#active_units[@]} -gt 0 ]]; then
-            printf -v active_units_serialized '%q ' "${active_units[@]}"
-            active_units_serialized="${active_units_serialized% }"
-        fi
-
         data_ops_stop_data_units
         data_ops_checkpoint_sqlite_dbs
         data_ops_sync_storage
-        write_state_marker "${active_units_serialized}"
+        write_state_marker "${active_units[@]}"
         echo "Archive mode active."
         echo "Data under ${DATA_MOUNT} is now quiesced and ready for copy or media swap."
         return 0
@@ -211,12 +244,10 @@ main() {
     fi
 
     active_units=()
-    eval "$(read_state_marker)"
+    load_state_marker active_units
 
     data_ops_sync_storage
-    if [[ -n "${ARCHIVE_MODE_ACTIVE_UNITS:-}" ]]; then
-        # shellcheck disable=SC2206
-        active_units=( ${ARCHIVE_MODE_ACTIVE_UNITS} )
+    if [[ ${#active_units[@]} -gt 0 ]]; then
         data_ops_start_selected_units "${active_units[@]}"
     fi
     clear_state_marker
