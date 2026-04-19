@@ -46,6 +46,17 @@ OPTIONAL_AUDIO_UNITS=(
     sensos-thin-data.service
 )
 
+RESTART_SAFE_SENSOS_UNITS=(
+    sensos-arecord.service
+    sensos-compress-audio.service
+    sensos-thin-data.service
+    sensos-birdnet.service
+    sensos-upload-birdnet.service
+    sensos-read-i2c.service
+    sensos-upload-i2c.service
+    sensos-gps.service
+)
+
 log() {
     printf '[setup/07-services] %s\n' "$*"
 }
@@ -151,6 +162,39 @@ reconcile_optional_audio_units() {
     done
 }
 
+restart_active_sensos_unit_if_present() {
+    local unit_name="$1"
+    local enabled_state="unknown"
+
+    if ! systemctl list-unit-files --type=service --type=timer 2>/dev/null | awk '{print $1}' | grep -Fxq "${unit_name}"; then
+        log "host unit not present; skipped ${unit_name}"
+        return 0
+    fi
+
+    enabled_state="$(systemctl is-enabled "${unit_name}" 2>/dev/null || printf 'unknown')"
+
+    if [[ "${enabled_state}" != "enabled" ]]; then
+        log "left non-enabled SensOS unit unchanged: ${unit_name} (enabled=${enabled_state})"
+        return 0
+    fi
+
+    if systemctl is-active --quiet "${unit_name}"; then
+        systemctl restart "${unit_name}"
+        log "restarted active SensOS unit ${unit_name}"
+    else
+        log "left enabled but inactive SensOS unit unchanged: ${unit_name}"
+    fi
+}
+
+reconcile_restart_safe_sensos_units() {
+    local unit_name
+
+    log "restarting active restart-safe SensOS worker units"
+    for unit_name in "${RESTART_SAFE_SENSOS_UNITS[@]}"; do
+        restart_active_sensos_unit_if_present "${unit_name}"
+    done
+}
+
 main() {
     local unit_name
 
@@ -169,6 +213,7 @@ main() {
             describe_host_unit_state "${unit_name}"
         done
         reconcile_optional_audio_units
+        reconcile_restart_safe_sensos_units
     else
         log "fresh install detected; reconciling optional audio unit state"
         reconcile_optional_audio_units

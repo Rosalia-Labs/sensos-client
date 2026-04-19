@@ -357,7 +357,7 @@ Behavior:
 - writes recording config and can enable/start the recording pipeline services
 - `--enable-service` enables `sensos-arecord.service`, `sensos-compress-audio.service`, and `sensos-thin-data.service` for future boot
 - `--start-service` is what starts those services immediately; without it, `config-arecord` leaves them stopped at the end
-- later `./install` and `./upgrade` runs preserve or disable those three audio services as a group based on whether `/sensos/etc/arecord.conf` exists; they should not implicitly start recording on their own
+- later `./install` and `./upgrade` runs preserve or disable those three audio services as a group based on whether `/sensos/etc/arecord.conf` exists; they do not implicitly start disabled services, but active restart-safe SensOS worker services are restarted during upgrade so new code takes effect
 
 ### `debug-audio-monitor`
 
