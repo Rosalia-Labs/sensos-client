@@ -13,6 +13,7 @@ import argparse
 import stat
 import pwd
 import grp
+import time
 
 CLIENT_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", "/sensos")
 CLIENT_API_USERNAME = "sensos"
@@ -457,9 +458,25 @@ def compute_api_server_wg_ip(client_wg_ip):
     return f"{parts[0]}.{parts[1]}.0.1"
 
 
+def _truthy_env(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _running_under_systemd() -> bool:
+    return any(os.environ.get(name) for name in ("INVOCATION_ID", "JOURNAL_STREAM"))
+
+
 class Tee:
-    def __init__(self, log_file, mode="a"):
+    def __init__(self, log_file, mode="a", max_bytes=5 * 1024 * 1024, backup_count=5):
         self.terminal = sys.stdout
+        self.log_file = log_file
+        self.max_bytes = max_bytes
+        self.backup_count = backup_count
+        self._line_start = True
+        self._rotate_if_needed()
         flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
         fd = os.open(log_file, flags, 0o664)
         try:
@@ -468,10 +485,42 @@ class Tee:
             pass
         self.log = os.fdopen(fd, mode)
 
+    def _timestamp_prefix(self) -> str:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ ", time.gmtime())
+
+    def _rotate_if_needed(self):
+        try:
+            size = os.path.getsize(self.log_file)
+        except OSError:
+            return
+        if size < self.max_bytes:
+            return
+
+        oldest = f"{self.log_file}.{self.backup_count}"
+        if os.path.exists(oldest):
+            os.remove(oldest)
+        for index in range(self.backup_count - 1, 0, -1):
+            source = f"{self.log_file}.{index}"
+            target = f"{self.log_file}.{index + 1}"
+            if os.path.exists(source):
+                os.replace(source, target)
+        os.replace(self.log_file, f"{self.log_file}.1")
+
+    def _write_log(self, message):
+        if not message:
+            return
+        for chunk in message.splitlines(keepends=True):
+            if self._line_start and chunk not in ("\n", "\r\n"):
+                self.log.write(self._timestamp_prefix())
+            self.log.write(chunk)
+            self._line_start = chunk.endswith("\n")
+        if message and not message.endswith("\n"):
+            self._line_start = False
+
     def write(self, message):
         self.terminal.write(message)
         self.terminal.flush()
-        self.log.write(message)
+        self._write_log(message)
         self.log.flush()
 
     def flush(self):
@@ -485,6 +534,8 @@ def setup_logging(log_filename=None):
         script_name = script_name.split(".")[0]
     if log_filename is None:
         log_filename = f"{script_name}.log"
+    if _running_under_systemd() and not _truthy_env("SENSOS_FORCE_FILE_LOGGING", False):
+        return
     os.makedirs(LOG_DIR, exist_ok=True)
     log_path = os.path.join(LOG_DIR, log_filename)
     sys.stdout = Tee(log_path)
