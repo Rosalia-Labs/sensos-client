@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Rosalia Labs LLC
 
+set -u
+
 SCRIPT_FILE="$(realpath "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_FILE}")" && pwd)"
 OVERLAY_ROOT="${SENSOS_CLIENT_ROOT:-/sensos}"
@@ -81,6 +83,32 @@ mkdir -p "$BASE_DIR/queued" "$BASE_DIR/compressed" "$BASE_DIR/processed"
 sudo chown -R sensos-admin:sensos-data "$BASE_DIR"
 sudo chmod -R 2775 "$BASE_DIR"
 
+ensure_output_dirs() {
+    local day_offset queued_dir
+
+    for day_offset in 0 1; do
+        queued_dir="${BASE_DIR}/queued/$(date -u -d "+${day_offset} day" +%Y/%m/%d)"
+        mkdir -p "${queued_dir}"
+    done
+}
+
+refresh_output_dirs() {
+    while true; do
+        ensure_output_dirs
+        sleep 60
+    done
+}
+
+ensure_output_dirs
+refresh_output_dirs &
+DIR_WATCH_PID=$!
+
+cleanup() {
+    kill "${DIR_WATCH_PID}" 2>/dev/null || true
+}
+
+trap cleanup EXIT INT TERM
+
 echo "Starting continuous recording with the following settings:"
 echo "  DEVICE:   $DEVICE"
 echo "  FORMAT:   $FORMAT"
@@ -90,9 +118,11 @@ echo "  MAX_TIME: $MAX_TIME seconds"
 echo "  OUTPUT:   $OUTPUT_PATTERN"
 echo "Press Ctrl+C to stop."
 
-exec arecord -D "$DEVICE" \
+arecord -D "$DEVICE" \
     -f "$FORMAT" \
     -c "$CHANNELS" \
     -r "$RATE" \
     --max-file-time="$MAX_TIME" \
     --use-strftime "$OUTPUT_PATTERN"
+
+exit $?
