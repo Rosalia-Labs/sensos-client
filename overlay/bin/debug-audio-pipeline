@@ -18,7 +18,7 @@ COMPRESSED_ROOT = DATA_ROOT / "compressed"
 PROCESSED_ROOT = DATA_ROOT / "processed"
 BIRDNET_DB = CLIENT_ROOT / "data" / "birdnet" / "birdnet.db"
 ARECORD_CONF = CLIENT_ROOT / "etc" / "arecord.conf"
-OUTPUT_LINE_LIMIT = 8
+OUTPUT_LINE_LIMIT = 9
 
 
 def read_kv(path: Path) -> dict[str, str]:
@@ -140,26 +140,32 @@ def build_lines() -> list[str]:
     compress_en, compress_ac = systemd_state("sensos-compress-audio.service")
     birdnet_en, birdnet_ac = systemd_state("sensos-birdnet.service")
 
+    def service_summary(active: str, enabled: str) -> str:
+        return f"{active}, {enabled}"
+
     lines = [
-        f"root      {DATA_ROOT}",
+        f"root       {DATA_ROOT}",
         (
-            f"arecord   en={arecord_en:<8} ac={arecord_ac:<8} "
-            f"q={queued['count']} q_new={format_age(queued['newest_age'])} "
-            f"q_old={format_age(queued['oldest_age'])} live={arecord_live_hint(queued['newest_age'])}"
+            f"services   arecord={service_summary(arecord_ac, arecord_en)} | "
+            f"compress={service_summary(compress_ac, compress_en)} | "
+            f"birdnet={service_summary(birdnet_ac, birdnet_en)}"
         ),
         (
-            f"compress  en={compress_en:<8} ac={compress_ac:<8} "
-            f"q={queued['count']} q_old={format_age(queued['oldest_age'])} "
-            f"c={compressed['count']} c_new={format_age(compressed['newest_age'])}"
+            f"queued     files={queued['count']} newest={format_age(queued['newest_age'])} "
+            f"oldest={format_age(queued['oldest_age'])} "
+            f"recording_live={arecord_live_hint(queued['newest_age'])}"
         ),
         (
-            f"birdnet   en={birdnet_en:<8} ac={birdnet_ac:<8} "
-            f"in={compressed['count']} in_new={format_age(compressed['newest_age'])} "
-            f"out={processed['count']} out_new={format_age(processed['newest_age'])}"
+            f"compressed files={compressed['count']} newest={format_age(compressed['newest_age'])} "
+            f"oldest={format_age(compressed['oldest_age'])}"
         ),
         (
-            f"birdnetdb done={birdnet_db['done']} proc={birdnet_db['proc']} "
-            f"err={birdnet_db['err']} up={birdnet_db['up']}"
+            f"processed  files={processed['count']} newest={format_age(processed['newest_age'])} "
+            f"oldest={format_age(processed['oldest_age'])}"
+        ),
+        (
+            f"birdnet db done={birdnet_db['done']} processing={birdnet_db['proc']} "
+            f"errors={birdnet_db['err']} pending_upload={birdnet_db['up']}"
         ),
     ]
     return lines[:OUTPUT_LINE_LIMIT]
