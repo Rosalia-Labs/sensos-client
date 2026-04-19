@@ -79,7 +79,7 @@ probe_gps_hardware() {
         return 0
     fi
 
-    probe_output="$("${python_cmd}" - "${bus_num}" "${addr}" <<'PY' 2>&1
+probe_output="$("${python_cmd}" - "${bus_num}" "${addr}" <<'PY' 2>&1
 import sys
 
 bus_num = int(sys.argv[1])
@@ -165,12 +165,14 @@ lines = [line.strip() for line in nmea.splitlines() if line.strip()]
 last_rmc = None
 last_gga = None
 parsed_count = 0
+parsed_lines = []
 for line in lines:
     try:
         msg = pynmea2.parse(line)
     except Exception:
         continue
     parsed_count += 1
+    parsed_lines.append(line)
     sentence = getattr(msg, "sentence_type", "")
     if sentence == "RMC":
         last_rmc = msg
@@ -202,6 +204,8 @@ print(f"gga_fix_quality={gga_quality or 'unknown'}")
 print(f"latitude={latitude if latitude not in (None, '') else 'unknown'}")
 print(f"longitude={longitude if longitude not in (None, '') else 'unknown'}")
 print(f"sample_nmea={sample or 'none'}")
+for index, line in enumerate(parsed_lines[-3:], start=1):
+    print(f"parsed_nmea_{index}={line[:120]}")
 PY
 )"
     printf '%s\n' "${probe_output}"
@@ -315,6 +319,13 @@ show_recent_logs() {
                 / sudo\[[0-9]+\]: / { next }
                 / pam_unix\(/ { next }
                 / systemd\[1\]: (Starting|Started|Stopping|Stopped) / { next }
+                / systemd\[1\]: .*Deactivated successfully/ { next }
+                /\[network-capture\]/ { next }
+                /sensos-gps starting:/ { line = $0; next }
+                /No valid GPS fix available\./ { line = $0; next }
+                /GPS fix: / { line = $0; next }
+                /GPS time conflict: / { line = $0; next }
+                /GPS service failure: / { line = $0; next }
                 NF { line = $0 }
                 END { print line }
             '
