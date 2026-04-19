@@ -12,6 +12,7 @@ SERVICE_NAME="sensos-gps.service"
 CONFIG_FILE="${CLIENT_ROOT}/etc/gps.conf"
 LOCATION_FILE="${CLIENT_ROOT}/etc/location.conf"
 STATE_FILE="${CLIENT_ROOT}/data/microenv/gps-state.env"
+GPS_PYTHON="${CLIENT_ROOT}/python/venv/bin/python"
 DEFAULT_I2C_BUS="1"
 DEFAULT_I2C_ADDR="0x10"
 
@@ -35,6 +36,14 @@ section() {
 
 have_cmd() {
     command -v "$1" >/dev/null 2>&1
+}
+
+gps_python_cmd() {
+    if [[ -x "${GPS_PYTHON}" ]]; then
+        printf '%s\n' "${GPS_PYTHON}"
+        return 0
+    fi
+    command -v python3
 }
 
 read_kv_value() {
@@ -62,13 +71,15 @@ probe_gps_hardware() {
         return 0
     fi
 
-    if ! have_cmd python3; then
+    local python_cmd
+    python_cmd="$(gps_python_cmd 2>/dev/null || true)"
+    if [[ -z "${python_cmd}" ]]; then
         printf 'hardware_present=unknown\n'
-        printf 'hardware_probe=python3 not available for direct probe\n'
+        printf 'hardware_probe=no python interpreter available for direct probe\n'
         return 0
     fi
 
-    probe_output="$(python3 - "${bus_num}" "${addr}" <<'PY' 2>&1
+    probe_output="$("${python_cmd}" - "${bus_num}" "${addr}" <<'PY' 2>&1
 import sys
 
 bus_num = int(sys.argv[1])
@@ -119,12 +130,14 @@ show_live_probe() {
         return 0
     fi
 
-    if ! have_cmd python3; then
+    local python_cmd
+    python_cmd="$(gps_python_cmd 2>/dev/null || true)"
+    if [[ -z "${python_cmd}" ]]; then
         printf 'live_status=python_missing\n'
         return 0
     fi
 
-    probe_output="$(python3 - "${bus_num}" "${addr}" <<'PY' 2>&1
+    probe_output="$("${python_cmd}" - "${bus_num}" "${addr}" <<'PY' 2>&1
 import sys
 
 bus_num = int(sys.argv[1])
