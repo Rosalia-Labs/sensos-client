@@ -153,11 +153,29 @@ def write_file(filepath, content, mode=0o644, user="root", group=None):
     with tempfile.NamedTemporaryFile("w", delete=False) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
-    privileged_shell(
-        f"mv {shlex.quote(tmp_path)} {shlex.quote(str(filepath))}", silent=True
-    )
-    privileged_shell(f"chmod {oct(mode)[2:]} {shlex.quote(str(filepath))}", silent=True)
-    privileged_shell(f"chown {user}:{group} {shlex.quote(str(filepath))}", silent=True)
+    try:
+        os.replace(tmp_path, filepath)
+    except Exception:
+        privileged_shell(
+            f"mv {shlex.quote(tmp_path)} {shlex.quote(str(filepath))}", silent=True
+        )
+        tmp_path = None
+    else:
+        tmp_path = None
+
+    try:
+        os.chmod(filepath, mode)
+    except Exception:
+        privileged_shell(f"chmod {oct(mode)[2:]} {shlex.quote(str(filepath))}", silent=True)
+
+    try:
+        desired_uid = pwd.getpwnam(user).pw_uid
+        desired_gid = grp.getgrnam(group).gr_gid
+        st = os.stat(filepath)
+        if st.st_uid != desired_uid or st.st_gid != desired_gid:
+            os.chown(filepath, desired_uid, desired_gid)
+    except Exception:
+        privileged_shell(f"chown {user}:{group} {shlex.quote(str(filepath))}", silent=True)
 
 
 def set_permissions_and_owner(

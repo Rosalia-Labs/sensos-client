@@ -195,6 +195,8 @@ elif parsed_count > 0:
     status = "parsed_no_fix"
 
 sample = lines[0][:120] if lines else ""
+hex_sample = " ".join(f"{ord(ch):02x}" for ch in chars[:32]) if chars else "none"
+ascii_sample = "".join(ch if 32 <= ord(ch) <= 126 else "." for ch in chars[:64]) if chars else "none"
 print(f"live_status={status}")
 print(f"available_bytes={available}")
 print(f"raw_line_count={len(lines)}")
@@ -204,6 +206,8 @@ print(f"gga_fix_quality={gga_quality or 'unknown'}")
 print(f"latitude={latitude if latitude not in (None, '') else 'unknown'}")
 print(f"longitude={longitude if longitude not in (None, '') else 'unknown'}")
 print(f"sample_nmea={sample or 'none'}")
+print(f"raw_hex={hex_sample}")
+print(f"raw_ascii={ascii_sample}")
 for index, line in enumerate(parsed_lines[-3:], start=1):
     print(f"parsed_nmea_{index}={line[:120]}")
 PY
