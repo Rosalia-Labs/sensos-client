@@ -40,6 +40,7 @@ DEFAULT_BUS = 1
 DEFAULT_LOCATION_DRIFT_M = 50.0
 DEFAULT_TIME_CONFLICT_SEC = 300.0
 ERROR_SLEEP_SEC = 15
+MAX_NMEA_BUFFER_BYTES = 8192
 
 
 class TimeConflictError(RuntimeError):
@@ -177,22 +178,49 @@ def set_system_time(gps_time: datetime.datetime) -> None:
     print(f"Updated system UTC time from GPS to {timestamp}")
 
 
-def parse_i2c_gps(bus_num: int, addr_str: str) -> dict[str, object] | None:
-    import pynmea2
+def read_i2c_gps_chunk(bus_num: int, addr_str: str) -> str:
     import smbus2
 
     i2c_addr = int(addr_str, 16)
     with smbus2.SMBus(bus_num) as bus:
         available = bus.read_byte_data(i2c_addr, 0xFD)
-        if available == 0:
-            return None
+        if available <= 0:
+            return ""
         raw_chars = [chr(bus.read_byte_data(i2c_addr, 0xFF)) for _ in range(available)]
+    return "".join(raw_chars)
 
-    nmea = "".join(raw_chars)
+
+def extract_nmea_lines(buffer: str) -> tuple[list[str], str]:
+    start = buffer.find("$")
+    if start > 0:
+        buffer = buffer[start:]
+    elif start < 0:
+        return [], buffer[-MAX_NMEA_BUFFER_BYTES:]
+
+    complete: list[str] = []
+    parts = buffer.splitlines(keepends=True)
+    remainder = ""
+    for part in parts:
+        if part.endswith("\n") or part.endswith("\r"):
+            line = part.strip()
+            if line:
+                complete.append(line)
+        else:
+            remainder = part
+    if len(remainder) > MAX_NMEA_BUFFER_BYTES:
+        remainder = remainder[-MAX_NMEA_BUFFER_BYTES:]
+        start = remainder.find("$")
+        if start >= 0:
+            remainder = remainder[start:]
+    return complete, remainder
+
+
+def parse_nmea_fix(lines: list[str], addr_str: str) -> dict[str, object] | None:
+    import pynmea2
     last_rmc = None
     last_gga = None
-    for line in nmea.splitlines():
-        if not line.startswith("$GP"):
+    for line in lines:
+        if not line.startswith(("$GP", "$GN")):
             continue
         try:
             msg = pynmea2.parse(line)
@@ -234,6 +262,16 @@ def parse_i2c_gps(bus_num: int, addr_str: str) -> dict[str, object] | None:
         "gps_time": gps_time,
         "source": f"i2c:{addr_str}",
     }
+
+
+def parse_i2c_gps(bus_num: int, addr_str: str, buffer: str) -> tuple[dict[str, object] | None, str]:
+    chunk = read_i2c_gps_chunk(bus_num, addr_str)
+    if chunk:
+        buffer = (buffer + chunk)[-MAX_NMEA_BUFFER_BYTES:]
+    lines, remainder = extract_nmea_lines(buffer)
+    if not lines:
+        return None, remainder
+    return parse_nmea_fix(lines, addr_str), remainder
 
 
 def maybe_update_time(fix: dict[str, object], allow_sync: bool) -> None:
@@ -300,6 +338,7 @@ def main() -> int:
     allow_location = config_bool(config, "GPS_UPDATE_LOCATION", True)
     location_threshold_m = max(0.0, config_float(config, "GPS_LOCATION_DRIFT_M", DEFAULT_LOCATION_DRIFT_M))
     conflict_threshold_sec = max(0.0, config_float(config, "GPS_TIME_CONFLICT_SEC", DEFAULT_TIME_CONFLICT_SEC))
+    nmea_buffer = ""
 
     print(
         f"sensos-gps starting: backend={backend} interval={interval_sec}s "
@@ -320,7 +359,7 @@ def main() -> int:
                 write_state("error", message)
                 time.sleep(ERROR_SLEEP_SEC)
                 continue
-            fix = parse_i2c_gps(bus_num, addr_str)
+            fix, nmea_buffer = parse_i2c_gps(bus_num, addr_str, nmea_buffer)
             if fix is None:
                 message = "No valid GPS fix available."
                 print(message)

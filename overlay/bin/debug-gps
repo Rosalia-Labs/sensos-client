@@ -298,12 +298,32 @@ show_systemctl_state() {
 }
 
 show_recent_logs() {
+    local log_line
+
     if have_cmd journalctl; then
         if have_cmd sudo; then
-            sudo -n journalctl -u "${SERVICE_NAME}" -n 50 --no-pager 2>/dev/null || \
-                journalctl -u "${SERVICE_NAME}" -n 50 --no-pager 2>/dev/null || true
+            log_line="$(
+                sudo -n journalctl -u "${SERVICE_NAME}" -n 200 --no-pager -o short-iso 2>/dev/null || \
+                    journalctl -u "${SERVICE_NAME}" -n 200 --no-pager -o short-iso 2>/dev/null || true
+            )"
         else
-            journalctl -u "${SERVICE_NAME}" -n 50 --no-pager 2>/dev/null || true
+            log_line="$(journalctl -u "${SERVICE_NAME}" -n 200 --no-pager -o short-iso 2>/dev/null || true)"
+        fi
+
+        log_line="$(
+            printf '%s\n' "${log_line}" | awk '
+                / sudo\[[0-9]+\]: / { next }
+                / pam_unix\(/ { next }
+                / systemd\[1\]: (Starting|Started|Stopping|Stopped) / { next }
+                NF { line = $0 }
+                END { print line }
+            '
+        )"
+
+        if [[ -n "${log_line}" ]]; then
+            printf '%s\n' "${log_line}"
+        else
+            printf 'no recent service log lines beyond unit lifecycle or sudo noise\n'
         fi
     else
         printf 'journalctl not found\n'
