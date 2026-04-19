@@ -29,11 +29,11 @@ script_name="$(basename "$0")"
 parse_switches "$script_name" "$@"
 
 log() {
-    printf '[debug-audio-monitor] %s\n' "$*" >&2
+    printf '[play-live-audio] %s\n' "$*" >&2
 }
 
 die() {
-    printf '[debug-audio-monitor] ERROR: %s\n' "$*" >&2
+    printf '[play-live-audio] ERROR: %s\n' "$*" >&2
     exit 1
 }
 
@@ -125,7 +125,7 @@ run_monitor() {
         arecord_cmd+=(-d "${duration}")
     fi
 
-    log "monitoring device=${resolved_device} format=${resolved_format} channels=${resolved_channels} rate=${resolved_rate} duration=${duration}"
+    log "playing device=${resolved_device} format=${resolved_format} channels=${resolved_channels} rate=${resolved_rate} duration=${duration}"
 
     if [[ "$(normalize_bool "${play_local}")" == "true" ]]; then
         require_cmd play

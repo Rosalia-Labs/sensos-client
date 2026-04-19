@@ -359,7 +359,7 @@ Behavior:
 - `--start-service` is what starts those services immediately; without it, `config-arecord` leaves them stopped at the end
 - later `./install` and `./upgrade` runs preserve or disable those three audio services as a group based on whether `/sensos/etc/arecord.conf` exists; they do not implicitly start disabled services, but active restart-safe SensOS worker services are restarted during upgrade so new code takes effect
 
-### `debug-audio-monitor`
+### `play-live-audio`
 
 Temporarily stops `sensos-arecord.service`, captures live audio from the same
 configured device, and restarts the recording service when the debug session
@@ -378,9 +378,9 @@ Important flags:
 Typical use:
 
 ```sh
-debug-audio-monitor --play-local
-debug-audio-monitor --duration 30 > /tmp/monitor.wav
-ssh <host> "debug-audio-monitor --duration 30" | play -q -t wav -
+play-live-audio --play-local
+play-live-audio --duration 30 > /tmp/monitor.wav
+ssh <host> "play-live-audio --duration 30" | play -q -t wav -
 ```
 
 ### `debug-audio-pipeline`
