@@ -1,6 +1,6 @@
 # Network Capture
 
-SensOS can run a bounded, temporary packet capture session for debugging and generate top-N reports from that session.
+SensOS can run a rotating packet capture session for debugging and generate top-N reports from that session.
 
 ## What it captures
 
@@ -12,13 +12,19 @@ This is enough to identify sustained traffic sources and destinations, common po
 
 ## Session workflow
 
-Start a 24-hour debug session on the device:
+Start a debug session on the device:
 
 ```sh
-packet-tracing start --duration 24
+packet-tracing start
 ```
 
 That creates a session under `/sensos/log/network_capture/sessions/<timestamp>` and starts [sensos-network-capture.service](../overlay/systemd/sensos-network-capture.service) manually for that session only. The service is not enabled during normal install.
+
+The capture keeps running until you stop it:
+
+```sh
+packet-tracing stop
+```
 
 Check status:
 
@@ -56,19 +62,18 @@ packet-tracing cleanup --all
 - default file count: 48
 - default maximum retained raw capture: about 384 MiB
 
-The capture ring is bounded inside the session directory. Each session also has a fixed duration, which defaults to 24 hours.
+The capture ring is bounded inside the session directory. Sessions are no longer time-limited by default; `packet-tracing stop` is the normal way to end a capture.
 
-The service runs `/sensos/libexec/start-network-capture.sh`, which starts a bounded `tcpdump` session similar to:
+The service runs `/sensos/libexec/start-network-capture.sh`, which starts a rotating `tcpdump` session similar to:
 
 ```sh
-timeout 86400 tcpdump -i any -nn -p -U -s 128 -y LINUX_SLL -C 8 -W 48 -w /sensos/log/network_capture/sessions/<timestamp>/pcap/capture.pcap
+tcpdump -i any -nn -p -U -s 128 -y LINUX_SLL -C 8 -W 48 -w /sensos/log/network_capture/sessions/<timestamp>/pcap/capture.pcap
 ```
 
 The exact values can be overridden through `packet-tracing start` or by setting environment values before starting the service:
 
 - `SENSOS_NETWORK_CAPTURE_ROOT`
 - `SENSOS_NETWORK_CAPTURE_IFACE`
-- `SENSOS_NETWORK_CAPTURE_DURATION_SEC`
 - `SENSOS_NETWORK_CAPTURE_SNAPLEN`
 - `SENSOS_NETWORK_CAPTURE_FILE_MB`
 - `SENSOS_NETWORK_CAPTURE_FILE_COUNT`

@@ -827,7 +827,7 @@ Behavior:
 
 ### `packet-tracing`
 
-Runs a temporary bounded packet-capture session for debugging.
+Runs a packet-capture session for debugging until you stop it.
 
 This command was previously documented as `package-tracing`. The installed command name is `packet-tracing`.
 
@@ -842,8 +842,9 @@ Subcommands:
 Typical use:
 
 ```sh
-packet-tracing start --duration 24
+packet-tracing start
 packet-tracing status
+packet-tracing stop
 packet-tracing report --latest --cleanup
 packet-tracing report --latest --save
 packet-tracing cleanup --all
@@ -853,6 +854,7 @@ Behavior:
 
 - stores temporary capture sessions under `/sensos/log/network_capture/sessions`
 - uses bounded rotating `pcap` files
+- keeps the active capture running until `packet-tracing stop`
 - prints reports to stdout by default
 - only writes `report-*.txt` and `report-*.json` files when `--save` is used
 - is intended for debugging, not permanent collection
