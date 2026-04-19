@@ -157,38 +157,64 @@ def mark_missing(conn: sqlite3.Connection, run_id: int) -> None:
 def choose_victim_file(conn: sqlite3.Connection) -> tuple[int, Path] | None:
     rows = conn.execute(
         """
-        SELECT id,
-               flac_path,
-               label_dir,
-               peak_score,
-               peak_volume,
-               (end_sec - start_sec) AS duration_sec
-        FROM flac_runs
-        WHERE deleted_at IS NULL
-        ORDER BY peak_score ASC,
-                 CASE WHEN peak_volume IS NULL THEN 1 ELSE 0 END ASC,
-                 peak_volume ASC,
+        WITH leaf_totals AS (
+            SELECT label_dir,
+                   COUNT(*) AS clip_count,
+                   SUM(end_sec - start_sec) AS total_duration_sec
+            FROM flac_runs
+            WHERE deleted_at IS NULL
+            GROUP BY label_dir
+        )
+        SELECT runs.id,
+               runs.flac_path,
+               runs.label_dir,
+               runs.peak_score,
+               runs.peak_volume,
+               (runs.end_sec - runs.start_sec) AS duration_sec,
+               leaf_totals.clip_count,
+               leaf_totals.total_duration_sec
+        FROM flac_runs AS runs
+        JOIN leaf_totals
+          ON leaf_totals.label_dir = runs.label_dir
+        WHERE runs.deleted_at IS NULL
+        ORDER BY leaf_totals.total_duration_sec DESC,
+                 leaf_totals.clip_count DESC,
+                 runs.label_dir ASC,
+                 runs.peak_score ASC,
+                 CASE WHEN runs.peak_volume IS NULL THEN 1 ELSE 0 END ASC,
+                 runs.peak_volume ASC,
                  duration_sec DESC,
-                 start_sec ASC,
-                 id ASC
+                 runs.start_sec ASC,
+                 runs.id ASC
         """,
     ).fetchall()
     if not rows:
         trace("no BirdNET FLAC runs remain with undeleted files")
         return None
-    for run_id, rel_path, label_dir, peak_score, peak_volume, duration_sec in rows:
+    for (
+        run_id,
+        rel_path,
+        label_dir,
+        peak_score,
+        peak_volume,
+        duration_sec,
+        clip_count,
+        total_duration_sec,
+    ) in rows:
         abs_path = AUDIO_ROOT / rel_path
         if abs_path.exists():
             trace(
-                "selected low-confidence BirdNET file: "
+                "selected BirdNET file from fullest leaf: "
                 f"{abs_path} score={peak_score:.4f} "
                 f"volume={'na' if peak_volume is None else f'{peak_volume:.4f}'} "
                 f"duration={duration_sec:.3f}s "
-                f"label_dir={label_dir or 'na'}"
+                f"label_dir={label_dir or 'na'} "
+                f"leaf_clip_count={clip_count} "
+                f"leaf_duration={total_duration_sec:.3f}s"
             )
             return run_id, abs_path
         mark_missing(conn, run_id)
-    trace("all low-confidence BirdNET candidates were already missing on disk")
+    trace("all BirdNET thinning candidates were already missing on disk")
     return None
 
 
@@ -240,8 +266,8 @@ def main() -> None:
     if args.test:
         deleted_count = 0
         print(
-            "Test mode: thin processed BirdNET outputs by lowest confidence score, "
-            "then lowest volume when scores tie."
+            "Test mode: thin processed BirdNET outputs from the leaf directory "
+            "with the most retained audio, deleting the weakest clip within that leaf first."
         )
         while thin_once(conn):
             deleted_count += 1
