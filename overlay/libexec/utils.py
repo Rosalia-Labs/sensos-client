@@ -124,7 +124,11 @@ def remove_file(path):
 
 def create_dir(path, owner="root", group=None, mode=0o755):
     group = group or owner
-    privileged_shell(f"mkdir -p {shlex.quote(str(path))}", silent=True)
+    if not os.path.isdir(path):
+        try:
+            os.makedirs(path, exist_ok=True)
+        except Exception:
+            privileged_shell(f"mkdir -p {shlex.quote(str(path))}", silent=True)
     try:
         st = os.stat(path)
         current_mode = stat.S_IMODE(st.st_mode)
