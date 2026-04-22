@@ -255,6 +255,7 @@ def connect_db() -> sqlite3.Connection:
             channels INTEGER,
             frames INTEGER,
             started_at TEXT NOT NULL,
+            ended_at TEXT,
             processed_at TEXT,
             status TEXT NOT NULL,
             error TEXT,
@@ -274,6 +275,8 @@ def connect_db() -> sqlite3.Connection:
             end_frame INTEGER NOT NULL,
             start_sec REAL NOT NULL,
             end_sec REAL NOT NULL,
+            event_started_at TEXT,
+            event_ended_at TEXT,
             window_volume REAL,
             top_label TEXT NOT NULL,
             top_score REAL NOT NULL,
@@ -295,6 +298,8 @@ def connect_db() -> sqlite3.Connection:
             end_frame INTEGER NOT NULL,
             start_sec REAL NOT NULL,
             end_sec REAL NOT NULL,
+            event_started_at TEXT,
+            event_ended_at TEXT,
             peak_score REAL NOT NULL,
             peak_volume REAL,
             peak_likely_score REAL,
@@ -304,17 +309,26 @@ def connect_db() -> sqlite3.Connection:
         )
         """
     )
+    ensure_column(conn, "processed_files", "ended_at", "TEXT")
     ensure_column(conn, "detections", "channel_index", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "detections", "event_started_at", "TEXT")
+    ensure_column(conn, "detections", "event_ended_at", "TEXT")
     ensure_column(conn, "detections", "window_volume", "REAL")
     ensure_column(conn, "detections", "top_likely_score", "REAL")
     ensure_column(conn, "flac_runs", "channel_index", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "flac_runs", "event_started_at", "TEXT")
+    ensure_column(conn, "flac_runs", "event_ended_at", "TEXT")
     ensure_column(conn, "flac_runs", "label_dir", "TEXT")
     ensure_column(conn, "flac_runs", "peak_volume", "REAL")
     ensure_column(conn, "flac_runs", "peak_likely_score", "REAL")
     ensure_column(conn, "flac_runs", "deleted_at", "TEXT")
     backfill_flac_run_columns(conn)
+    backfill_recording_timestamps(conn)
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_detections_source ON detections (source_path, window_index)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_detections_event ON detections (event_started_at, channel_index)"
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_flac_runs_source ON flac_runs (source_path, run_index)"
@@ -347,6 +361,79 @@ def backfill_flac_run_columns(conn: sqlite3.Connection) -> None:
         "UPDATE flac_runs SET label_dir = ? WHERE id = ?",
         [(Path(flac_path).parent.as_posix(), row_id) for row_id, flac_path in rows],
     )
+
+
+def backfill_recording_timestamps(conn: sqlite3.Connection) -> None:
+    processed_updates = []
+    for source_path, sample_rate, frames, started_at, ended_at in conn.execute(
+        """
+        SELECT source_path, sample_rate, frames, started_at, ended_at
+        FROM processed_files
+        """
+    ):
+        source_start = source_start_datetime(source_path)
+        if source_start is None:
+            continue
+        normalized_start = iso_utc_text(source_start)
+        normalized_end = frame_time_text(source_path, frames, sample_rate)
+        if started_at != normalized_start or ended_at != normalized_end:
+            processed_updates.append((normalized_start, normalized_end, source_path))
+
+    if processed_updates:
+        conn.executemany(
+            """
+            UPDATE processed_files
+            SET started_at = ?, ended_at = ?
+            WHERE source_path = ?
+            """,
+            processed_updates,
+        )
+
+    detection_updates = []
+    for row_id, source_path, start_frame, end_frame in conn.execute(
+        """
+        SELECT id, source_path, start_frame, end_frame
+        FROM detections
+        """
+    ):
+        event_started_at = frame_time_text(source_path, start_frame, SAMPLE_RATE)
+        event_ended_at = frame_time_text(source_path, end_frame, SAMPLE_RATE)
+        if event_started_at is None or event_ended_at is None:
+            continue
+        detection_updates.append((event_started_at, event_ended_at, row_id))
+
+    if detection_updates:
+        conn.executemany(
+            """
+            UPDATE detections
+            SET event_started_at = ?, event_ended_at = ?
+            WHERE id = ?
+            """,
+            detection_updates,
+        )
+
+    flac_run_updates = []
+    for row_id, source_path, start_frame, end_frame in conn.execute(
+        """
+        SELECT id, source_path, start_frame, end_frame
+        FROM flac_runs
+        """
+    ):
+        event_started_at = frame_time_text(source_path, start_frame, SAMPLE_RATE)
+        event_ended_at = frame_time_text(source_path, end_frame, SAMPLE_RATE)
+        if event_started_at is None or event_ended_at is None:
+            continue
+        flac_run_updates.append((event_started_at, event_ended_at, row_id))
+
+    if flac_run_updates:
+        conn.executemany(
+            """
+            UPDATE flac_runs
+            SET event_started_at = ?, event_ended_at = ?
+            WHERE id = ?
+            """,
+            flac_run_updates,
+        )
 
 
 def was_processed_successfully(conn: sqlite3.Connection, path: Path) -> bool:
@@ -445,13 +532,34 @@ def location_coordinates() -> tuple[float | None, float | None]:
 
 
 def source_start_datetime(source_path: Path) -> datetime | None:
-    match = re.search(r"(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z)", source_path.stem)
+    path_obj = Path(source_path)
+    match = re.search(r"(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z)", path_obj.stem)
     if match is None:
         return None
     try:
         return datetime.strptime(match.group(1), "%Y-%m-%dT%H-%M-%SZ").replace(tzinfo=timezone.utc)
     except ValueError:
         return None
+
+
+def iso_utc_text(value: datetime) -> str:
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def require_source_start_datetime(source_path: Path) -> datetime:
+    start_dt = source_start_datetime(source_path)
+    if start_dt is None:
+        raise ValueError(f"Could not parse recording start time from {source_path}")
+    return start_dt
+
+
+def frame_time_text(source_path: Path | str, frame_offset: int | None, sample_rate: int | None) -> str | None:
+    if frame_offset is None or sample_rate in (None, 0):
+        return None
+    start_dt = source_start_datetime(source_path)
+    if start_dt is None:
+        return None
+    return iso_utc_text(start_dt + timedelta(seconds=(frame_offset / sample_rate)))
 
 
 def filename_time_token(source_path: Path, run: LabelRun, sample_rate: int) -> str:
@@ -635,22 +743,37 @@ def record_failure(conn: sqlite3.Connection, source_key: str, info: sf.SoundFile
     sample_rate = getattr(info, "samplerate", None)
     channels = getattr(info, "channels", None)
     frames = getattr(info, "frames", None)
+    recording_started_at = frame_time_text(source_key, 0, 1)
+    if recording_started_at is None:
+        raise ValueError(f"Could not derive recording start time for {source_key}")
+    recording_ended_at = frame_time_text(source_key, frames, sample_rate)
     conn.execute(
         """
         INSERT INTO processed_files (
-            source_path, sample_rate, channels, frames, started_at, processed_at, status, error, deleted_source
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+            source_path, sample_rate, channels, frames, started_at, ended_at, processed_at, status, error, deleted_source
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
         ON CONFLICT(source_path) DO UPDATE SET
             sample_rate=excluded.sample_rate,
             channels=excluded.channels,
             frames=excluded.frames,
             started_at=excluded.started_at,
+            ended_at=excluded.ended_at,
             processed_at=excluded.processed_at,
             status=excluded.status,
             error=excluded.error,
             deleted_source=0
         """,
-        (source_key, sample_rate, channels, frames, now_iso(), now_iso(), "error", error),
+        (
+            source_key,
+            sample_rate,
+            channels,
+            frames,
+            recording_started_at,
+            recording_ended_at,
+            now_iso(),
+            "error",
+            error,
+        ),
     )
     conn.commit()
 
@@ -679,6 +802,8 @@ def process_audio(
 ) -> None:
     source_key = relative_source(source_path)
     info = sf.info(source_path)
+    recording_started_at = iso_utc_text(require_source_start_datetime(source_path))
+    recording_ended_at = frame_time_text(source_path, info.frames, info.samplerate)
     if info.samplerate != SAMPLE_RATE:
         raise ValueError(
             f"Unsupported sample rate {info.samplerate} for {source_key}; expected {SAMPLE_RATE}"
@@ -687,20 +812,29 @@ def process_audio(
     conn.execute(
         """
         INSERT INTO processed_files (
-            source_path, sample_rate, channels, frames, started_at, status, error, output_dir, deleted_source
-        ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 0)
+            source_path, sample_rate, channels, frames, started_at, ended_at, status, error, output_dir, deleted_source
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, 0)
         ON CONFLICT(source_path) DO UPDATE SET
             sample_rate=excluded.sample_rate,
             channels=excluded.channels,
             frames=excluded.frames,
             started_at=excluded.started_at,
+            ended_at=excluded.ended_at,
             processed_at=NULL,
             status=excluded.status,
             error=NULL,
             output_dir=NULL,
             deleted_source=0
         """,
-        (source_key, info.samplerate, info.channels, info.frames, now_iso(), "processing"),
+        (
+            source_key,
+            info.samplerate,
+            info.channels,
+            info.frames,
+            recording_started_at,
+            recording_ended_at,
+            "processing",
+        ),
     )
     conn.execute("DELETE FROM detections WHERE source_path = ?", (source_key,))
     conn.execute("DELETE FROM flac_runs WHERE source_path = ?", (source_key,))
@@ -728,8 +862,8 @@ def process_audio(
     conn.executemany(
         """
         INSERT INTO detections (
-            source_path, channel_index, window_index, start_frame, end_frame, start_sec, end_sec, window_volume, top_label, top_score, top_likely_score
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            source_path, channel_index, window_index, start_frame, end_frame, start_sec, end_sec, event_started_at, event_ended_at, window_volume, top_label, top_score, top_likely_score
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
@@ -740,6 +874,8 @@ def process_audio(
                 d.end_frame,
                 d.start_frame / sample_rate,
                 d.end_frame / sample_rate,
+                frame_time_text(source_path, d.start_frame, sample_rate),
+                frame_time_text(source_path, d.end_frame, sample_rate),
                 d.window_volume,
                 d.label,
                 d.score,
@@ -751,8 +887,8 @@ def process_audio(
     conn.executemany(
         """
         INSERT INTO flac_runs (
-            source_path, channel_index, run_index, label, label_dir, start_frame, end_frame, start_sec, end_sec, peak_score, peak_volume, peak_likely_score, flac_path, deleted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            source_path, channel_index, run_index, label, label_dir, start_frame, end_frame, start_sec, end_sec, event_started_at, event_ended_at, peak_score, peak_volume, peak_likely_score, flac_path, deleted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
         """,
         [
             (
@@ -765,6 +901,8 @@ def process_audio(
                 run.end_frame,
                 run.start_frame / sample_rate,
                 run.end_frame / sample_rate,
+                frame_time_text(source_path, run.start_frame, sample_rate),
+                frame_time_text(source_path, run.end_frame, sample_rate),
                 run.peak_score,
                 run.peak_volume,
                 run.peak_likely_score,

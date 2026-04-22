@@ -23,6 +23,33 @@ def utcnow_text() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def source_start_datetime(source_path: Path | str) -> datetime | None:
+    path_obj = Path(source_path)
+    stem = path_obj.stem
+    marker = "sensos_"
+    if marker not in stem:
+        return None
+    start = stem.find(marker) + len(marker)
+    raw_value = stem[start : start + 20]
+    try:
+        return datetime.strptime(raw_value, "%Y-%m-%dT%H-%M-%SZ").replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+def iso_utc_text(value: datetime) -> str:
+    return value.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def frame_time_text(source_path: Path | str, frame_offset: int | None, sample_rate: int | None) -> str | None:
+    if frame_offset is None or sample_rate in (None, 0):
+        return None
+    start_dt = source_start_datetime(source_path)
+    if start_dt is None:
+        return None
+    return iso_utc_text(start_dt + timedelta(seconds=(frame_offset / sample_rate)))
+
+
 def connect_db() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -56,6 +83,7 @@ def ensure_base_schema(conn: sqlite3.Connection) -> None:
             channels INTEGER,
             frames INTEGER,
             started_at TEXT NOT NULL,
+            ended_at TEXT,
             processed_at TEXT,
             status TEXT NOT NULL,
             error TEXT,
@@ -75,6 +103,8 @@ def ensure_base_schema(conn: sqlite3.Connection) -> None:
             end_frame INTEGER NOT NULL,
             start_sec REAL NOT NULL,
             end_sec REAL NOT NULL,
+            event_started_at TEXT,
+            event_ended_at TEXT,
             window_volume REAL,
             top_label TEXT NOT NULL,
             top_score REAL NOT NULL,
@@ -96,6 +126,8 @@ def ensure_base_schema(conn: sqlite3.Connection) -> None:
             end_frame INTEGER NOT NULL,
             start_sec REAL NOT NULL,
             end_sec REAL NOT NULL,
+            event_started_at TEXT,
+            event_ended_at TEXT,
             peak_score REAL NOT NULL,
             peak_volume REAL,
             peak_likely_score REAL,
@@ -105,16 +137,25 @@ def ensure_base_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    ensure_column(conn, "processed_files", "ended_at", "TEXT")
     ensure_column(conn, "detections", "channel_index", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "detections", "event_started_at", "TEXT")
+    ensure_column(conn, "detections", "event_ended_at", "TEXT")
     ensure_column(conn, "detections", "window_volume", "REAL")
     ensure_column(conn, "detections", "top_likely_score", "REAL")
     ensure_column(conn, "flac_runs", "channel_index", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "flac_runs", "event_started_at", "TEXT")
+    ensure_column(conn, "flac_runs", "event_ended_at", "TEXT")
     ensure_column(conn, "flac_runs", "label_dir", "TEXT")
     ensure_column(conn, "flac_runs", "peak_volume", "REAL")
     ensure_column(conn, "flac_runs", "peak_likely_score", "REAL")
     ensure_column(conn, "flac_runs", "deleted_at", "TEXT")
+    backfill_recording_timestamps(conn)
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_detections_source ON detections (source_path, window_index)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_detections_event ON detections (event_started_at, channel_index)"
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_flac_runs_source ON flac_runs (source_path, run_index)"
@@ -190,6 +231,79 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         """
     )
     conn.commit()
+
+
+def backfill_recording_timestamps(conn: sqlite3.Connection) -> None:
+    processed_updates = []
+    for source_path, sample_rate, frames, started_at, ended_at in conn.execute(
+        """
+        SELECT source_path, sample_rate, frames, started_at, ended_at
+        FROM processed_files
+        """
+    ):
+        source_start = source_start_datetime(source_path)
+        if source_start is None:
+            continue
+        normalized_start = iso_utc_text(source_start)
+        normalized_end = frame_time_text(source_path, frames, sample_rate)
+        if started_at != normalized_start or ended_at != normalized_end:
+            processed_updates.append((normalized_start, normalized_end, source_path))
+
+    if processed_updates:
+        conn.executemany(
+            """
+            UPDATE processed_files
+            SET started_at = ?, ended_at = ?
+            WHERE source_path = ?
+            """,
+            processed_updates,
+        )
+
+    detection_updates = []
+    for row_id, source_path, start_frame, end_frame in conn.execute(
+        """
+        SELECT id, source_path, start_frame, end_frame
+        FROM detections
+        """
+    ):
+        event_started_at = frame_time_text(source_path, start_frame, 48000)
+        event_ended_at = frame_time_text(source_path, end_frame, 48000)
+        if event_started_at is None or event_ended_at is None:
+            continue
+        detection_updates.append((event_started_at, event_ended_at, row_id))
+
+    if detection_updates:
+        conn.executemany(
+            """
+            UPDATE detections
+            SET event_started_at = ?, event_ended_at = ?
+            WHERE id = ?
+            """,
+            detection_updates,
+        )
+
+    flac_run_updates = []
+    for row_id, source_path, start_frame, end_frame in conn.execute(
+        """
+        SELECT id, source_path, start_frame, end_frame
+        FROM flac_runs
+        """
+    ):
+        event_started_at = frame_time_text(source_path, start_frame, 48000)
+        event_ended_at = frame_time_text(source_path, end_frame, 48000)
+        if event_started_at is None or event_ended_at is None:
+            continue
+        flac_run_updates.append((event_started_at, event_ended_at, row_id))
+
+    if flac_run_updates:
+        conn.executemany(
+            """
+            UPDATE flac_runs
+            SET event_started_at = ?, event_ended_at = ?
+            WHERE id = ?
+            """,
+            flac_run_updates,
+        )
 
 
 def select_pending_processed_files(

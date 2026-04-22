@@ -222,7 +222,8 @@ Quick checks:
 ```bash
 find /sensos/data/audio_recordings/processed -type f | head
 sqlite3 /sensos/data/birdnet/birdnet.db '.tables'
-sqlite3 /sensos/data/birdnet/birdnet.db 'select source_path,status from processed_files;'
+sqlite3 /sensos/data/birdnet/birdnet.db 'select source_path,started_at,ended_at,status from processed_files order by started_at limit 20;'
+sqlite3 /sensos/data/birdnet/birdnet.db 'select source_path,channel_index,event_started_at,event_ended_at,top_label from detections order by event_started_at limit 20;'
 ```
 
 ## Upgrade behavior

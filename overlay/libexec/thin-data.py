@@ -113,6 +113,7 @@ def connect_db() -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS flac_runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source_path TEXT NOT NULL,
+            channel_index INTEGER NOT NULL DEFAULT 0,
             run_index INTEGER NOT NULL,
             label TEXT NOT NULL,
             label_dir TEXT,
@@ -120,17 +121,23 @@ def connect_db() -> sqlite3.Connection:
             end_frame INTEGER NOT NULL,
             start_sec REAL NOT NULL,
             end_sec REAL NOT NULL,
+            event_started_at TEXT,
+            event_ended_at TEXT,
             peak_score REAL NOT NULL,
             peak_volume REAL,
             peak_likely_score REAL,
             flac_path TEXT NOT NULL,
             deleted_at TEXT,
-            UNIQUE (source_path, run_index)
+            UNIQUE (source_path, channel_index, run_index)
         )
         """
     )
+    ensure_column(conn, "flac_runs", "channel_index", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "flac_runs", "event_started_at", "TEXT")
+    ensure_column(conn, "flac_runs", "event_ended_at", "TEXT")
     ensure_column(conn, "flac_runs", "label_dir", "TEXT")
     ensure_column(conn, "flac_runs", "peak_volume", "REAL")
+    ensure_column(conn, "flac_runs", "peak_likely_score", "REAL")
     ensure_column(conn, "flac_runs", "deleted_at", "TEXT")
     backfill_flac_run_columns(conn)
     conn.execute(
