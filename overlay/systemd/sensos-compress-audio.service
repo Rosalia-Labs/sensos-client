@@ -1,6 +1,7 @@
 [Unit]
 Description=Compress queued WAV files into archival FLAC
 After=multi-user.target sensos-arecord.service
+PartOf=sensos-arecord.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
 

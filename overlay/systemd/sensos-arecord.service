@@ -1,6 +1,7 @@
 [Unit]
 Description=Continuous Audio Recording Service
 After=network.target
+Wants=sensos-compress-audio.service
 
 [Service]
 Type=simple
