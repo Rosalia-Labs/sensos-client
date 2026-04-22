@@ -47,8 +47,9 @@ try_clock_sync() {
     local synced=1
 
     if command -v timedatectl >/dev/null 2>&1; then
-        timedatectl set-ntp true >/dev/null 2>&1 || true
-        synced=0
+        if timedatectl set-ntp true >/dev/null 2>&1; then
+            synced=0
+        fi
     fi
 
     if command -v systemctl >/dev/null 2>&1; then
@@ -57,16 +58,57 @@ try_clock_sync() {
     fi
 
     if command -v chronyc >/dev/null 2>&1; then
-        chronyc -a makestep >/dev/null 2>&1 || true
-        synced=0
+        if chronyc -a makestep >/dev/null 2>&1; then
+            synced=0
+        fi
     fi
 
     if command -v ntpdate >/dev/null 2>&1; then
-        ntpdate -u pool.ntp.org >/dev/null 2>&1 || true
+        if ntpdate -u pool.ntp.org >/dev/null 2>&1; then
+            synced=0
+        fi
+    fi
+
+    if sync_clock_from_http_date; then
         synced=0
     fi
 
     return "${synced}"
+}
+
+fetch_http_date_header() {
+    local url="$1"
+    local date_header=""
+
+    if command -v curl >/dev/null 2>&1; then
+        date_header="$(curl -fsSI --max-time 10 "${url}" 2>/dev/null | awk 'tolower($1)=="date:"{$1=""; sub(/^ /,""); print; exit}')"
+    elif command -v wget >/dev/null 2>&1; then
+        date_header="$(wget --server-response --spider -T 10 -t 1 "${url}" 2>&1 | awk 'tolower($1)=="date:"{$1=""; sub(/^ /,""); print; exit}')"
+    fi
+
+    [[ -n "${date_header}" ]] || return 1
+    printf '%s\n' "${date_header}"
+}
+
+sync_clock_from_http_date() {
+    local date_header
+    local source_url
+    local -a time_urls=(
+        "http://deb.debian.org/debian/"
+        "http://deb.debian.org/debian-security/"
+        "http://archive.raspberrypi.com/debian/"
+        "https://download.docker.com/linux/debian/"
+    )
+
+    for source_url in "${time_urls[@]}"; do
+        date_header="$(fetch_http_date_header "${source_url}")" || continue
+        if date -u -s "${date_header}" >/dev/null 2>&1; then
+            log "set system clock from HTTP Date header at ${source_url}: ${date_header}"
+            return 0
+        fi
+    done
+
+    return 1
 }
 
 apt_update_with_clock_recovery() {
