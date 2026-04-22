@@ -38,6 +38,62 @@ run_preflight() {
     "${PRECHECK_SCRIPT}"
 }
 
+release_file_not_valid_yet() {
+    local apt_output_file="$1"
+    grep -Eq 'Release file .* is not valid yet' "${apt_output_file}"
+}
+
+try_clock_sync() {
+    local synced=1
+
+    if command -v timedatectl >/dev/null 2>&1; then
+        timedatectl set-ntp true >/dev/null 2>&1 || true
+        synced=0
+    fi
+
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl restart chrony >/dev/null 2>&1 || true
+        systemctl restart systemd-timesyncd >/dev/null 2>&1 || true
+    fi
+
+    if command -v chronyc >/dev/null 2>&1; then
+        chronyc -a makestep >/dev/null 2>&1 || true
+        synced=0
+    fi
+
+    if command -v ntpdate >/dev/null 2>&1; then
+        ntpdate -u pool.ntp.org >/dev/null 2>&1 || true
+        synced=0
+    fi
+
+    return "${synced}"
+}
+
+apt_update_with_clock_recovery() {
+    local apt_output_file
+    apt_output_file="$(mktemp)"
+
+    if apt-get update 2> >(tee "${apt_output_file}" >&2); then
+        rm -f "${apt_output_file}"
+        return 0
+    fi
+
+    if ! release_file_not_valid_yet "${apt_output_file}"; then
+        rm -f "${apt_output_file}"
+        return 1
+    fi
+
+    log "apt metadata rejected as not valid yet; attempting clock sync and retry"
+    if try_clock_sync; then
+        sleep 3
+    else
+        log "no clock sync tool available; retrying apt update anyway"
+    fi
+
+    rm -f "${apt_output_file}"
+    apt-get update
+}
+
 apt_install_args() {
     if [[ "${INSTALL_RECOMMENDS}" == "1" ]]; then
         printf '%s\n' "-y"
@@ -236,7 +292,7 @@ main() {
 
     if [[ "${EAGER_APT}" == "1" ]]; then
         log "eager APT mode enabled; refreshing package index"
-        apt-get update
+        apt_update_with_clock_recovery
         remove_listed_packages "${remove_packages[@]}"
         mapfile -t required_packages < <(collect_resolved_packages_from_file "${REQUIRED_PACKAGES_FILE}")
         log "installing required packages"
@@ -251,7 +307,7 @@ main() {
     fi
 
     log "updating apt package index"
-    apt-get update
+    apt_update_with_clock_recovery
 
     remove_listed_packages "${remove_packages[@]}"
     install_required_packages "${install_packages[@]}"
