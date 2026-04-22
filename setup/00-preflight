@@ -14,7 +14,7 @@ ALLOW_FRESH_INSTALL="${SENSOS_ALLOW_FRESH_INSTALL:-0}"
 PREFLIGHT_QUIET="${SENSOS_PREFLIGHT_QUIET:-0}"
 OS_RELEASE_FILE="/etc/os-release"
 SUPPORTED_OS_ID_REGEX='^(raspbian|debian)$'
-SUPPORTED_OS_CODENAME="trixie"
+SUPPORTED_OS_CODENAME_REGEX='^(bookworm|trixie)$'
 
 log() {
     [[ "${PREFLIGHT_QUIET}" == "1" ]] && return
@@ -109,8 +109,8 @@ assert_os_compatibility() {
         die "unsupported OS ID '${OS_ID}'; expected Raspberry Pi OS family"
     fi
 
-    if [[ "${OS_VERSION_CODENAME}" != "${SUPPORTED_OS_CODENAME}" ]]; then
-        die "unsupported OS codename '${OS_VERSION_CODENAME:-<missing>}'; expected '${SUPPORTED_OS_CODENAME}'"
+    if [[ ! "${OS_VERSION_CODENAME}" =~ ${SUPPORTED_OS_CODENAME_REGEX} ]]; then
+        die "unsupported OS codename '${OS_VERSION_CODENAME:-<missing>}'; expected one of: bookworm, trixie"
     fi
 
     log "compatibility check: PASS for ${OS_PRETTY_NAME}"
