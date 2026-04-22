@@ -1,0 +1,339 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+REPO_ROOT="${SCRIPT_DIR}"
+DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
+SETUP_SCRIPT="${REPO_ROOT}/setup/install"
+PREFLIGHT_SCRIPT="${REPO_ROOT}/setup/00-preflight"
+INSTALL_STATE_FILE="${DEPLOY_ROOT}/etc/install-state.env"
+
+INTERNAL_ROOT_CLEANUP=0
+ACCESS_METHOD="local"
+ACCESS_INTERFACE=""
+ACCESS_REMOTE=""
+PRESERVE_AUTO_HOTSPOT=0
+REINSTALL=0
+INSTALL_RECOMMENDS=0
+OFFLINE=0
+
+LEGACY_UNIT_NAMES=(
+    auto-hotspot.service
+    cache-sys-info.service
+    check-location.service
+    ensure-sensos-dir.service
+    monitor-connectivity.service
+    monitor-disk-space.service
+    monitor-disk-space.timer
+    process-birdnet.service
+    read-i2c-sensors.service
+    send-status-update.service
+    send-status-update.timer
+    sensos-arecord.service
+    sensos-gps.service
+    sensos-init.service
+    thin-birdnet-flac.service
+)
+
+log() {
+    printf '[switch-from-sensos] %s\n' "$*"
+}
+
+die() {
+    printf '[switch-from-sensos] ERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+print_usage() {
+    cat <<EOF2
+Usage: ${SCRIPT_PATH} [options]
+
+Best-effort migration from legacy SensOS stage-overlay deployment to sensos-client.
+
+Options:
+  --help                    Show this help and exit
+  --reinstall               Clear transient install artifacts before rerunning setup
+  --install-recommends      Allow APT to install recommended packages during setup
+  --offline                 Skip network-dependent install steps and use only local repo/package state
+EOF2
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --internal-root-cleanup)
+                INTERNAL_ROOT_CLEANUP=1
+                ;;
+            --access-method)
+                shift
+                [[ $# -gt 0 ]] || die "--access-method requires a value"
+                ACCESS_METHOD="$1"
+                ;;
+            --access-interface)
+                shift
+                [[ $# -gt 0 ]] || die "--access-interface requires a value"
+                ACCESS_INTERFACE="$1"
+                ;;
+            --access-remote)
+                shift
+                [[ $# -gt 0 ]] || die "--access-remote requires a value"
+                ACCESS_REMOTE="$1"
+                ;;
+            --preserve-auto-hotspot)
+                PRESERVE_AUTO_HOTSPOT=1
+                ;;
+            --reinstall)
+                REINSTALL=1
+                ;;
+            --install-recommends)
+                INSTALL_RECOMMENDS=1
+                ;;
+            --offline)
+                OFFLINE=1
+                ;;
+            --help|-h)
+                print_usage
+                exit 0
+                ;;
+            *)
+                die "unknown option: $1"
+                ;;
+        esac
+        shift
+    done
+}
+
+ensure_not_root() {
+    [[ "${EUID}" -ne 0 ]] || die "run ${SCRIPT_PATH} as the bootstrap/operator user; it will use sudo for privileged steps"
+}
+
+ensure_root() {
+    [[ "${EUID}" -eq 0 ]] || die "internal cleanup step must run as root"
+}
+
+confirm_switch_target() {
+    local reply
+
+    printf 'WARNING: this will remove legacy SensOS overlay wiring and install sensos-client into %s. Continue? [y/N] ' "${DEPLOY_ROOT}"
+    read -r reply
+    [[ "${reply}" =~ ^[Yy]$ ]] || die "switch cancelled"
+}
+
+sudo_run() {
+    local -a env_args=(
+        "SENSOS_REPO_ROOT=${REPO_ROOT}"
+        "SENSOS_DEPLOY_ROOT=${DEPLOY_ROOT}"
+        "SENSOS_ALLOW_FRESH_INSTALL=1"
+        "SENSOS_EAGER_APT=1"
+        "SENSOS_EAGER_PIP=1"
+        "SENSOS_REINSTALL=${REINSTALL}"
+        "SENSOS_APT_INSTALL_RECOMMENDS=${INSTALL_RECOMMENDS}"
+        "SENSOS_OFFLINE=${OFFLINE}"
+    )
+
+    sudo env "${env_args[@]}" "$@"
+}
+
+read_install_flag() {
+    local flag_name="$1"
+
+    sudo awk -F= -v key="${flag_name}" '$1 == key { print $2 }' "${INSTALL_STATE_FILE}" 2>/dev/null || true
+}
+
+detect_access_context() {
+    local remote
+    local route_dev
+
+    ACCESS_METHOD="local"
+    ACCESS_INTERFACE=""
+    ACCESS_REMOTE=""
+    PRESERVE_AUTO_HOTSPOT=0
+
+    if [[ -n "${SSH_CONNECTION:-}" ]]; then
+        remote="$(awk '{print $1}' <<<"${SSH_CONNECTION}")"
+        ACCESS_METHOD="ssh"
+        ACCESS_REMOTE="${remote}"
+
+        if command -v ip >/dev/null 2>&1; then
+            route_dev="$(ip route get "${remote}" 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") {print $(i+1); exit}}')"
+            ACCESS_INTERFACE="${route_dev:-}"
+        fi
+
+        if [[ "${ACCESS_INTERFACE}" == wlan* ]]; then
+            PRESERVE_AUTO_HOTSPOT=1
+        fi
+    fi
+
+    log "detected access method: ${ACCESS_METHOD}${ACCESS_REMOTE:+ from ${ACCESS_REMOTE}}${ACCESS_INTERFACE:+ via ${ACCESS_INTERFACE}}"
+    if [[ "${PRESERVE_AUTO_HOTSPOT}" == "1" ]]; then
+        log "active ingress appears to be WLAN; preserving legacy auto-hotspot service"
+    fi
+}
+
+ensure_ssh_reachability() {
+    if command -v systemctl >/dev/null 2>&1; then
+        sudo systemctl enable ssh.service >/dev/null 2>&1 || true
+        sudo systemctl start ssh.service >/dev/null 2>&1 || true
+        log "ensured ssh.service is enabled and running"
+    fi
+}
+
+remove_symlinks_by_prefix() {
+    local target_dir="$1"
+    local resolved_prefix_a="$2"
+    local resolved_prefix_b="$3"
+    local entry
+    local target
+
+    [[ -d "${target_dir}" ]] || return 0
+
+    while IFS= read -r entry; do
+        [[ -L "${entry}" ]] || continue
+        target="$(readlink "${entry}" || true)"
+        if [[ "${target}" == "${resolved_prefix_a}"* || "${target}" == "${resolved_prefix_b}"* ]]; then
+            rm -f "${entry}"
+            log "removed legacy symlink ${entry} -> ${target}"
+        fi
+    done < <(find "${target_dir}" -mindepth 1 -maxdepth 1 -type l | sort)
+}
+
+disable_legacy_units() {
+    local unit_name
+
+    command -v systemctl >/dev/null 2>&1 || return 0
+
+    for unit_name in "${LEGACY_UNIT_NAMES[@]}"; do
+        if [[ "${PRESERVE_AUTO_HOTSPOT}" == "1" && "${unit_name}" == "auto-hotspot.service" ]]; then
+            log "preserving ${unit_name} to keep WLAN ingress path stable"
+            continue
+        fi
+        systemctl disable --now "${unit_name}" >/dev/null 2>&1 || true
+    done
+}
+
+remove_legacy_unit_links() {
+    local unit_link
+
+    [[ -d /etc/systemd/system ]] || return 0
+
+    while IFS= read -r unit_link; do
+        [[ -L "${unit_link}" ]] || continue
+
+        if [[ "${PRESERVE_AUTO_HOTSPOT}" == "1" && "$(basename "${unit_link}")" == "auto-hotspot.service" ]]; then
+            continue
+        fi
+
+        if [[ "$(readlink "${unit_link}" || true)" == /sensos/services/* ]]; then
+            rm -f "${unit_link}"
+            log "removed legacy systemd unit link ${unit_link}"
+        fi
+    done < <(find /etc/systemd/system -mindepth 1 -maxdepth 1 -type l | sort)
+}
+
+remove_legacy_overlay_dirs() {
+    local legacy_dir
+
+    for legacy_dir in /sensos/scripts /sensos/service_scripts /sensos/lib; do
+        if [[ -d "${legacy_dir}" ]]; then
+            rm -rf "${legacy_dir}"
+            log "removed legacy overlay directory ${legacy_dir}"
+        fi
+    done
+
+    if [[ "${PRESERVE_AUTO_HOTSPOT}" == "1" ]]; then
+        if [[ -f /sensos/services/auto-hotspot.service ]]; then
+            log "preserving /sensos/services/auto-hotspot.service to keep WLAN ingress path stable"
+            return
+        fi
+    fi
+
+    if [[ -d /sensos/services ]]; then
+        rm -rf /sensos/services
+        log "removed legacy overlay directory /sensos/services"
+    fi
+}
+
+remove_legacy_host_symlinks() {
+    remove_symlinks_by_prefix /usr/local/bin /sensos/scripts/ /sensos/service_scripts/
+
+    if [[ -L /etc/nftables.conf && "$(readlink /etc/nftables.conf || true)" == /sensos/etc/nftables.conf ]]; then
+        rm -f /etc/nftables.conf
+        log "removed legacy nftables symlink /etc/nftables.conf"
+    fi
+
+    if [[ -L /etc/chrony/chrony.conf && "$(readlink /etc/chrony/chrony.conf || true)" == /sensos/etc/chrony.conf ]]; then
+        rm -f /etc/chrony/chrony.conf
+        log "removed legacy chrony symlink /etc/chrony/chrony.conf"
+    fi
+}
+
+run_internal_root_cleanup() {
+    ensure_root
+
+    disable_legacy_units
+    remove_legacy_unit_links
+    remove_legacy_host_symlinks
+    remove_legacy_overlay_dirs
+
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload || true
+    fi
+
+    log "legacy SensOS overlay cleanup completed"
+}
+
+main() {
+    local -a cleanup_args=()
+
+    parse_args "$@"
+
+    if [[ "${INTERNAL_ROOT_CLEANUP}" == "1" ]]; then
+        run_internal_root_cleanup
+        return 0
+    fi
+
+    ensure_not_root
+    [[ -x "${SETUP_SCRIPT}" ]] || die "missing or non-executable setup script: ${SETUP_SCRIPT}"
+    [[ -x "${PREFLIGHT_SCRIPT}" ]] || die "missing or non-executable preflight script: ${PREFLIGHT_SCRIPT}"
+
+    detect_access_context
+    confirm_switch_target
+
+    if [[ "${ACCESS_METHOD}" == "ssh" ]]; then
+        ensure_ssh_reachability
+    fi
+
+    log "removing legacy SensOS stage-overlay artifacts (best effort)"
+    cleanup_args=(
+        --internal-root-cleanup
+        --access-method "${ACCESS_METHOD}"
+        --access-interface "${ACCESS_INTERFACE}"
+        --access-remote "${ACCESS_REMOTE}"
+    )
+    if [[ "${PRESERVE_AUTO_HOTSPOT}" == "1" ]]; then
+        cleanup_args+=(--preserve-auto-hotspot)
+    fi
+    sudo_run "${SCRIPT_PATH}" "${cleanup_args[@]}"
+
+    log "running sensos-client setup"
+    sudo_run "${SETUP_SCRIPT}"
+
+    sudo test -f "${INSTALL_STATE_FILE}" || die "setup completed without writing ${INSTALL_STATE_FILE}"
+
+    if [[ "${ACCESS_METHOD}" == "ssh" ]]; then
+        ensure_ssh_reachability
+    fi
+
+    log "switch complete"
+    if [[ "$(read_install_flag REBOOT_REQUIRED)" == "1" ]]; then
+        log "REBOOT REQUIRED: Raspberry Pi hardware changes were applied but are not fully active yet"
+    fi
+
+    if [[ "${ACCESS_METHOD}" == "ssh" ]]; then
+        log "operator ingress path preserved for SSH${ACCESS_INTERFACE:+ on ${ACCESS_INTERFACE}}"
+    fi
+}
+
+main "$@"
