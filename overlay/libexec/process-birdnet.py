@@ -141,19 +141,6 @@ class Detection:
     score: float
     likely_score: float | None
 
-
-@dataclass
-class LabelRun:
-    channel_index: int
-    run_index: int
-    start_frame: int
-    end_frame: int
-    label: str
-    peak_score: float
-    peak_volume: float
-    peak_likely_score: float | None
-
-
 def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -256,10 +243,6 @@ def connect_db() -> sqlite3.Connection:
             frames INTEGER,
             started_at TEXT NOT NULL,
             ended_at TEXT,
-            processed_at TEXT,
-            status TEXT NOT NULL,
-            error TEXT,
-            output_dir TEXT,
             deleted_source INTEGER NOT NULL DEFAULT 0
         )
         """
@@ -281,31 +264,9 @@ def connect_db() -> sqlite3.Connection:
             top_label TEXT NOT NULL,
             top_score REAL NOT NULL,
             top_likely_score REAL,
-            UNIQUE (source_path, channel_index, window_index)
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS flac_runs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source_path TEXT NOT NULL,
-            channel_index INTEGER NOT NULL DEFAULT 0,
-            run_index INTEGER NOT NULL,
-            label TEXT NOT NULL,
-            label_dir TEXT,
-            start_frame INTEGER NOT NULL,
-            end_frame INTEGER NOT NULL,
-            start_sec REAL NOT NULL,
-            end_sec REAL NOT NULL,
-            event_started_at TEXT,
-            event_ended_at TEXT,
-            peak_score REAL NOT NULL,
-            peak_volume REAL,
-            peak_likely_score REAL,
-            flac_path TEXT NOT NULL,
+            flac_path TEXT,
             deleted_at TEXT,
-            UNIQUE (source_path, channel_index, run_index)
+            UNIQUE (source_path, channel_index, window_index)
         )
         """
     )
@@ -315,14 +276,8 @@ def connect_db() -> sqlite3.Connection:
     ensure_column(conn, "detections", "event_ended_at", "TEXT")
     ensure_column(conn, "detections", "window_volume", "REAL")
     ensure_column(conn, "detections", "top_likely_score", "REAL")
-    ensure_column(conn, "flac_runs", "channel_index", "INTEGER NOT NULL DEFAULT 0")
-    ensure_column(conn, "flac_runs", "event_started_at", "TEXT")
-    ensure_column(conn, "flac_runs", "event_ended_at", "TEXT")
-    ensure_column(conn, "flac_runs", "label_dir", "TEXT")
-    ensure_column(conn, "flac_runs", "peak_volume", "REAL")
-    ensure_column(conn, "flac_runs", "peak_likely_score", "REAL")
-    ensure_column(conn, "flac_runs", "deleted_at", "TEXT")
-    backfill_flac_run_columns(conn)
+    ensure_column(conn, "detections", "flac_path", "TEXT")
+    ensure_column(conn, "detections", "deleted_at", "TEXT")
     backfill_recording_timestamps(conn)
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_detections_source ON detections (source_path, window_index)"
@@ -331,10 +286,7 @@ def connect_db() -> sqlite3.Connection:
         "CREATE INDEX IF NOT EXISTS idx_detections_event ON detections (event_started_at, channel_index)"
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_flac_runs_source ON flac_runs (source_path, run_index)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_flac_runs_active_dir ON flac_runs (label_dir, deleted_at)"
+        "CREATE INDEX IF NOT EXISTS idx_detections_flac ON detections (deleted_at, flac_path)"
     )
     conn.commit()
     ensure_state_file_permissions()
@@ -345,22 +297,6 @@ def ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, c
     columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table_name})")}
     if column_name not in columns:
         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
-
-
-def backfill_flac_run_columns(conn: sqlite3.Connection) -> None:
-    rows = conn.execute(
-        """
-        SELECT id, flac_path
-        FROM flac_runs
-        WHERE label_dir IS NULL
-        """
-    ).fetchall()
-    if not rows:
-        return
-    conn.executemany(
-        "UPDATE flac_runs SET label_dir = ? WHERE id = ?",
-        [(Path(flac_path).parent.as_posix(), row_id) for row_id, flac_path in rows],
-    )
 
 
 def backfill_recording_timestamps(conn: sqlite3.Connection) -> None:
@@ -412,36 +348,13 @@ def backfill_recording_timestamps(conn: sqlite3.Connection) -> None:
             detection_updates,
         )
 
-    flac_run_updates = []
-    for row_id, source_path, start_frame, end_frame in conn.execute(
-        """
-        SELECT id, source_path, start_frame, end_frame
-        FROM flac_runs
-        """
-    ):
-        event_started_at = frame_time_text(source_path, start_frame, SAMPLE_RATE)
-        event_ended_at = frame_time_text(source_path, end_frame, SAMPLE_RATE)
-        if event_started_at is None or event_ended_at is None:
-            continue
-        flac_run_updates.append((event_started_at, event_ended_at, row_id))
-
-    if flac_run_updates:
-        conn.executemany(
-            """
-            UPDATE flac_runs
-            SET event_started_at = ?, event_ended_at = ?
-            WHERE id = ?
-            """,
-            flac_run_updates,
-        )
-
 
 def was_processed_successfully(conn: sqlite3.Connection, path: Path) -> bool:
     row = conn.execute(
-        "SELECT status FROM processed_files WHERE source_path = ?",
+        "SELECT 1 FROM processed_files WHERE source_path = ?",
         (relative_source(path),),
     ).fetchone()
-    return row is not None and row[0] == "done"
+    return row is not None
 
 
 def find_next_audio(conn: sqlite3.Connection) -> Path | None:
@@ -562,11 +475,11 @@ def frame_time_text(source_path: Path | str, frame_offset: int | None, sample_ra
     return iso_utc_text(start_dt + timedelta(seconds=(frame_offset / sample_rate)))
 
 
-def filename_time_token(source_path: Path, run: LabelRun, sample_rate: int) -> str:
+def filename_time_token(source_path: Path, detection: Detection, sample_rate: int) -> str:
     start_dt = source_start_datetime(source_path)
     if start_dt is None:
         return source_path.stem
-    run_dt = start_dt + timedelta(seconds=(run.start_frame / sample_rate))
+    run_dt = start_dt + timedelta(seconds=(detection.start_frame / sample_rate))
     return run_dt.strftime("%Y-%m-%dT%H-%M-%SZ")
 
 
@@ -661,20 +574,20 @@ def collect_detections(
     return detections
 
 
-def build_runs(detections: List[Detection]) -> List[LabelRun]:
+def merge_detections(detections: List[Detection]) -> List[Detection]:
     if not detections:
         return []
 
-    runs: List[LabelRun] = []
-    current = LabelRun(
+    merged: List[Detection] = []
+    current = Detection(
         channel_index=detections[0].channel_index,
-        run_index=0,
+        window_index=detections[0].window_index,
         start_frame=detections[0].start_frame,
         end_frame=detections[0].end_frame,
+        window_volume=detections[0].window_volume,
         label=detections[0].label,
-        peak_score=detections[0].score,
-        peak_volume=detections[0].window_volume,
-        peak_likely_score=detections[0].likely_score,
+        score=detections[0].score,
+        likely_score=detections[0].likely_score,
     )
 
     for detection in detections[1:]:
@@ -682,100 +595,64 @@ def build_runs(detections: List[Detection]) -> List[LabelRun]:
         overlaps = detection.start_frame <= current.end_frame
         if same_label and overlaps:
             current.end_frame = max(current.end_frame, detection.end_frame)
-            current.peak_score = max(current.peak_score, detection.score)
-            current.peak_volume = max(current.peak_volume, detection.window_volume)
+            current.score = max(current.score, detection.score)
+            current.window_volume = max(current.window_volume, detection.window_volume)
             if detection.likely_score is not None:
-                if current.peak_likely_score is None:
-                    current.peak_likely_score = detection.likely_score
+                if current.likely_score is None:
+                    current.likely_score = detection.likely_score
                 else:
-                    current.peak_likely_score = max(
-                        current.peak_likely_score, detection.likely_score
-                    )
+                    current.likely_score = max(current.likely_score, detection.likely_score)
             continue
 
-        runs.append(current)
-        current = LabelRun(
+        merged.append(current)
+        current = Detection(
             channel_index=detection.channel_index,
-            run_index=len(runs),
+            window_index=detection.window_index,
             start_frame=detection.start_frame,
             end_frame=detection.end_frame,
+            window_volume=detection.window_volume,
             label=detection.label,
-            peak_score=detection.score,
-            peak_volume=detection.window_volume,
-            peak_likely_score=detection.likely_score,
+            score=detection.score,
+            likely_score=detection.likely_score,
         )
 
-    runs.append(current)
-    return runs
+    merged.append(current)
+    return merged
 
 
-def write_flac_runs(source_path: Path, audio: np.ndarray, sample_rate: int, runs: List[LabelRun]) -> List[tuple[LabelRun, Path]]:
-    written = []
+def write_detection_clips(
+    source_path: Path,
+    audio: np.ndarray,
+    sample_rate: int,
+    detections: List[Detection],
+) -> dict[tuple[int, int], Path]:
+    written = {}
     loc_token = location_token()
-    for run in runs:
-        if is_human_label(run.label):
+    for detection in detections:
+        if is_human_label(detection.label):
             continue
-        out_dir = label_output_dir(source_path, run.label)
+        out_dir = label_output_dir(source_path, detection.label)
         create_dir(str(out_dir), "sensos-admin", "sensos-data", 0o2775)
-        start_sec = run.start_frame / sample_rate
-        end_sec = run.end_frame / sample_rate
+        start_sec = detection.start_frame / sample_rate
+        end_sec = detection.end_frame / sample_rate
         filename = (
-            f"{filename_time_token(source_path, run, sample_rate)}_"
+            f"{filename_time_token(source_path, detection, sample_rate)}_"
             f"{loc_token}_"
-            f"ch{run.channel_index:02d}_"
-            f"{run.run_index:03d}_"
-            f"{sanitize_label(run.label)}_"
-            f"{format_score_token(run.peak_score, 's')}_"
-            f"{format_score_token(run.peak_likely_score, 'o')}_"
+            f"ch{detection.channel_index:02d}_"
+            f"{detection.window_index:03d}_"
+            f"{sanitize_label(detection.label)}_"
+            f"{format_score_token(detection.score, 's')}_"
+            f"{format_score_token(detection.likely_score, 'o')}_"
             f"{start_sec:09.3f}-{end_sec:09.3f}.flac"
         )
         flac_path = out_dir / filename
         if audio.ndim == 1:
-            chunk = audio[run.start_frame : run.end_frame]
+            chunk = audio[detection.start_frame : detection.end_frame]
         else:
-            chunk = audio[run.start_frame : run.end_frame, run.channel_index]
+            chunk = audio[detection.start_frame : detection.end_frame, detection.channel_index]
         sf.write(flac_path, chunk, sample_rate, format="FLAC")
-        written.append((run, flac_path))
+        written[(detection.channel_index, detection.window_index)] = flac_path
     return written
-
-
-def record_failure(conn: sqlite3.Connection, source_key: str, info: sf.SoundFile | None, error: str) -> None:
-    sample_rate = getattr(info, "samplerate", None)
-    channels = getattr(info, "channels", None)
-    frames = getattr(info, "frames", None)
-    recording_started_at = frame_time_text(source_key, 0, 1)
-    if recording_started_at is None:
-        raise ValueError(f"Could not derive recording start time for {source_key}")
-    recording_ended_at = frame_time_text(source_key, frames, sample_rate)
-    conn.execute(
-        """
-        INSERT INTO processed_files (
-            source_path, sample_rate, channels, frames, started_at, ended_at, processed_at, status, error, deleted_source
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-        ON CONFLICT(source_path) DO UPDATE SET
-            sample_rate=excluded.sample_rate,
-            channels=excluded.channels,
-            frames=excluded.frames,
-            started_at=excluded.started_at,
-            ended_at=excluded.ended_at,
-            processed_at=excluded.processed_at,
-            status=excluded.status,
-            error=excluded.error,
-            deleted_source=0
-        """,
-        (
-            source_key,
-            sample_rate,
-            channels,
-            frames,
-            recording_started_at,
-            recording_ended_at,
-            now_iso(),
-            "error",
-            error,
-        ),
-    )
-    conn.commit()
 
 
 def update_deleted_source(conn: sqlite3.Connection, source_key: str, source_path: Path) -> None:
@@ -812,18 +689,14 @@ def process_audio(
     conn.execute(
         """
         INSERT INTO processed_files (
-            source_path, sample_rate, channels, frames, started_at, ended_at, status, error, output_dir, deleted_source
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, 0)
+            source_path, sample_rate, channels, frames, started_at, ended_at, deleted_source
+        ) VALUES (?, ?, ?, ?, ?, ?, 0)
         ON CONFLICT(source_path) DO UPDATE SET
             sample_rate=excluded.sample_rate,
             channels=excluded.channels,
             frames=excluded.frames,
             started_at=excluded.started_at,
             ended_at=excluded.ended_at,
-            processed_at=NULL,
-            status=excluded.status,
-            error=NULL,
-            output_dir=NULL,
             deleted_source=0
         """,
         (
@@ -833,17 +706,14 @@ def process_audio(
             info.frames,
             recording_started_at,
             recording_ended_at,
-            "processing",
         ),
     )
     conn.execute("DELETE FROM detections WHERE source_path = ?", (source_key,))
-    conn.execute("DELETE FROM flac_runs WHERE source_path = ?", (source_key,))
     conn.commit()
 
     audio, sample_rate = sf.read(source_path, dtype="int32", always_2d=True)
     latitude, longitude = location_coordinates()
     detections: List[Detection] = []
-    runs: List[LabelRun] = []
     for channel_index, channel_audio in audio_channels(audio, INPUT_MODE):
         channel_detections = collect_detections(
             channel_index,
@@ -855,15 +725,14 @@ def process_audio(
             longitude,
             source_observation_date(source_path),
         )
-        detections.extend(channel_detections)
-        runs.extend(build_runs(channel_detections))
-    written_runs = write_flac_runs(source_path, audio, sample_rate, runs)
+        detections.extend(merge_detections(channel_detections))
+    written_clips = write_detection_clips(source_path, audio, sample_rate, detections)
 
     conn.executemany(
         """
         INSERT INTO detections (
-            source_path, channel_index, window_index, start_frame, end_frame, start_sec, end_sec, event_started_at, event_ended_at, window_volume, top_label, top_score, top_likely_score
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            source_path, channel_index, window_index, start_frame, end_frame, start_sec, end_sec, event_started_at, event_ended_at, window_volume, top_label, top_score, top_likely_score, flac_path, deleted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
@@ -880,49 +749,23 @@ def process_audio(
                 d.label,
                 d.score,
                 d.likely_score,
+                (
+                    written_clips[(d.channel_index, d.window_index)].relative_to(INPUT_ROOT.parent).as_posix()
+                    if (d.channel_index, d.window_index) in written_clips
+                    else None
+                ),
+                None,
             )
             for d in detections
-        ],
-    )
-    conn.executemany(
-        """
-        INSERT INTO flac_runs (
-            source_path, channel_index, run_index, label, label_dir, start_frame, end_frame, start_sec, end_sec, event_started_at, event_ended_at, peak_score, peak_volume, peak_likely_score, flac_path, deleted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
-        """,
-        [
-            (
-                source_key,
-                run.channel_index,
-                run.run_index,
-                run.label,
-                flac_path.relative_to(INPUT_ROOT.parent).parent.as_posix(),
-                run.start_frame,
-                run.end_frame,
-                run.start_frame / sample_rate,
-                run.end_frame / sample_rate,
-                frame_time_text(source_path, run.start_frame, sample_rate),
-                frame_time_text(source_path, run.end_frame, sample_rate),
-                run.peak_score,
-                run.peak_volume,
-                run.peak_likely_score,
-                flac_path.relative_to(INPUT_ROOT.parent).as_posix(),
-            )
-            for run, flac_path in written_runs
         ],
     )
     conn.execute(
         """
         UPDATE processed_files
-        SET processed_at = ?, status = ?, error = NULL, output_dir = ?
+        SET deleted_source = 0
         WHERE source_path = ?
         """,
-        (
-            now_iso(),
-            "done",
-            source_path.relative_to(INPUT_ROOT).parent.as_posix(),
-            source_key,
-        ),
+        (source_key,),
     )
     conn.commit()
 
@@ -971,13 +814,13 @@ def main() -> None:
             print(f"✅ Finished {next_audio}")
         except Exception as exc:
             if next_audio is not None and next_audio.exists():
-                source_key = relative_source(next_audio)
-                try:
-                    record_failure(conn, source_key, sf.info(next_audio), str(exc))
-                except Exception:
-                    pass
+                print(
+                    f"⚠️ Failed to process {next_audio}: {exc}. Deleting source file.",
+                    file=sys.stderr,
+                )
                 delete_source(next_audio)
                 try:
+                    source_key = relative_source(next_audio)
                     update_deleted_source(conn, source_key, next_audio)
                 except Exception:
                     pass

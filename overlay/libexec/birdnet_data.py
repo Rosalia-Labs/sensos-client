@@ -84,10 +84,6 @@ def ensure_base_schema(conn: sqlite3.Connection) -> None:
             frames INTEGER,
             started_at TEXT NOT NULL,
             ended_at TEXT,
-            processed_at TEXT,
-            status TEXT NOT NULL,
-            error TEXT,
-            output_dir TEXT,
             deleted_source INTEGER NOT NULL DEFAULT 0
         )
         """
@@ -109,31 +105,9 @@ def ensure_base_schema(conn: sqlite3.Connection) -> None:
             top_label TEXT NOT NULL,
             top_score REAL NOT NULL,
             top_likely_score REAL,
-            UNIQUE (source_path, channel_index, window_index)
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS flac_runs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source_path TEXT NOT NULL,
-            channel_index INTEGER NOT NULL DEFAULT 0,
-            run_index INTEGER NOT NULL,
-            label TEXT NOT NULL,
-            label_dir TEXT,
-            start_frame INTEGER NOT NULL,
-            end_frame INTEGER NOT NULL,
-            start_sec REAL NOT NULL,
-            end_sec REAL NOT NULL,
-            event_started_at TEXT,
-            event_ended_at TEXT,
-            peak_score REAL NOT NULL,
-            peak_volume REAL,
-            peak_likely_score REAL,
-            flac_path TEXT NOT NULL,
+            flac_path TEXT,
             deleted_at TEXT,
-            UNIQUE (source_path, channel_index, run_index)
+            UNIQUE (source_path, channel_index, window_index)
         )
         """
     )
@@ -143,13 +117,8 @@ def ensure_base_schema(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "detections", "event_ended_at", "TEXT")
     ensure_column(conn, "detections", "window_volume", "REAL")
     ensure_column(conn, "detections", "top_likely_score", "REAL")
-    ensure_column(conn, "flac_runs", "channel_index", "INTEGER NOT NULL DEFAULT 0")
-    ensure_column(conn, "flac_runs", "event_started_at", "TEXT")
-    ensure_column(conn, "flac_runs", "event_ended_at", "TEXT")
-    ensure_column(conn, "flac_runs", "label_dir", "TEXT")
-    ensure_column(conn, "flac_runs", "peak_volume", "REAL")
-    ensure_column(conn, "flac_runs", "peak_likely_score", "REAL")
-    ensure_column(conn, "flac_runs", "deleted_at", "TEXT")
+    ensure_column(conn, "detections", "flac_path", "TEXT")
+    ensure_column(conn, "detections", "deleted_at", "TEXT")
     backfill_recording_timestamps(conn)
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_detections_source ON detections (source_path, window_index)"
@@ -158,7 +127,7 @@ def ensure_base_schema(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_detections_event ON detections (event_started_at, channel_index)"
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_flac_runs_source ON flac_runs (source_path, run_index)"
+        "CREATE INDEX IF NOT EXISTS idx_detections_flac ON detections (deleted_at, flac_path)"
     )
 
 
@@ -184,7 +153,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_birdnet_pending_upload
-        ON processed_files (server_copy, status, processed_at, source_path)
+        ON processed_files (server_copy, started_at, source_path)
         """
     )
     conn.execute(
@@ -199,8 +168,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             source_count INTEGER NOT NULL DEFAULT 0,
             first_source_path TEXT,
             last_source_path TEXT,
-            first_processed_at TEXT,
-            last_processed_at TEXT,
+            first_started_at TEXT,
+            last_started_at TEXT,
             server_receipt_id TEXT,
             server_received_at TEXT,
             response_status INTEGER,
@@ -282,42 +251,16 @@ def backfill_recording_timestamps(conn: sqlite3.Connection) -> None:
             detection_updates,
         )
 
-    flac_run_updates = []
-    for row_id, source_path, start_frame, end_frame in conn.execute(
-        """
-        SELECT id, source_path, start_frame, end_frame
-        FROM flac_runs
-        """
-    ):
-        event_started_at = frame_time_text(source_path, start_frame, 48000)
-        event_ended_at = frame_time_text(source_path, end_frame, 48000)
-        if event_started_at is None or event_ended_at is None:
-            continue
-        flac_run_updates.append((event_started_at, event_ended_at, row_id))
-
-    if flac_run_updates:
-        conn.executemany(
-            """
-            UPDATE flac_runs
-            SET event_started_at = ?, event_ended_at = ?
-            WHERE id = ?
-            """,
-            flac_run_updates,
-        )
-
-
 def select_pending_processed_files(
     conn: sqlite3.Connection,
     limit: int,
 ) -> list[sqlite3.Row]:
     cursor = conn.execute(
         """
-        SELECT source_path, sample_rate, channels, frames, started_at, processed_at, status, error, output_dir, deleted_source
+        SELECT source_path, sample_rate, channels, frames, started_at, ended_at, deleted_source
         FROM processed_files
         WHERE server_copy = 0
-          AND status = 'done'
-          AND processed_at IS NOT NULL
-        ORDER BY processed_at, source_path
+        ORDER BY started_at, source_path
         LIMIT ?
         """,
         (limit,),
@@ -332,7 +275,7 @@ def create_upload_batch(
 ) -> int:
     created_at = utcnow_text()
     source_paths = [str(row["source_path"]) for row in rows]
-    processed_times = [str(row["processed_at"]) for row in rows]
+    started_times = [str(row["started_at"]) for row in rows]
     batch_cursor = conn.execute(
         """
         INSERT INTO birdnet_upload_batches (
@@ -343,8 +286,8 @@ def create_upload_batch(
             source_count,
             first_source_path,
             last_source_path,
-            first_processed_at,
-            last_processed_at
+            first_started_at,
+            last_started_at
         )
         VALUES (?, ?, 'in_progress', ?, ?, ?, ?, ?, ?)
         """,
@@ -355,8 +298,8 @@ def create_upload_batch(
             len(rows),
             min(source_paths),
             max(source_paths),
-            min(processed_times),
-            max(processed_times),
+            min(started_times),
+            max(started_times),
         ),
     )
     batch_id = int(batch_cursor.lastrowid)
@@ -480,32 +423,10 @@ def fetch_detections_for_sources(
     placeholders = ",".join("?" for _ in source_paths)
     rows = conn.execute(
         f"""
-        SELECT source_path, channel_index, window_index, start_frame, end_frame, start_sec, end_sec, window_volume, top_label, top_score, top_likely_score
+        SELECT source_path, channel_index, window_index, start_frame, end_frame, start_sec, end_sec, window_volume, top_label, top_score, top_likely_score, event_started_at, event_ended_at, flac_path, deleted_at
         FROM detections
         WHERE source_path IN ({placeholders})
         ORDER BY source_path, channel_index, window_index
-        """,
-        source_paths,
-    ).fetchall()
-    grouped: dict[str, list[sqlite3.Row]] = {source_path: [] for source_path in source_paths}
-    for row in rows:
-        grouped[str(row["source_path"])].append(row)
-    return grouped
-
-
-def fetch_flac_runs_for_sources(
-    conn: sqlite3.Connection,
-    source_paths: list[str],
-) -> dict[str, list[sqlite3.Row]]:
-    if not source_paths:
-        return {}
-    placeholders = ",".join("?" for _ in source_paths)
-    rows = conn.execute(
-        f"""
-        SELECT source_path, channel_index, run_index, label, label_dir, start_frame, end_frame, start_sec, end_sec, peak_score, peak_likely_score, flac_path, deleted_at
-        FROM flac_runs
-        WHERE source_path IN ({placeholders})
-        ORDER BY source_path, channel_index, run_index
         """,
         source_paths,
     ).fetchall()
@@ -532,9 +453,8 @@ def prune_server_owned_results(
         FROM processed_files
         WHERE authoritative_owner = ?
           AND server_copy = 1
-          AND processed_at IS NOT NULL
-          AND processed_at < ?
-        ORDER BY processed_at, source_path
+          AND started_at < ?
+        ORDER BY started_at, source_path
         LIMIT ?
         """,
         (OWNERSHIP_SERVER, cutoff_text, delete_limit),
@@ -547,9 +467,10 @@ def prune_server_owned_results(
     flac_rows = conn.execute(
         f"""
         SELECT flac_path
-        FROM flac_runs
+        FROM detections
         WHERE source_path IN ({placeholders})
           AND deleted_at IS NULL
+          AND flac_path IS NOT NULL
         """,
         source_paths,
     ).fetchall()
@@ -567,10 +488,6 @@ def prune_server_owned_results(
 
     conn.execute(
         f"DELETE FROM detections WHERE source_path IN ({placeholders})",
-        source_paths,
-    )
-    conn.execute(
-        f"DELETE FROM flac_runs WHERE source_path IN ({placeholders})",
         source_paths,
     )
     conn.execute(

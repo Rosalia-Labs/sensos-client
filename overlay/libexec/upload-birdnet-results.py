@@ -28,7 +28,6 @@ from birdnet_data import (
     create_upload_batch,
     ensure_schema,
     fetch_detections_for_sources,
-    fetch_flac_runs_for_sources,
     mark_upload_failure,
     mark_upload_success,
     prune_server_owned_results,
@@ -114,7 +113,7 @@ def build_birdnet_upload_payload(
     processed_files: list[dict],
 ) -> dict:
     source_paths = [entry["source_path"] for entry in processed_files]
-    processed_times = [entry["processed_at"] for entry in processed_files]
+    started_times = [entry["started_at"] for entry in processed_files]
     return {
         "schema_version": 1,
         "hostname": hostname,
@@ -125,8 +124,8 @@ def build_birdnet_upload_payload(
         "source_count": len(processed_files),
         "first_source_path": min(source_paths),
         "last_source_path": max(source_paths),
-        "first_processed_at": min(processed_times),
-        "last_processed_at": max(processed_times),
+        "first_started_at": min(started_times),
+        "last_started_at": max(started_times),
         "processed_files": processed_files,
     }
 
@@ -189,7 +188,6 @@ def post_birdnet_batch(
 def source_rows_to_payload(conn, rows) -> list[dict]:
     source_paths = [str(row["source_path"]) for row in rows]
     detections_by_source = fetch_detections_for_sources(conn, source_paths)
-    flac_runs_by_source = fetch_flac_runs_for_sources(conn, source_paths)
     payload_sources = []
     for row in rows:
         source_path = str(row["source_path"])
@@ -200,10 +198,7 @@ def source_rows_to_payload(conn, rows) -> list[dict]:
                 "channels": int(row["channels"]),
                 "frames": int(row["frames"]),
                 "started_at": str(row["started_at"]),
-                "processed_at": str(row["processed_at"]),
-                "status": str(row["status"]),
-                "error": row["error"],
-                "output_dir": row["output_dir"],
+                "ended_at": row["ended_at"],
                 "deleted_source": bool(row["deleted_source"]),
                 "detections": [
                     {
@@ -213,6 +208,8 @@ def source_rows_to_payload(conn, rows) -> list[dict]:
                         "end_frame": int(det["end_frame"]),
                         "start_sec": float(det["start_sec"]),
                         "end_sec": float(det["end_sec"]),
+                        "event_started_at": det["event_started_at"],
+                        "event_ended_at": det["event_ended_at"],
                         "window_volume": (
                             None
                             if det["window_volume"] is None
@@ -225,29 +222,10 @@ def source_rows_to_payload(conn, rows) -> list[dict]:
                             if det["top_likely_score"] is None
                             else float(det["top_likely_score"])
                         ),
+                        "flac_path": det["flac_path"],
+                        "deleted_at": det["deleted_at"],
                     }
                     for det in detections_by_source.get(source_path, [])
-                ],
-                "flac_runs": [
-                    {
-                        "channel_index": int(run["channel_index"]),
-                        "run_index": int(run["run_index"]),
-                        "label": str(run["label"]),
-                        "label_dir": run["label_dir"],
-                        "start_frame": int(run["start_frame"]),
-                        "end_frame": int(run["end_frame"]),
-                        "start_sec": float(run["start_sec"]),
-                        "end_sec": float(run["end_sec"]),
-                        "peak_score": float(run["peak_score"]),
-                        "peak_likely_score": (
-                            None
-                            if run["peak_likely_score"] is None
-                            else float(run["peak_likely_score"])
-                        ),
-                        "flac_path": str(run["flac_path"]),
-                        "deleted_at": run["deleted_at"],
-                    }
-                    for run in flac_runs_by_source.get(source_path, [])
                 ],
             }
         )

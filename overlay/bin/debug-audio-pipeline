@@ -101,31 +101,27 @@ def arecord_live_hint(queued_newest_age: object) -> str:
 
 
 def birdnet_db_summary() -> dict[str, object]:
-    summary = {"done": "-", "proc": "-", "err": "-", "up": "-"}
+    summary = {"files": "-", "det": "-", "up": "-"}
     if not BIRDNET_DB.exists():
         return summary
     try:
         conn = sqlite3.connect(BIRDNET_DB)
         with conn:
-            summary["done"] = conn.execute(
-                "select count(*) from processed_files where status = 'done'"
+            summary["files"] = conn.execute(
+                "select count(*) from processed_files"
             ).fetchone()[0]
-            summary["proc"] = conn.execute(
-                "select count(*) from processed_files where status = 'processing'"
-            ).fetchone()[0]
-            summary["err"] = conn.execute(
-                "select count(*) from processed_files where status not in ('done', 'processing')"
+            summary["det"] = conn.execute(
+                "select count(*) from detections"
             ).fetchone()[0]
             try:
                 summary["up"] = conn.execute(
-                    "select count(*) from processed_files where coalesce(server_copy,0)=0 and status='done'"
+                    "select count(*) from processed_files where coalesce(server_copy,0)=0"
                 ).fetchone()[0]
             except sqlite3.DatabaseError:
                 summary["up"] = "-"
     except sqlite3.DatabaseError:
-        summary["done"] = "db-err"
-        summary["proc"] = "db-err"
-        summary["err"] = "db-err"
+        summary["files"] = "db-err"
+        summary["det"] = "db-err"
         summary["up"] = "db-err"
     return summary
 
@@ -164,8 +160,8 @@ def build_lines() -> list[str]:
             f"oldest={format_age(processed['oldest_age'])}"
         ),
         (
-            f"birdnet db done={birdnet_db['done']} processing={birdnet_db['proc']} "
-            f"errors={birdnet_db['err']} pending_upload={birdnet_db['up']}"
+            f"birdnet db files={birdnet_db['files']} detections={birdnet_db['det']} "
+            f"pending_upload={birdnet_db['up']}"
         ),
     ]
     return lines[:OUTPUT_LINE_LIMIT]

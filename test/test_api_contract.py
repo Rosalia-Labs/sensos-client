@@ -393,10 +393,7 @@ class ApiContractTests(unittest.TestCase):
                     "channels": 2,
                     "frames": 144000,
                     "started_at": "2026-04-07T12:00:00Z",
-                    "processed_at": "2026-04-07T12:00:04Z",
-                    "status": "done",
-                    "error": None,
-                    "output_dir": "2026/04/07",
+                    "ended_at": "2026-04-07T12:00:03Z",
                     "deleted_source": True,
                     "detections": [
                         {
@@ -406,24 +403,12 @@ class ApiContractTests(unittest.TestCase):
                             "end_frame": 144000,
                             "start_sec": 0.0,
                             "end_sec": 3.0,
+                            "event_started_at": "2026-04-07T12:00:00Z",
+                            "event_ended_at": "2026-04-07T12:00:03Z",
                             "window_volume": 0.018,
                             "top_label": "Northern Cardinal (Cardinalis cardinalis)",
                             "top_score": 0.91,
                             "top_likely_score": 0.75,
-                        }
-                    ],
-                    "flac_runs": [
-                        {
-                            "channel_index": 0,
-                            "run_index": 0,
-                            "label": "Northern Cardinal (Cardinalis cardinalis)",
-                            "label_dir": "audio_recordings/processed/2026/04/07/Northern_Cardinal",
-                            "start_frame": 0,
-                            "end_frame": 144000,
-                            "start_sec": 0.0,
-                            "end_sec": 3.0,
-                            "peak_score": 0.91,
-                            "peak_likely_score": 0.75,
                             "flac_path": "audio_recordings/processed/2026/04/07/Northern_Cardinal/clip.flac",
                             "deleted_at": None,
                         }
@@ -436,9 +421,11 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(payload["batch_id"], 23)
         self.assertEqual(payload["source_count"], 1)
         self.assertEqual(payload["first_source_path"], "audio_recordings/compressed/2026/04/07/a.flac")
+        self.assertEqual(payload["first_started_at"], "2026-04-07T12:00:00Z")
         self.assertEqual(payload["processed_files"][0]["detections"][0]["window_index"], 0)
+        self.assertEqual(payload["processed_files"][0]["detections"][0]["event_started_at"], "2026-04-07T12:00:00Z")
         self.assertEqual(payload["processed_files"][0]["detections"][0]["window_volume"], 0.018)
-        self.assertEqual(payload["processed_files"][0]["flac_runs"][0]["flac_path"], "audio_recordings/processed/2026/04/07/Northern_Cardinal/clip.flac")
+        self.assertEqual(payload["processed_files"][0]["detections"][0]["flac_path"], "audio_recordings/processed/2026/04/07/Northern_Cardinal/clip.flac")
 
     def test_birdnet_upload_response_requires_receipt_and_full_acceptance(self):
         parsed = birdnet_upload.parse_upload_response(
@@ -463,10 +450,7 @@ class ApiContractTests(unittest.TestCase):
                 "channels": 2,
                 "frames": 144000,
                 "started_at": "2026-04-07T12:00:00Z",
-                "processed_at": "2026-04-07T12:00:04Z",
-                "status": "done",
-                "error": None,
-                "output_dir": "2026/04/07",
+                "ended_at": "2026-04-07T12:00:03Z",
                 "deleted_source": False,
                 "detections": [
                     {
@@ -476,13 +460,16 @@ class ApiContractTests(unittest.TestCase):
                         "end_frame": 144000,
                         "start_sec": 0.0,
                         "end_sec": 3.0,
+                        "event_started_at": "2026-04-07T12:00:00Z",
+                        "event_ended_at": "2026-04-07T12:00:03Z",
                         "window_volume": 0.018,
                         "top_label": "Northern Cardinal (Cardinalis cardinalis)",
                         "top_score": 0.91,
                         "top_likely_score": 0.75,
+                        "flac_path": None,
+                        "deleted_at": None,
                     }
                 ],
-                "flac_runs": [],
             }
             for name in ("a", "b")
         ]
@@ -515,10 +502,7 @@ class ApiContractTests(unittest.TestCase):
                 "channels": 2,
                 "frames": 144000,
                 "started_at": "2026-04-07T12:00:00Z",
-                "processed_at": "2026-04-07T12:00:04Z",
-                "status": "done",
-                "error": None,
-                "output_dir": "2026/04/07",
+                "ended_at": "2026-04-07T12:00:03Z",
                 "deleted_source": False,
                 "detections": [
                     {
@@ -528,13 +512,16 @@ class ApiContractTests(unittest.TestCase):
                         "end_frame": 144000,
                         "start_sec": 0.0,
                         "end_sec": 3.0,
+                        "event_started_at": "2026-04-07T12:00:00Z",
+                        "event_ended_at": "2026-04-07T12:00:03Z",
                         "window_volume": 0.018,
                         "top_label": "Northern Cardinal (Cardinalis cardinalis)",
                         "top_score": 0.91,
                         "top_likely_score": 0.75,
+                        "flac_path": None,
+                        "deleted_at": None,
                     }
                 ],
-                "flac_runs": [],
             }
         ]
 

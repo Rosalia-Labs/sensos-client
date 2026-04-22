@@ -211,9 +211,9 @@ print_birdnet_db_summary() {
     [[ -f "${BIRDNET_DB}" ]] || return 0
     command -v sqlite3 >/dev/null 2>&1 || return 0
 
-    pending_uploads="$(sqlite3 "${BIRDNET_DB}" "select count(*) from processed_files where coalesce(server_copy,0)=0 and status='done';" 2>/dev/null || printf 'unknown')"
-    processed_ok="$(sqlite3 "${BIRDNET_DB}" "select count(*) from processed_files where status='done';" 2>/dev/null || printf 'unknown')"
-    processed_error="$(sqlite3 "${BIRDNET_DB}" "select count(*) from processed_files where status<>'done';" 2>/dev/null || printf 'unknown')"
+    pending_uploads="$(sqlite3 "${BIRDNET_DB}" "select count(*) from processed_files where coalesce(server_copy,0)=0;" 2>/dev/null || printf 'unknown')"
+    processed_ok="$(sqlite3 "${BIRDNET_DB}" "select count(*) from processed_files;" 2>/dev/null || printf 'unknown')"
+    processed_error="n/a"
     db_size="$(du -sh "${BIRDNET_DB}" 2>/dev/null | awk '{print $1}')"
 
     printf '\n'

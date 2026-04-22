@@ -86,23 +86,6 @@ def ensure_column(
         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
 
 
-def backfill_flac_run_columns(conn: sqlite3.Connection) -> None:
-    rows = conn.execute(
-        """
-        SELECT id, flac_path
-        FROM flac_runs
-        WHERE label_dir IS NULL
-        """
-    ).fetchall()
-    if not rows:
-        return
-
-    conn.executemany(
-        "UPDATE flac_runs SET label_dir = ? WHERE id = ?",
-        [(Path(flac_path).parent.as_posix(), row_id) for row_id, flac_path in rows],
-    )
-
-
 def connect_db() -> sqlite3.Connection:
     create_dir(str(STATE_ROOT), "sensos-admin", "sensos-data", 0o2775)
     conn = sqlite3.connect(DB_PATH)
@@ -110,38 +93,36 @@ def connect_db() -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS flac_runs (
+        CREATE TABLE IF NOT EXISTS detections (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source_path TEXT NOT NULL,
             channel_index INTEGER NOT NULL DEFAULT 0,
-            run_index INTEGER NOT NULL,
-            label TEXT NOT NULL,
-            label_dir TEXT,
+            window_index INTEGER NOT NULL,
             start_frame INTEGER NOT NULL,
             end_frame INTEGER NOT NULL,
             start_sec REAL NOT NULL,
             end_sec REAL NOT NULL,
             event_started_at TEXT,
             event_ended_at TEXT,
-            peak_score REAL NOT NULL,
-            peak_volume REAL,
-            peak_likely_score REAL,
-            flac_path TEXT NOT NULL,
+            window_volume REAL,
+            top_label TEXT NOT NULL,
+            top_score REAL NOT NULL,
+            top_likely_score REAL,
+            flac_path TEXT,
             deleted_at TEXT,
-            UNIQUE (source_path, channel_index, run_index)
+            UNIQUE (source_path, channel_index, window_index)
         )
         """
     )
-    ensure_column(conn, "flac_runs", "channel_index", "INTEGER NOT NULL DEFAULT 0")
-    ensure_column(conn, "flac_runs", "event_started_at", "TEXT")
-    ensure_column(conn, "flac_runs", "event_ended_at", "TEXT")
-    ensure_column(conn, "flac_runs", "label_dir", "TEXT")
-    ensure_column(conn, "flac_runs", "peak_volume", "REAL")
-    ensure_column(conn, "flac_runs", "peak_likely_score", "REAL")
-    ensure_column(conn, "flac_runs", "deleted_at", "TEXT")
-    backfill_flac_run_columns(conn)
+    ensure_column(conn, "detections", "channel_index", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "detections", "event_started_at", "TEXT")
+    ensure_column(conn, "detections", "event_ended_at", "TEXT")
+    ensure_column(conn, "detections", "window_volume", "REAL")
+    ensure_column(conn, "detections", "top_likely_score", "REAL")
+    ensure_column(conn, "detections", "flac_path", "TEXT")
+    ensure_column(conn, "detections", "deleted_at", "TEXT")
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_flac_runs_active_dir ON flac_runs (label_dir, deleted_at)"
+        "CREATE INDEX IF NOT EXISTS idx_detections_flac ON detections (deleted_at, flac_path)"
     )
     conn.commit()
     for path in (DB_PATH, DB_PATH.with_name(f"{DB_PATH.name}-wal"), DB_PATH.with_name(f"{DB_PATH.name}-shm")):
@@ -155,7 +136,7 @@ def connect_db() -> sqlite3.Connection:
 
 def mark_missing(conn: sqlite3.Connection, run_id: int) -> None:
     conn.execute(
-        "UPDATE flac_runs SET deleted_at = COALESCE(deleted_at, ?) WHERE id = ?",
+        "UPDATE detections SET deleted_at = COALESCE(deleted_at, ?) WHERE id = ?",
         (now_iso(), run_id),
     )
     conn.commit()
@@ -164,63 +145,70 @@ def mark_missing(conn: sqlite3.Connection, run_id: int) -> None:
 def choose_victim_file(conn: sqlite3.Connection) -> tuple[int, Path] | None:
     rows = conn.execute(
         """
-        WITH leaf_totals AS (
-            SELECT label_dir,
-                   COUNT(*) AS clip_count,
-                   SUM(end_sec - start_sec) AS total_duration_sec
-            FROM flac_runs
-            WHERE deleted_at IS NULL
-            GROUP BY label_dir
-        )
-        SELECT runs.id,
-               runs.flac_path,
-               runs.label_dir,
-               runs.peak_score,
-               runs.peak_volume,
-               (runs.end_sec - runs.start_sec) AS duration_sec,
-               leaf_totals.clip_count,
-               leaf_totals.total_duration_sec
-        FROM flac_runs AS runs
-        JOIN leaf_totals
-          ON leaf_totals.label_dir = runs.label_dir
-        WHERE runs.deleted_at IS NULL
-        ORDER BY leaf_totals.total_duration_sec DESC,
-                 leaf_totals.clip_count DESC,
-                 runs.label_dir ASC,
-                 runs.peak_score ASC,
-                 CASE WHEN runs.peak_volume IS NULL THEN 1 ELSE 0 END ASC,
-                 runs.peak_volume ASC,
-                 duration_sec DESC,
-                 runs.start_sec ASC,
-                 runs.id ASC
-        """,
+        SELECT id,
+               flac_path,
+               top_score,
+               window_volume,
+               start_sec,
+               end_sec
+        FROM detections
+        WHERE deleted_at IS NULL
+          AND flac_path IS NOT NULL
+        ORDER BY id
+        """
     ).fetchall()
     if not rows:
         trace("no BirdNET FLAC runs remain with undeleted files")
         return None
-    for (
-        run_id,
-        rel_path,
-        label_dir,
-        peak_score,
-        peak_volume,
-        duration_sec,
-        clip_count,
-        total_duration_sec,
-    ) in rows:
-        abs_path = AUDIO_ROOT / rel_path
-        if abs_path.exists():
-            trace(
-                "selected BirdNET file from fullest leaf: "
-                f"{abs_path} score={peak_score:.4f} "
-                f"volume={'na' if peak_volume is None else f'{peak_volume:.4f}'} "
-                f"duration={duration_sec:.3f}s "
-                f"label_dir={label_dir or 'na'} "
-                f"leaf_clip_count={clip_count} "
-                f"leaf_duration={total_duration_sec:.3f}s"
-            )
-            return run_id, abs_path
-        mark_missing(conn, run_id)
+
+    grouped: dict[str, dict[str, float | int | list[tuple[int, str, float, float | None, float]]]] = {}
+    for run_id, rel_path, top_score, window_volume, start_sec, end_sec in rows:
+        label_dir = str(Path(rel_path).parent)
+        duration_sec = float(end_sec) - float(start_sec)
+        bucket = grouped.setdefault(
+            label_dir,
+            {"clip_count": 0, "total_duration_sec": 0.0, "rows": []},
+        )
+        bucket["clip_count"] = int(bucket["clip_count"]) + 1
+        bucket["total_duration_sec"] = float(bucket["total_duration_sec"]) + duration_sec
+        bucket["rows"].append((run_id, rel_path, float(top_score), None if window_volume is None else float(window_volume), duration_sec))
+
+    ordered_dirs = sorted(
+        grouped.items(),
+        key=lambda item: (
+            -float(item[1]["total_duration_sec"]),
+            -int(item[1]["clip_count"]),
+            item[0],
+        ),
+    )
+    for label_dir, bucket in ordered_dirs:
+        candidate_rows = sorted(
+            bucket["rows"],
+            key=lambda row: (
+                row[2],
+                1 if row[3] is None else 0,
+                float("inf") if row[3] is None else row[3],
+                -row[4],
+                row[1],
+                row[0],
+            ),
+        )
+        clip_count = int(bucket["clip_count"])
+        total_duration_sec = float(bucket["total_duration_sec"])
+        for run_id, rel_path, peak_score, peak_volume, duration_sec in candidate_rows:
+            abs_path = AUDIO_ROOT / rel_path
+            if abs_path.exists():
+                trace(
+                    "selected BirdNET file from fullest leaf: "
+                    f"{abs_path} score={peak_score:.4f} "
+                    f"volume={'na' if peak_volume is None else f'{peak_volume:.4f}'} "
+                    f"duration={duration_sec:.3f}s "
+                    f"label_dir={label_dir or 'na'} "
+                    f"leaf_clip_count={clip_count} "
+                    f"leaf_duration={total_duration_sec:.3f}s"
+                )
+                return run_id, abs_path
+            mark_missing(conn, run_id)
     trace("all BirdNET thinning candidates were already missing on disk")
     return None
 
@@ -247,7 +235,7 @@ def thin_once(conn: sqlite3.Connection) -> bool:
     print(f"Thinning {victim_file}")
     victim_file.unlink(missing_ok=True)
     conn.execute(
-        "UPDATE flac_runs SET deleted_at = COALESCE(deleted_at, ?) WHERE id = ?",
+        "UPDATE detections SET deleted_at = COALESCE(deleted_at, ?) WHERE id = ?",
         (now_iso(), run_id),
     )
     conn.commit()
