@@ -324,12 +324,12 @@ clean_mountpoint_if_needed() {
     ensure_data_layout
 
     if [[ -n "$(sudo ls -A "${DATA_MOUNT}" 2>/dev/null)" ]]; then
-        if [[ "${yes}" == "true" ]] || ( is_interactive && confirm_yes_no "${DATA_MOUNT} is not empty. Remove its current contents before mounting?" false ); then
+        if [[ "${yes}" == "true" ]] || ( is_interactive && confirm_yes_no "${DATA_MOUNT} is not empty, and the new mount would hide its current contents. Remove the existing contents now so the mount can proceed?" false ); then
             echo "🧹 Removing existing contents from ${DATA_MOUNT}..."
             sudo find "${DATA_MOUNT}" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
             return 0
         fi
-        die "${DATA_MOUNT} is not empty. Clean it first, or rerun interactively and confirm removal."
+        die "${DATA_MOUNT} must be empty before mounting a separate data filesystem there. Clean it first, or rerun interactively and confirm removal."
     fi
 }
 
