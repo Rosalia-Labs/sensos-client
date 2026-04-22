@@ -20,6 +20,13 @@ packet-tracing start
 
 That creates a session under `/sensos/log/network_capture/sessions/<timestamp>` and starts [sensos-network-capture.service](../overlay/systemd/sensos-network-capture.service) manually for that session only. The service is not enabled during normal install.
 
+Privilege model:
+
+- use `packet-tracing` for normal operations
+- `packet-tracing start`, `status`, and `stop` handle `sudo` internally for service control
+- `report-network-capture` is read-only and does not self-elevate
+- saved reports and retained session data are kept writable for the shared admin/data group so `packet-tracing report --save`, `packet-tracing report --cleanup`, and `packet-tracing cleanup` do not require you to guess which helper needs `sudo`
+
 The capture keeps running until you stop it:
 
 ```sh

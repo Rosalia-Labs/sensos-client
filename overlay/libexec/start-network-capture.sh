@@ -3,6 +3,7 @@
 # Copyright (c) 2025 Rosalia Labs LLC
 
 set -euo pipefail
+umask 0002
 
 CAPTURE_ROOT="${SENSOS_NETWORK_CAPTURE_ROOT:-}"
 PCAP_DIR="${CAPTURE_ROOT}/pcap"

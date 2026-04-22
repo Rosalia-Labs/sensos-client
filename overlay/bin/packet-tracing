@@ -23,6 +23,7 @@ STATE_ROOT="${SENSOS_NETWORK_CAPTURE_STATE_ROOT:-/sensos/log/network_capture}"
 SESSIONS_ROOT="${STATE_ROOT}/sessions"
 ACTIVE_ENV_FILE="${STATE_ROOT}/active.env"
 SERVICE_NAME="sensos-network-capture.service"
+SENSOS_DATA_GROUP="${SENSOS_DATA_GROUP:-sensos-data}"
 
 usage() {
     cat <<EOF
@@ -42,6 +43,36 @@ require_cmd() {
         echo "ERROR: required command not found: $1" >&2
         exit 1
     }
+}
+
+have_group() {
+    getent group "${SENSOS_DATA_GROUP}" >/dev/null 2>&1
+}
+
+in_shared_group() {
+    id -nG 2>/dev/null | tr ' ' '\n' | grep -Fxq "${SENSOS_DATA_GROUP}"
+}
+
+set_shared_group_if_possible() {
+    local target="$1"
+
+    have_group || return 0
+    in_shared_group || return 0
+    chgrp "${SENSOS_DATA_GROUP}" "${target}" 2>/dev/null || true
+}
+
+set_shared_dir_policy() {
+    local target_dir="$1"
+
+    chmod 2775 "${target_dir}"
+    set_shared_group_if_possible "${target_dir}"
+}
+
+set_shared_file_policy() {
+    local target_file="$1"
+
+    chmod 664 "${target_file}"
+    set_shared_group_if_possible "${target_file}"
 }
 
 run_systemctl() {
@@ -65,6 +96,8 @@ service_state() {
 ensure_state_root() {
     install -d -m 2775 "${STATE_ROOT}"
     install -d -m 2775 "${SESSIONS_ROOT}"
+    set_shared_dir_policy "${STATE_ROOT}"
+    set_shared_dir_policy "${SESSIONS_ROOT}"
 }
 
 remove_if_empty_dir() {
@@ -124,6 +157,42 @@ SENSOS_NETWORK_CAPTURE_FILE_MB=${file_mb}
 SENSOS_NETWORK_CAPTURE_FILE_COUNT=${file_count}
 SENSOS_NETWORK_CAPTURE_BUFFER_KIB=${buffer_kib}
 EOF
+
+    set_shared_file_policy "${ACTIVE_ENV_FILE}"
+}
+
+normalize_session_permissions() {
+    local session_root="$1"
+
+    [[ -d "${session_root}" ]] || return 0
+    have_group || return 0
+
+    sudo chgrp -R "${SENSOS_DATA_GROUP}" "${session_root}"
+    sudo chmod -R g+rwX "${session_root}"
+    sudo find "${session_root}" -type d -exec chmod 2775 {} +
+}
+
+session_paths_writable_for_mutation() {
+    local session_root="$1"
+
+    [[ -w "${session_root}" ]] || return 1
+    [[ ! -d "${session_root}/pcap" || -w "${session_root}/pcap" ]] || return 1
+    [[ ! -d "${session_root}/reports" || -w "${session_root}/reports" ]] || return 1
+}
+
+ensure_session_mutable() {
+    local session_root="$1"
+
+    if session_paths_writable_for_mutation "${session_root}"; then
+        return 0
+    fi
+
+    normalize_session_permissions "${session_root}"
+
+    if ! session_paths_writable_for_mutation "${session_root}"; then
+        echo "ERROR: session data under ${session_root} is not writable after permission repair." >&2
+        exit 1
+    fi
 }
 
 cmd_start() {
@@ -156,6 +225,9 @@ cmd_start() {
     install -d -m 2775 "${session_root}"
     install -d -m 2775 "${session_root}/pcap"
     install -d -m 2775 "${session_root}/reports"
+    set_shared_dir_policy "${session_root}"
+    set_shared_dir_policy "${session_root}/pcap"
+    set_shared_dir_policy "${session_root}/reports"
 
     write_active_env "${session_root}" "${interface}" "${snaplen}" "${file_mb}" "${file_count}" "${buffer_kib}"
 
@@ -205,8 +277,16 @@ cmd_status() {
 }
 
 cmd_stop() {
+    local session_root=""
+
     require_cmd systemctl
+    if [[ -f "${ACTIVE_ENV_FILE}" ]]; then
+        session_root="$(active_session_root 2>/dev/null || true)"
+    fi
     run_systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    if [[ -n "${session_root}" ]]; then
+        normalize_session_permissions "${session_root}"
+    fi
     echo "Stopped ${SERVICE_NAME}"
 }
 
@@ -264,12 +344,16 @@ cmd_report() {
     cat "${report_text_tmp}"
 
     if [[ "${save}" == "true" ]]; then
+        ensure_session_mutable "${session_root}"
         install -d -m 2775 "${session_root}/reports"
+        set_shared_dir_policy "${session_root}/reports"
         timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
         report_text_path="${session_root}/reports/report-${timestamp}.txt"
         report_json_path="${session_root}/reports/report-${timestamp}.json"
         mv "${report_text_tmp}" "${report_text_path}"
         mv "${report_json_tmp}" "${report_json_path}"
+        set_shared_file_policy "${report_text_path}"
+        set_shared_file_policy "${report_json_path}"
         echo
         echo "Saved reports:"
         echo "  ${report_text_path}"
@@ -279,6 +363,7 @@ cmd_report() {
     fi
 
     if [[ "${cleanup}" == "true" ]]; then
+        ensure_session_mutable "${session_root}"
         rm -rf "${session_root}/pcap"
         echo "Removed raw capture data under ${session_root}/pcap"
     fi
@@ -294,8 +379,11 @@ cmd_cleanup() {
     parse_switches "$(basename "$0") cleanup" "$@"
 
     if [[ "${all}" == "true" ]]; then
+        ensure_state_root
+        normalize_session_permissions "${SESSIONS_ROOT}"
         rm -rf "${SESSIONS_ROOT}"
         install -d -m 2775 "${SESSIONS_ROOT}"
+        set_shared_dir_policy "${SESSIONS_ROOT}"
         echo "Cleaned all tracing sessions under ${SESSIONS_ROOT}"
         echo "  removed=all-session-data"
         return 0
@@ -309,6 +397,7 @@ cmd_cleanup() {
         fi
     fi
 
+    ensure_session_mutable "${session_root}"
     rm -rf "${session_root}/pcap"
     if [[ "${remove_reports}" == "true" ]]; then
         rm -rf "${session_root}/reports"

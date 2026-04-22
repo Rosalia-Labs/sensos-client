@@ -855,8 +855,10 @@ Behavior:
 - stores temporary capture sessions under `/sensos/log/network_capture/sessions`
 - uses bounded rotating `pcap` files
 - keeps the active capture running until `packet-tracing stop`
+- owns the privilege boundary for tracing; start/status/stop use `sudo` internally for service control, while report generation stays read-only
 - prints reports to stdout by default
 - only writes `report-*.txt` and `report-*.json` files when `--save` is used
+- keeps session directories and saved reports writable for the shared admin/data group so post-capture report saving and cleanup do not need manual `sudo`
 - is intended for debugging, not permanent collection
 
 ### `debug-i2c`
@@ -892,6 +894,7 @@ report-network-capture --capture-root /sensos/log/network_capture/sessions/<time
 Behavior:
 
 - summarizes traffic by direction, protocol, remote IP, local port, remote port, and full flow tuple
+- is read-only and does not call `sudo`
 - useful when you need to identify persistent talkers or unexpected inbound sources
 
 ## Recommended Bring-Up Example
