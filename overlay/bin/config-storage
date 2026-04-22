@@ -24,6 +24,7 @@ SENSOS_ADMIN_HELPER_LIB="${OVERLAY_ROOT}/libexec/ensure-sensos-admin.sh"
 PARTED_BIN=""
 PARTPROBE_BIN=""
 MKFS_EXT4_BIN=""
+PARTITION_ALREADY_MOUNTED_AT_DATA=0
 
 [[ -f "${PARSE_SWITCHES_LIB}" ]] || {
     echo "❌ Missing parse-switches library at ${PARSE_SWITCHES_LIB}"
@@ -321,6 +322,11 @@ ensure_partition_has_filesystem() {
 }
 
 clean_mountpoint_if_needed() {
+    if [[ "${PARTITION_ALREADY_MOUNTED_AT_DATA}" == "1" ]]; then
+        echo "ℹ️  ${PARTITION} is already mounted at ${DATA_MOUNT}; skipping mountpoint cleanup."
+        return 0
+    fi
+
     ensure_data_layout
 
     if [[ -n "$(sudo ls -A "${DATA_MOUNT}" 2>/dev/null)" ]]; then
@@ -333,7 +339,32 @@ clean_mountpoint_if_needed() {
     fi
 }
 
+mount_source_for_path() {
+    local target_path="$1"
+    findmnt -rn -o SOURCE --target "${target_path}" 2>/dev/null || true
+}
+
+resolve_existing_data_mount_state() {
+    local current_source=""
+    current_source="$(mount_source_for_path "${DATA_MOUNT}")"
+
+    PARTITION_ALREADY_MOUNTED_AT_DATA=0
+    [[ -n "${current_source}" ]] || return 0
+
+    if [[ "${current_source}" == "${PARTITION}" ]]; then
+        PARTITION_ALREADY_MOUNTED_AT_DATA=1
+        return 0
+    fi
+
+    die "${DATA_MOUNT} is currently mounted from ${current_source}, not ${PARTITION}. Unmount or reconcile that mount first."
+}
+
 mount_partition() {
+    if [[ "${PARTITION_ALREADY_MOUNTED_AT_DATA}" == "1" ]]; then
+        echo "✅ Mount already in place: ${PARTITION} → ${DATA_MOUNT}"
+        return 0
+    fi
+
     echo "🔧 Mounting ${PARTITION} at ${DATA_MOUNT}..."
     sudo mount "${PARTITION}" "${DATA_MOUNT}"
     echo "✅ Mount complete: ${PARTITION} → ${DATA_MOUNT}"
@@ -428,6 +459,7 @@ main() {
 
     select_partition
     ensure_partition_has_filesystem
+    resolve_existing_data_mount_state
     clean_mountpoint_if_needed
     mount_partition
     persist_mount_if_requested

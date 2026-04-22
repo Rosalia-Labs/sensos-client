@@ -34,11 +34,36 @@ warn_clock_and_location() {
     local clock_ok=0
     local location_ok=0
     local location_file="${CLIENT_ROOT}/etc/location.conf"
+    local epoch_now=0
+    local sane_epoch_floor=1735689600 # 2025-01-01T00:00:00Z
 
     if command -v timedatectl >/dev/null 2>&1; then
         if timedatectl show -p SystemClockSynchronized --value 2>/dev/null | grep -qi '^yes$'; then
             clock_ok=1
         elif timedatectl show -p NTPSynchronized --value 2>/dev/null | grep -qi '^yes$'; then
+            clock_ok=1
+        elif [[ -e /run/systemd/timesync/synchronized ]]; then
+            clock_ok=1
+        fi
+    fi
+
+    if [[ "${clock_ok}" -eq 0 ]] && command -v chronyc >/dev/null 2>&1; then
+        if chronyc tracking 2>/dev/null | grep -qi 'Leap status[[:space:]]*:[[:space:]]*Normal'; then
+            clock_ok=1
+        fi
+    fi
+
+    if [[ "${clock_ok}" -eq 0 ]] && command -v ntpq >/dev/null 2>&1; then
+        if ntpq -pn 2>/dev/null | grep -Eq '^[*o]'; then
+            clock_ok=1
+        fi
+    fi
+
+    # Fallback: if wall clock is at least sane for the deployed software era,
+    # avoid noisy false warnings when sync status probes are unavailable.
+    if [[ "${clock_ok}" -eq 0 ]]; then
+        epoch_now="$(date -u +%s 2>/dev/null || echo 0)"
+        if [[ "${epoch_now}" -ge "${sane_epoch_floor}" ]]; then
             clock_ok=1
         fi
     fi

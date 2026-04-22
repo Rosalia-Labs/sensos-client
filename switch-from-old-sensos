@@ -37,12 +37,30 @@ LEGACY_UNIT_NAMES=(
     thin-birdnet-flac.service
 )
 
+LEGACY_FILE_PATHS=(
+    "${DEPLOY_ROOT}/python/requirements.txt"
+    "${DEPLOY_ROOT}/etc/sensos-ports.nft"
+    "${DEPLOY_ROOT}/init.d/.gitignore"
+    "${DEPLOY_ROOT}/birdnet/.gitignore"
+    "${DEPLOY_ROOT}/keys/.gitignore"
+    "${DEPLOY_ROOT}/log/.gitignore"
+    "${DEPLOY_ROOT}/data/audio_recordings/.gitignore"
+    "${DEPLOY_ROOT}/data/birdnet/.gitignore"
+    "${DEPLOY_ROOT}/data/database/.gitignore"
+    "${DEPLOY_ROOT}/data/microenv/.gitignore"
+)
+
+LEGACY_DIRS_REMOVE_IF_EMPTY=(
+    "${DEPLOY_ROOT}/init.d"
+    "${DEPLOY_ROOT}/birdnet"
+)
+
 log() {
-    printf '[switch-from-sensos] %s\n' "$*"
+    printf '[switch-from-old-sensos] %s\n' "$*"
 }
 
 die() {
-    printf '[switch-from-sensos] ERROR: %s\n' "$*" >&2
+    printf '[switch-from-old-sensos] ERROR: %s\n' "$*" >&2
     exit 1
 }
 
@@ -225,7 +243,7 @@ remove_legacy_unit_links() {
             continue
         fi
 
-        if [[ "$(readlink "${unit_link}" || true)" == /sensos/services/* ]]; then
+        if [[ "$(readlink "${unit_link}" || true)" == "${DEPLOY_ROOT}/services/"* ]]; then
             rm -f "${unit_link}"
             log "removed legacy systemd unit link ${unit_link}"
         fi
@@ -235,7 +253,7 @@ remove_legacy_unit_links() {
 remove_legacy_overlay_dirs() {
     local legacy_dir
 
-    for legacy_dir in /sensos/scripts /sensos/service_scripts /sensos/lib; do
+    for legacy_dir in "${DEPLOY_ROOT}/scripts" "${DEPLOY_ROOT}/service_scripts" "${DEPLOY_ROOT}/lib"; do
         if [[ -d "${legacy_dir}" ]]; then
             rm -rf "${legacy_dir}"
             log "removed legacy overlay directory ${legacy_dir}"
@@ -243,30 +261,68 @@ remove_legacy_overlay_dirs() {
     done
 
     if [[ "${PRESERVE_AUTO_HOTSPOT}" == "1" ]]; then
-        if [[ -f /sensos/services/auto-hotspot.service ]]; then
-            log "preserving /sensos/services/auto-hotspot.service to keep WLAN ingress path stable"
+        if [[ -f "${DEPLOY_ROOT}/services/auto-hotspot.service" ]]; then
+            log "preserving ${DEPLOY_ROOT}/services/auto-hotspot.service to keep WLAN ingress path stable"
             return
         fi
     fi
 
-    if [[ -d /sensos/services ]]; then
-        rm -rf /sensos/services
-        log "removed legacy overlay directory /sensos/services"
+    if [[ -d "${DEPLOY_ROOT}/services" ]]; then
+        rm -rf "${DEPLOY_ROOT}/services"
+        log "removed legacy overlay directory ${DEPLOY_ROOT}/services"
     fi
 }
 
 remove_legacy_host_symlinks() {
-    remove_symlinks_by_prefix /usr/local/bin /sensos/scripts/ /sensos/service_scripts/
+    remove_symlinks_by_prefix /usr/local/bin "${DEPLOY_ROOT}/scripts/" "${DEPLOY_ROOT}/service_scripts/"
 
-    if [[ -L /etc/nftables.conf && "$(readlink /etc/nftables.conf || true)" == /sensos/etc/nftables.conf ]]; then
+    if [[ -L /etc/nftables.conf && "$(readlink /etc/nftables.conf || true)" == "${DEPLOY_ROOT}/etc/nftables.conf" ]]; then
         rm -f /etc/nftables.conf
         log "removed legacy nftables symlink /etc/nftables.conf"
     fi
 
-    if [[ -L /etc/chrony/chrony.conf && "$(readlink /etc/chrony/chrony.conf || true)" == /sensos/etc/chrony.conf ]]; then
+    if [[ -L /etc/chrony/chrony.conf && "$(readlink /etc/chrony/chrony.conf || true)" == "${DEPLOY_ROOT}/etc/chrony.conf" ]]; then
         rm -f /etc/chrony/chrony.conf
         log "removed legacy chrony symlink /etc/chrony/chrony.conf"
     fi
+}
+
+remove_legacy_files() {
+    local legacy_path
+
+    for legacy_path in "${LEGACY_FILE_PATHS[@]}"; do
+        if [[ -e "${legacy_path}" || -L "${legacy_path}" ]]; then
+            rm -f "${legacy_path}"
+            log "removed legacy file ${legacy_path}"
+        fi
+    done
+}
+
+remove_dir_if_effectively_empty() {
+    local dir_path="$1"
+    local found_non_marker=0
+    local entry_name
+
+    [[ -d "${dir_path}" ]] || return 0
+
+    while IFS= read -r entry_name; do
+        [[ "${entry_name}" == ".gitignore" ]] && continue
+        found_non_marker=1
+        break
+    done < <(find "${dir_path}" -mindepth 1 -maxdepth 1 -printf '%f\n')
+
+    if [[ "${found_non_marker}" -eq 0 ]]; then
+        rm -rf "${dir_path}"
+        log "removed empty legacy directory ${dir_path}"
+    fi
+}
+
+remove_empty_legacy_dirs() {
+    local legacy_dir
+
+    for legacy_dir in "${LEGACY_DIRS_REMOVE_IF_EMPTY[@]}"; do
+        remove_dir_if_effectively_empty "${legacy_dir}"
+    done
 }
 
 run_internal_root_cleanup() {
@@ -276,6 +332,8 @@ run_internal_root_cleanup() {
     remove_legacy_unit_links
     remove_legacy_host_symlinks
     remove_legacy_overlay_dirs
+    remove_legacy_files
+    remove_empty_legacy_dirs
 
     if command -v systemctl >/dev/null 2>&1; then
         systemctl daemon-reload || true
