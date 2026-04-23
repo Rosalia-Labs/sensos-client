@@ -98,6 +98,7 @@ def connect_db() -> sqlite3.Connection:
             source_path TEXT NOT NULL,
             channel_index INTEGER NOT NULL DEFAULT 0,
             window_index INTEGER NOT NULL,
+            max_score_window_start_frame INTEGER NOT NULL,
             event_started_at TEXT,
             event_ended_at TEXT,
             window_volume REAL,
@@ -105,17 +106,20 @@ def connect_db() -> sqlite3.Connection:
             score REAL NOT NULL,
             likely_score REAL,
             clip_path TEXT,
+            clip_size_bytes INTEGER,
             deleted_at TEXT,
             UNIQUE (source_path, channel_index, window_index)
         )
         """
     )
     ensure_column(conn, "detections", "channel_index", "INTEGER NOT NULL DEFAULT 0")
+    ensure_column(conn, "detections", "max_score_window_start_frame", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "detections", "event_started_at", "TEXT")
     ensure_column(conn, "detections", "event_ended_at", "TEXT")
     ensure_column(conn, "detections", "window_volume", "REAL")
     ensure_column(conn, "detections", "likely_score", "REAL")
     ensure_column(conn, "detections", "clip_path", "TEXT")
+    ensure_column(conn, "detections", "clip_size_bytes", "INTEGER")
     ensure_column(conn, "detections", "deleted_at", "TEXT")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_detections_clip ON detections (deleted_at, clip_path)"
@@ -145,11 +149,7 @@ def choose_victim_file(conn: sqlite3.Connection) -> tuple[int, Path] | None:
                clip_path,
                score,
                window_volume,
-               CASE
-                   WHEN event_started_at IS NOT NULL AND event_ended_at IS NOT NULL
-                   THEN (julianday(event_ended_at) - julianday(event_started_at)) * 86400.0
-                   ELSE 0.0
-               END AS duration_sec
+               clip_size_bytes
         FROM detections
         WHERE deleted_at IS NULL
           AND clip_path IS NOT NULL
@@ -160,21 +160,44 @@ def choose_victim_file(conn: sqlite3.Connection) -> tuple[int, Path] | None:
         trace("no BirdNET clips remain with undeleted files")
         return None
 
-    grouped: dict[str, dict[str, float | int | list[tuple[int, str, float, float | None, float]]]] = {}
-    for run_id, rel_path, score, window_volume, duration_sec in rows:
+    grouped: dict[str, dict[str, float | int | list[tuple[int, str, float, float | None, int]]]] = {}
+    updated_size_cache = False
+    for run_id, rel_path, score, window_volume, clip_size_bytes in rows:
+        abs_path = AUDIO_ROOT / rel_path
+        cached_size = (
+            int(clip_size_bytes)
+            if clip_size_bytes is not None and int(clip_size_bytes) >= 0
+            else None
+        )
+        size_bytes = cached_size
+        if size_bytes is None:
+            try:
+                size_bytes = int(abs_path.stat().st_size)
+                conn.execute(
+                    "UPDATE detections SET clip_size_bytes = ? WHERE id = ?",
+                    (size_bytes, run_id),
+                )
+                updated_size_cache = True
+            except FileNotFoundError:
+                mark_missing(conn, run_id)
+                continue
+        assert size_bytes is not None
         label_dir = str(Path(rel_path).parent)
         bucket = grouped.setdefault(
             label_dir,
-            {"clip_count": 0, "total_duration_sec": 0.0, "rows": []},
+            {"clip_count": 0, "total_size_bytes": 0, "rows": []},
         )
         bucket["clip_count"] = int(bucket["clip_count"]) + 1
-        bucket["total_duration_sec"] = float(bucket["total_duration_sec"]) + duration_sec
-        bucket["rows"].append((run_id, rel_path, float(score), None if window_volume is None else float(window_volume), duration_sec))
+        bucket["total_size_bytes"] = int(bucket["total_size_bytes"]) + size_bytes
+        bucket["rows"].append((run_id, rel_path, float(score), None if window_volume is None else float(window_volume), size_bytes))
+
+    if updated_size_cache:
+        conn.commit()
 
     ordered_dirs = sorted(
         grouped.items(),
         key=lambda item: (
-            -float(item[1]["total_duration_sec"]),
+            -int(item[1]["total_size_bytes"]),
             -int(item[1]["clip_count"]),
             item[0],
         ),
@@ -192,18 +215,18 @@ def choose_victim_file(conn: sqlite3.Connection) -> tuple[int, Path] | None:
             ),
         )
         clip_count = int(bucket["clip_count"])
-        total_duration_sec = float(bucket["total_duration_sec"])
-        for run_id, rel_path, peak_score, peak_volume, duration_sec in candidate_rows:
+        total_size_bytes = int(bucket["total_size_bytes"])
+        for run_id, rel_path, peak_score, peak_volume, size_bytes in candidate_rows:
             abs_path = AUDIO_ROOT / rel_path
             if abs_path.exists():
                 trace(
                     "selected BirdNET file from fullest leaf: "
                     f"{abs_path} score={peak_score:.4f} "
                     f"volume={'na' if peak_volume is None else f'{peak_volume:.4f}'} "
-                    f"duration={duration_sec:.3f}s "
+                    f"size={size_bytes}B "
                     f"label_dir={label_dir or 'na'} "
                     f"leaf_clip_count={clip_count} "
-                    f"leaf_duration={total_duration_sec:.3f}s"
+                    f"leaf_size={total_size_bytes}B"
                 )
                 return run_id, abs_path
             mark_missing(conn, run_id)
