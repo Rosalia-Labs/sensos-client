@@ -43,8 +43,11 @@ RETIRED_UNITS=(
 
 OPTIONAL_AUDIO_UNITS=(
     sensos-record-audio.service
-    sensos-compress-audio.service
     sensos-thin-data.service
+)
+
+ALWAYS_ON_SENSOS_UNITS=(
+    sensos-compress-audio.service
 )
 
 RESTART_SAFE_SENSOS_UNITS=(
@@ -146,6 +149,33 @@ retire_old_units() {
     done
 }
 
+ensure_enabled_sensos_unit_if_present() {
+    local unit_name="$1"
+
+    if ! systemctl list-unit-files --type=service --type=timer 2>/dev/null | awk '{print $1}' | grep -Fxq "${unit_name}"; then
+        log "host unit not present; skipped ${unit_name}"
+        return 0
+    fi
+
+    systemctl enable "${unit_name}"
+    if systemctl is-active --quiet "${unit_name}"; then
+        systemctl restart "${unit_name}"
+        log "restarted enabled SensOS unit ${unit_name}"
+    else
+        systemctl start "${unit_name}"
+        log "started enabled SensOS unit ${unit_name}"
+    fi
+}
+
+reconcile_always_on_sensos_units() {
+    local unit_name
+
+    log "ensuring always-on SensOS worker units are enabled and running"
+    for unit_name in "${ALWAYS_ON_SENSOS_UNITS[@]}"; do
+        ensure_enabled_sensos_unit_if_present "${unit_name}"
+    done
+}
+
 reconcile_optional_audio_units() {
     local unit_name
 
@@ -213,10 +243,12 @@ main() {
         for unit_name in "${HOST_BASELINE_UNITS[@]}"; do
             describe_host_unit_state "${unit_name}"
         done
+        reconcile_always_on_sensos_units
         reconcile_optional_audio_units
         reconcile_restart_safe_sensos_units
     else
         log "fresh install detected; reconciling optional audio unit state"
+        reconcile_always_on_sensos_units
         reconcile_optional_audio_units
         for unit_name in "${HOST_BASELINE_UNITS[@]}"; do
             enable_host_unit_if_present "${unit_name}"
