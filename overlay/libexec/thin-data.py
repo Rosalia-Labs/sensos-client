@@ -78,14 +78,6 @@ def free_percent(path: Path) -> float:
     return (usage.free / usage.total) * 100.0
 
 
-def ensure_column(
-    conn: sqlite3.Connection, table_name: str, column_name: str, column_type: str
-) -> None:
-    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table_name})")}
-    if column_name not in columns:
-        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
-
-
 def connect_db() -> sqlite3.Connection:
     create_dir(str(STATE_ROOT), "sensos-admin", "sensos-data", 0o2775)
     conn = sqlite3.connect(DB_PATH)
@@ -98,13 +90,13 @@ def connect_db() -> sqlite3.Connection:
             source_path TEXT NOT NULL,
             channel_index INTEGER NOT NULL DEFAULT 0,
             window_index INTEGER NOT NULL,
-            max_score_window_start_frame INTEGER NOT NULL,
-            event_started_at TEXT,
-            event_ended_at TEXT,
-            window_volume REAL,
+            max_score_start_frame INTEGER NOT NULL,
             label TEXT NOT NULL,
             score REAL NOT NULL,
             likely_score REAL,
+            volume REAL,
+            clip_start_time TEXT NOT NULL,
+            clip_end_time TEXT NOT NULL,
             clip_path TEXT,
             clip_size_bytes INTEGER,
             deleted_at TEXT,
@@ -112,15 +104,6 @@ def connect_db() -> sqlite3.Connection:
         )
         """
     )
-    ensure_column(conn, "detections", "channel_index", "INTEGER NOT NULL DEFAULT 0")
-    ensure_column(conn, "detections", "max_score_window_start_frame", "INTEGER NOT NULL DEFAULT 0")
-    ensure_column(conn, "detections", "event_started_at", "TEXT")
-    ensure_column(conn, "detections", "event_ended_at", "TEXT")
-    ensure_column(conn, "detections", "window_volume", "REAL")
-    ensure_column(conn, "detections", "likely_score", "REAL")
-    ensure_column(conn, "detections", "clip_path", "TEXT")
-    ensure_column(conn, "detections", "clip_size_bytes", "INTEGER")
-    ensure_column(conn, "detections", "deleted_at", "TEXT")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_detections_clip ON detections (deleted_at, clip_path)"
     )
@@ -148,7 +131,7 @@ def choose_victim_file(conn: sqlite3.Connection) -> tuple[int, Path] | None:
         SELECT id,
                clip_path,
                score,
-               window_volume,
+               volume,
                clip_size_bytes
         FROM detections
         WHERE deleted_at IS NULL
@@ -162,7 +145,7 @@ def choose_victim_file(conn: sqlite3.Connection) -> tuple[int, Path] | None:
 
     grouped: dict[str, dict[str, float | int | list[tuple[int, str, float, float | None, int]]]] = {}
     updated_size_cache = False
-    for run_id, rel_path, score, window_volume, clip_size_bytes in rows:
+    for run_id, rel_path, score, volume, clip_size_bytes in rows:
         abs_path = AUDIO_ROOT / rel_path
         cached_size = (
             int(clip_size_bytes)
@@ -189,7 +172,7 @@ def choose_victim_file(conn: sqlite3.Connection) -> tuple[int, Path] | None:
         )
         bucket["clip_count"] = int(bucket["clip_count"]) + 1
         bucket["total_size_bytes"] = int(bucket["total_size_bytes"]) + size_bytes
-        bucket["rows"].append((run_id, rel_path, float(score), None if window_volume is None else float(window_volume), size_bytes))
+        bucket["rows"].append((run_id, rel_path, float(score), None if volume is None else float(volume), size_bytes))
 
     if updated_size_cache:
         conn.commit()

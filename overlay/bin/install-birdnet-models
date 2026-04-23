@@ -7,6 +7,8 @@ import os
 import shutil
 import sys
 import tempfile
+import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -39,12 +41,90 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Replace an existing BirdNET_v2.4_tflite directory if present.",
     )
+    parser.add_argument(
+        "--timeout-sec",
+        type=float,
+        default=60.0,
+        help="Per-request timeout in seconds (default: 60).",
+    )
+    parser.add_argument(
+        "--retries",
+        type=int,
+        default=5,
+        help="Number of download retries after the first attempt (default: 5).",
+    )
+    parser.add_argument(
+        "--retry-delay-sec",
+        type=float,
+        default=3.0,
+        help="Delay between retries in seconds (default: 3).",
+    )
     return parser.parse_args()
 
 
-def download_zip(url: str, target: Path) -> None:
-    with urllib.request.urlopen(url) as response, target.open("wb") as out_file:
-        shutil.copyfileobj(response, out_file)
+def _print_progress(downloaded: int, total: int | None) -> None:
+    if total and total > 0:
+        percent = (downloaded / total) * 100.0
+        message = f"\rDownloaded {downloaded:,}/{total:,} bytes ({percent:5.1f}%)"
+    else:
+        message = f"\rDownloaded {downloaded:,} bytes"
+    print(message, end="", flush=True)
+
+
+def _download_zip_once(url: str, target: Path, timeout_sec: float) -> tuple[int, str]:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "sensos-install-birdnet-models/1.0"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout_sec) as response, target.open("wb") as out_file:
+        content_length_header = response.headers.get("Content-Length")
+        content_type = response.headers.get("Content-Type", "")
+        total_bytes = int(content_length_header) if content_length_header and content_length_header.isdigit() else None
+        downloaded = 0
+        while True:
+            chunk = response.read(1024 * 1024)
+            if not chunk:
+                break
+            out_file.write(chunk)
+            downloaded += len(chunk)
+            _print_progress(downloaded, total_bytes)
+        print("")
+    return downloaded, content_type
+
+
+def download_zip(
+    url: str,
+    target: Path,
+    *,
+    timeout_sec: float,
+    retries: int,
+    retry_delay_sec: float,
+) -> None:
+    attempts = retries + 1
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            size, content_type = _download_zip_once(url, target, timeout_sec)
+            if size <= 0:
+                raise RuntimeError("download produced an empty file")
+            if not zipfile.is_zipfile(target):
+                snippet = target.read_text(encoding="utf-8", errors="replace")[:200].replace("\n", " ")
+                raise RuntimeError(
+                    "downloaded content is not a ZIP file "
+                    f"(content-type={content_type!r}, first-bytes={snippet!r})"
+                )
+            return
+        except (urllib.error.URLError, TimeoutError, OSError, RuntimeError) as exc:
+            last_error = exc
+            if attempt >= attempts:
+                break
+            print(
+                f"Download attempt {attempt}/{attempts} failed: {exc}. "
+                f"Retrying in {retry_delay_sec:.1f}s...",
+                file=sys.stderr,
+            )
+            time.sleep(retry_delay_sec)
+    raise SystemExit(f"ERROR: failed to download model archive after {attempts} attempts: {last_error}")
 
 
 def extract_zip(zip_path: Path, destination: Path) -> Path:
@@ -96,7 +176,13 @@ def main() -> int:
         extract_root.mkdir(parents=True, exist_ok=True)
 
         print(f"Downloading BirdNET models from {args.url}")
-        download_zip(args.url, zip_path)
+        download_zip(
+            args.url,
+            zip_path,
+            timeout_sec=args.timeout_sec,
+            retries=max(0, args.retries),
+            retry_delay_sec=max(0.0, args.retry_delay_sec),
+        )
 
         print("Extracting model archive")
         extracted = extract_zip(zip_path, extract_root)

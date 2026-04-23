@@ -26,21 +26,6 @@ def connect_db() -> sqlite3.Connection:
     return conn
 
 
-def ensure_column(
-    conn: sqlite3.Connection,
-    table_name: str,
-    column_name: str,
-    column_sql: str,
-) -> None:
-    columns = {
-        row["name"]
-        for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-    }
-    if column_name in columns:
-        return
-    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
-
-
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -49,13 +34,13 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             source_path TEXT NOT NULL,
             channel_index INTEGER NOT NULL DEFAULT 0,
             window_index INTEGER NOT NULL,
-            max_score_window_start_frame INTEGER NOT NULL,
-            event_started_at TEXT,
-            event_ended_at TEXT,
-            window_volume REAL,
+            max_score_start_frame INTEGER NOT NULL,
             label TEXT NOT NULL,
             score REAL NOT NULL,
             likely_score REAL,
+            volume REAL,
+            clip_start_time TEXT NOT NULL,
+            clip_end_time TEXT NOT NULL,
             clip_path TEXT,
             clip_size_bytes INTEGER,
             deleted_at TEXT,
@@ -63,20 +48,11 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    ensure_column(conn, "detections", "channel_index", "INTEGER NOT NULL DEFAULT 0")
-    ensure_column(conn, "detections", "max_score_window_start_frame", "INTEGER NOT NULL DEFAULT 0")
-    ensure_column(conn, "detections", "event_started_at", "TEXT")
-    ensure_column(conn, "detections", "event_ended_at", "TEXT")
-    ensure_column(conn, "detections", "window_volume", "REAL")
-    ensure_column(conn, "detections", "likely_score", "REAL")
-    ensure_column(conn, "detections", "clip_path", "TEXT")
-    ensure_column(conn, "detections", "clip_size_bytes", "INTEGER")
-    ensure_column(conn, "detections", "deleted_at", "TEXT")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_detections_source ON detections (source_path, window_index)"
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_detections_event ON detections (event_started_at, channel_index)"
+        "CREATE INDEX IF NOT EXISTS idx_detections_clip_time ON detections (clip_start_time, channel_index)"
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_detections_clip ON detections (deleted_at, clip_path)"
@@ -93,7 +69,7 @@ def fetch_detections_for_sources(
     placeholders = ",".join("?" for _ in source_paths)
     rows = conn.execute(
         f"""
-        SELECT source_path, channel_index, window_index, max_score_window_start_frame, window_volume, label, score, likely_score, event_started_at, event_ended_at, clip_path, clip_size_bytes, deleted_at
+        SELECT source_path, channel_index, window_index, max_score_start_frame, label, score, likely_score, volume, clip_start_time, clip_end_time, clip_path, clip_size_bytes, deleted_at
         FROM detections
         WHERE source_path IN ({placeholders})
         ORDER BY source_path, channel_index, window_index

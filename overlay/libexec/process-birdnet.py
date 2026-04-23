@@ -136,8 +136,8 @@ class Detection:
     window_index: int
     start_frame: int
     end_frame: int
-    max_score_window_start_frame: int
-    window_volume: float
+    max_score_start_frame: int
+    volume: float
     label: str
     score: float
     likely_score: float | None
@@ -175,7 +175,7 @@ def scale_by_max_value(audio: np.ndarray) -> np.ndarray:
     return (audio / scale).astype(np.float32)
 
 
-def normalized_window_volume(audio: np.ndarray) -> float:
+def normalized_volume(audio: np.ndarray) -> float:
     if audio.size == 0:
         return 0.0
     normalized = audio.astype(np.float64) / float(np.iinfo(np.int32).max)
@@ -242,13 +242,13 @@ def connect_db() -> sqlite3.Connection:
             source_path TEXT NOT NULL,
             channel_index INTEGER NOT NULL DEFAULT 0,
             window_index INTEGER NOT NULL,
-            max_score_window_start_frame INTEGER NOT NULL,
-            event_started_at TEXT,
-            event_ended_at TEXT,
-            window_volume REAL,
+            max_score_start_frame INTEGER NOT NULL,
             label TEXT NOT NULL,
             score REAL NOT NULL,
             likely_score REAL,
+            volume REAL,
+            clip_start_time TEXT NOT NULL,
+            clip_end_time TEXT NOT NULL,
             clip_path TEXT,
             clip_size_bytes INTEGER,
             deleted_at TEXT,
@@ -256,21 +256,11 @@ def connect_db() -> sqlite3.Connection:
         )
         """
     )
-    ensure_column(conn, "detections", "channel_index", "INTEGER NOT NULL DEFAULT 0")
-    ensure_column(conn, "detections", "max_score_window_start_frame", "INTEGER NOT NULL DEFAULT 0")
-    ensure_column(conn, "detections", "event_started_at", "TEXT")
-    ensure_column(conn, "detections", "event_ended_at", "TEXT")
-    ensure_column(conn, "detections", "window_volume", "REAL")
-    ensure_column(conn, "detections", "likely_score", "REAL")
-    ensure_column(conn, "detections", "clip_path", "TEXT")
-    ensure_column(conn, "detections", "clip_size_bytes", "INTEGER")
-    ensure_column(conn, "detections", "deleted_at", "TEXT")
-    backfill_recording_timestamps(conn)
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_detections_source ON detections (source_path, window_index)"
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_detections_event ON detections (event_started_at, channel_index)"
+        "CREATE INDEX IF NOT EXISTS idx_detections_clip_time ON detections (clip_start_time, channel_index)"
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_detections_clip ON detections (deleted_at, clip_path)"
@@ -278,16 +268,6 @@ def connect_db() -> sqlite3.Connection:
     conn.commit()
     ensure_state_file_permissions()
     return conn
-
-
-def ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, column_type: str) -> None:
-    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table_name})")}
-    if column_name not in columns:
-        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
-
-
-def backfill_recording_timestamps(conn: sqlite3.Connection) -> None:
-    return
 
 
 def was_processed_successfully(conn: sqlite3.Connection, path: Path) -> bool:
@@ -404,15 +384,6 @@ def require_source_start_datetime(source_path: Path) -> datetime:
     return start_dt
 
 
-def frame_time_text(source_path: Path | str, frame_offset: int | None, sample_rate: int | None) -> str | None:
-    if frame_offset is None or sample_rate in (None, 0):
-        return None
-    start_dt = source_start_datetime(source_path)
-    if start_dt is None:
-        return None
-    return iso_utc_text(start_dt + timedelta(seconds=(frame_offset / sample_rate)))
-
-
 def filename_time_token(source_path: Path, detection: Detection, sample_rate: int) -> str:
     start_dt = source_start_datetime(source_path)
     if start_dt is None:
@@ -462,7 +433,7 @@ def collect_detections(
     if frames < WINDOW_FRAMES:
         padded = np.zeros(WINDOW_FRAMES, dtype=np.float32)
         padded[:frames] = audio_mono[:frames]
-        window_volume = normalized_window_volume(audio_mono[:frames])
+        volume = normalized_volume(audio_mono[:frames])
         label, score, likely_score = invoke_birdnet_top_label(
             scale_by_max_value(padded),
             model,
@@ -478,7 +449,7 @@ def collect_detections(
                 0,
                 frames,
                 0,
-                window_volume,
+                volume,
                 label,
                 score,
                 likely_score,
@@ -504,7 +475,7 @@ def collect_detections(
                 start,
                 end,
                 start,
-                normalized_window_volume(window_audio),
+                normalized_volume(window_audio),
                 label,
                 score,
                 likely_score,
@@ -524,8 +495,8 @@ def merge_detections(detections: List[Detection]) -> List[Detection]:
         window_index=detections[0].window_index,
         start_frame=detections[0].start_frame,
         end_frame=detections[0].end_frame,
-        max_score_window_start_frame=detections[0].max_score_window_start_frame,
-        window_volume=detections[0].window_volume,
+        max_score_start_frame=detections[0].max_score_start_frame,
+        volume=detections[0].volume,
         label=detections[0].label,
         score=detections[0].score,
         likely_score=detections[0].likely_score,
@@ -538,10 +509,10 @@ def merge_detections(detections: List[Detection]) -> List[Detection]:
             current.end_frame = max(current.end_frame, detection.end_frame)
             if detection.score > current.score:
                 current.score = detection.score
-                current.max_score_window_start_frame = (
-                    detection.max_score_window_start_frame
+                current.max_score_start_frame = (
+                    detection.max_score_start_frame
                 )
-            current.window_volume = max(current.window_volume, detection.window_volume)
+            current.volume = max(current.volume, detection.volume)
             if detection.likely_score is not None:
                 if current.likely_score is None:
                     current.likely_score = detection.likely_score
@@ -555,8 +526,8 @@ def merge_detections(detections: List[Detection]) -> List[Detection]:
             window_index=detection.window_index,
             start_frame=detection.start_frame,
             end_frame=detection.end_frame,
-            max_score_window_start_frame=detection.max_score_window_start_frame,
-            window_volume=detection.window_volume,
+            max_score_start_frame=detection.max_score_start_frame,
+            volume=detection.volume,
             label=detection.label,
             score=detection.score,
             likely_score=detection.likely_score,
@@ -619,6 +590,7 @@ def process_audio(
     source_path: Path,
 ) -> None:
     source_key = relative_source(source_path)
+    source_start_dt = require_source_start_datetime(source_path)
     info = sf.info(source_path)
     if info.samplerate != SAMPLE_RATE:
         raise ValueError(
@@ -648,7 +620,7 @@ def process_audio(
     conn.executemany(
         """
         INSERT INTO detections (
-            source_path, channel_index, window_index, max_score_window_start_frame, event_started_at, event_ended_at, window_volume, label, score, likely_score, clip_path, clip_size_bytes, deleted_at
+            source_path, channel_index, window_index, max_score_start_frame, label, score, likely_score, volume, clip_start_time, clip_end_time, clip_path, clip_size_bytes, deleted_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
@@ -656,13 +628,13 @@ def process_audio(
                 source_key,
                 d.channel_index,
                 d.window_index,
-                d.max_score_window_start_frame,
-                frame_time_text(source_path, d.start_frame, sample_rate),
-                frame_time_text(source_path, d.end_frame, sample_rate),
-                d.window_volume,
+                d.max_score_start_frame,
                 d.label,
                 d.score,
                 d.likely_score,
+                d.volume,
+                iso_utc_text(source_start_dt + timedelta(seconds=(d.start_frame / sample_rate))),
+                iso_utc_text(source_start_dt + timedelta(seconds=(d.end_frame / sample_rate))),
                 (
                     written_clips[(d.channel_index, d.window_index)][0].relative_to(INPUT_ROOT.parent).as_posix()
                     if (d.channel_index, d.window_index) in written_clips
