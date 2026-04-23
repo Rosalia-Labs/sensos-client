@@ -204,10 +204,6 @@ def source_rows_to_payload(conn, rows) -> list[dict]:
                     {
                         "channel_index": int(det["channel_index"]),
                         "window_index": int(det["window_index"]),
-                        "start_frame": int(det["start_frame"]),
-                        "end_frame": int(det["end_frame"]),
-                        "start_sec": float(det["start_sec"]),
-                        "end_sec": float(det["end_sec"]),
                         "event_started_at": det["event_started_at"],
                         "event_ended_at": det["event_ended_at"],
                         "window_volume": (
@@ -215,14 +211,14 @@ def source_rows_to_payload(conn, rows) -> list[dict]:
                             if det["window_volume"] is None
                             else float(det["window_volume"])
                         ),
-                        "top_label": str(det["top_label"]),
-                        "top_score": float(det["top_score"]),
-                        "top_likely_score": (
+                        "label": str(det["label"]),
+                        "score": float(det["score"]),
+                        "likely_score": (
                             None
-                            if det["top_likely_score"] is None
-                            else float(det["top_likely_score"])
+                            if det["likely_score"] is None
+                            else float(det["likely_score"])
                         ),
-                        "flac_path": det["flac_path"],
+                        "clip_path": det["clip_path"],
                         "deleted_at": det["deleted_at"],
                     }
                     for det in detections_by_source.get(source_path, [])

@@ -243,7 +243,14 @@ def connect_db() -> sqlite3.Connection:
             frames INTEGER,
             started_at TEXT NOT NULL,
             ended_at TEXT,
-            deleted_source INTEGER NOT NULL DEFAULT 0
+            deleted_source INTEGER NOT NULL DEFAULT 0,
+            server_copy INTEGER NOT NULL DEFAULT 0,
+            authoritative_owner TEXT NOT NULL DEFAULT 'client',
+            uploaded_at TEXT,
+            server_receipt_id TEXT,
+            upload_attempts INTEGER NOT NULL DEFAULT 0,
+            last_upload_attempt_at TEXT,
+            last_upload_error TEXT
         )
         """
     )
@@ -254,29 +261,24 @@ def connect_db() -> sqlite3.Connection:
             source_path TEXT NOT NULL,
             channel_index INTEGER NOT NULL DEFAULT 0,
             window_index INTEGER NOT NULL,
-            start_frame INTEGER NOT NULL,
-            end_frame INTEGER NOT NULL,
-            start_sec REAL NOT NULL,
-            end_sec REAL NOT NULL,
             event_started_at TEXT,
             event_ended_at TEXT,
             window_volume REAL,
-            top_label TEXT NOT NULL,
-            top_score REAL NOT NULL,
-            top_likely_score REAL,
-            flac_path TEXT,
+            label TEXT NOT NULL,
+            score REAL NOT NULL,
+            likely_score REAL,
+            clip_path TEXT,
             deleted_at TEXT,
             UNIQUE (source_path, channel_index, window_index)
         )
         """
     )
-    ensure_column(conn, "processed_files", "ended_at", "TEXT")
     ensure_column(conn, "detections", "channel_index", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "detections", "event_started_at", "TEXT")
     ensure_column(conn, "detections", "event_ended_at", "TEXT")
     ensure_column(conn, "detections", "window_volume", "REAL")
-    ensure_column(conn, "detections", "top_likely_score", "REAL")
-    ensure_column(conn, "detections", "flac_path", "TEXT")
+    ensure_column(conn, "detections", "likely_score", "REAL")
+    ensure_column(conn, "detections", "clip_path", "TEXT")
     ensure_column(conn, "detections", "deleted_at", "TEXT")
     backfill_recording_timestamps(conn)
     conn.execute(
@@ -286,7 +288,7 @@ def connect_db() -> sqlite3.Connection:
         "CREATE INDEX IF NOT EXISTS idx_detections_event ON detections (event_started_at, channel_index)"
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_detections_flac ON detections (deleted_at, flac_path)"
+        "CREATE INDEX IF NOT EXISTS idx_detections_clip ON detections (deleted_at, clip_path)"
     )
     conn.commit()
     ensure_state_file_permissions()
@@ -323,29 +325,6 @@ def backfill_recording_timestamps(conn: sqlite3.Connection) -> None:
             WHERE source_path = ?
             """,
             processed_updates,
-        )
-
-    detection_updates = []
-    for row_id, source_path, start_frame, end_frame in conn.execute(
-        """
-        SELECT id, source_path, start_frame, end_frame
-        FROM detections
-        """
-    ):
-        event_started_at = frame_time_text(source_path, start_frame, SAMPLE_RATE)
-        event_ended_at = frame_time_text(source_path, end_frame, SAMPLE_RATE)
-        if event_started_at is None or event_ended_at is None:
-            continue
-        detection_updates.append((event_started_at, event_ended_at, row_id))
-
-    if detection_updates:
-        conn.executemany(
-            """
-            UPDATE detections
-            SET event_started_at = ?, event_ended_at = ?
-            WHERE id = ?
-            """,
-            detection_updates,
         )
 
 
@@ -645,13 +624,13 @@ def write_detection_clips(
             f"{format_score_token(detection.likely_score, 'o')}_"
             f"{start_sec:09.3f}-{end_sec:09.3f}.flac"
         )
-        flac_path = out_dir / filename
+        clip_path = out_dir / filename
         if audio.ndim == 1:
             chunk = audio[detection.start_frame : detection.end_frame]
         else:
             chunk = audio[detection.start_frame : detection.end_frame, detection.channel_index]
-        sf.write(flac_path, chunk, sample_rate, format="FLAC")
-        written[(detection.channel_index, detection.window_index)] = flac_path
+        sf.write(clip_path, chunk, sample_rate, format="FLAC")
+        written[(detection.channel_index, detection.window_index)] = clip_path
     return written
 
 
@@ -731,18 +710,14 @@ def process_audio(
     conn.executemany(
         """
         INSERT INTO detections (
-            source_path, channel_index, window_index, start_frame, end_frame, start_sec, end_sec, event_started_at, event_ended_at, window_volume, top_label, top_score, top_likely_score, flac_path, deleted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            source_path, channel_index, window_index, event_started_at, event_ended_at, window_volume, label, score, likely_score, clip_path, deleted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
                 source_key,
                 d.channel_index,
                 d.window_index,
-                d.start_frame,
-                d.end_frame,
-                d.start_frame / sample_rate,
-                d.end_frame / sample_rate,
                 frame_time_text(source_path, d.start_frame, sample_rate),
                 frame_time_text(source_path, d.end_frame, sample_rate),
                 d.window_volume,

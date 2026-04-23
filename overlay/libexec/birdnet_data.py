@@ -84,7 +84,14 @@ def ensure_base_schema(conn: sqlite3.Connection) -> None:
             frames INTEGER,
             started_at TEXT NOT NULL,
             ended_at TEXT,
-            deleted_source INTEGER NOT NULL DEFAULT 0
+            deleted_source INTEGER NOT NULL DEFAULT 0,
+            server_copy INTEGER NOT NULL DEFAULT 0,
+            authoritative_owner TEXT NOT NULL DEFAULT 'client',
+            uploaded_at TEXT,
+            server_receipt_id TEXT,
+            upload_attempts INTEGER NOT NULL DEFAULT 0,
+            last_upload_attempt_at TEXT,
+            last_upload_error TEXT
         )
         """
     )
@@ -95,29 +102,24 @@ def ensure_base_schema(conn: sqlite3.Connection) -> None:
             source_path TEXT NOT NULL,
             channel_index INTEGER NOT NULL DEFAULT 0,
             window_index INTEGER NOT NULL,
-            start_frame INTEGER NOT NULL,
-            end_frame INTEGER NOT NULL,
-            start_sec REAL NOT NULL,
-            end_sec REAL NOT NULL,
             event_started_at TEXT,
             event_ended_at TEXT,
             window_volume REAL,
-            top_label TEXT NOT NULL,
-            top_score REAL NOT NULL,
-            top_likely_score REAL,
-            flac_path TEXT,
+            label TEXT NOT NULL,
+            score REAL NOT NULL,
+            likely_score REAL,
+            clip_path TEXT,
             deleted_at TEXT,
             UNIQUE (source_path, channel_index, window_index)
         )
         """
     )
-    ensure_column(conn, "processed_files", "ended_at", "TEXT")
     ensure_column(conn, "detections", "channel_index", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "detections", "event_started_at", "TEXT")
     ensure_column(conn, "detections", "event_ended_at", "TEXT")
     ensure_column(conn, "detections", "window_volume", "REAL")
-    ensure_column(conn, "detections", "top_likely_score", "REAL")
-    ensure_column(conn, "detections", "flac_path", "TEXT")
+    ensure_column(conn, "detections", "likely_score", "REAL")
+    ensure_column(conn, "detections", "clip_path", "TEXT")
     ensure_column(conn, "detections", "deleted_at", "TEXT")
     backfill_recording_timestamps(conn)
     conn.execute(
@@ -127,29 +129,12 @@ def ensure_base_schema(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_detections_event ON detections (event_started_at, channel_index)"
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_detections_flac ON detections (deleted_at, flac_path)"
+        "CREATE INDEX IF NOT EXISTS idx_detections_clip ON detections (deleted_at, clip_path)"
     )
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     ensure_base_schema(conn)
-    ensure_column(conn, "processed_files", "server_copy", "INTEGER NOT NULL DEFAULT 0")
-    ensure_column(
-        conn,
-        "processed_files",
-        "authoritative_owner",
-        "TEXT NOT NULL DEFAULT 'client'",
-    )
-    ensure_column(conn, "processed_files", "uploaded_at", "TEXT")
-    ensure_column(conn, "processed_files", "server_receipt_id", "TEXT")
-    ensure_column(
-        conn,
-        "processed_files",
-        "upload_attempts",
-        "INTEGER NOT NULL DEFAULT 0",
-    )
-    ensure_column(conn, "processed_files", "last_upload_attempt_at", "TEXT")
-    ensure_column(conn, "processed_files", "last_upload_error", "TEXT")
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_birdnet_pending_upload
@@ -226,29 +211,6 @@ def backfill_recording_timestamps(conn: sqlite3.Connection) -> None:
             WHERE source_path = ?
             """,
             processed_updates,
-        )
-
-    detection_updates = []
-    for row_id, source_path, start_frame, end_frame in conn.execute(
-        """
-        SELECT id, source_path, start_frame, end_frame
-        FROM detections
-        """
-    ):
-        event_started_at = frame_time_text(source_path, start_frame, 48000)
-        event_ended_at = frame_time_text(source_path, end_frame, 48000)
-        if event_started_at is None or event_ended_at is None:
-            continue
-        detection_updates.append((event_started_at, event_ended_at, row_id))
-
-    if detection_updates:
-        conn.executemany(
-            """
-            UPDATE detections
-            SET event_started_at = ?, event_ended_at = ?
-            WHERE id = ?
-            """,
-            detection_updates,
         )
 
 def select_pending_processed_files(
@@ -423,7 +385,7 @@ def fetch_detections_for_sources(
     placeholders = ",".join("?" for _ in source_paths)
     rows = conn.execute(
         f"""
-        SELECT source_path, channel_index, window_index, start_frame, end_frame, start_sec, end_sec, window_volume, top_label, top_score, top_likely_score, event_started_at, event_ended_at, flac_path, deleted_at
+        SELECT source_path, channel_index, window_index, window_volume, label, score, likely_score, event_started_at, event_ended_at, clip_path, deleted_at
         FROM detections
         WHERE source_path IN ({placeholders})
         ORDER BY source_path, channel_index, window_index
@@ -464,25 +426,25 @@ def prune_server_owned_results(
 
     source_paths = [str(row["source_path"]) for row in rows]
     placeholders = ",".join("?" for _ in source_paths)
-    flac_rows = conn.execute(
+    clip_rows = conn.execute(
         f"""
-        SELECT flac_path
+        SELECT clip_path
         FROM detections
         WHERE source_path IN ({placeholders})
           AND deleted_at IS NULL
-          AND flac_path IS NOT NULL
+          AND clip_path IS NOT NULL
         """,
         source_paths,
     ).fetchall()
 
-    deleted_flac_count = 0
-    for row in flac_rows:
-        flac_rel = str(row["flac_path"])
-        if not flac_rel:
+    deleted_clip_count = 0
+    for row in clip_rows:
+        clip_rel = str(row["clip_path"])
+        if not clip_rel:
             continue
         try:
-            (CLIENT_ROOT / "data" / flac_rel).unlink(missing_ok=True)
-            deleted_flac_count += 1
+            (CLIENT_ROOT / "data" / clip_rel).unlink(missing_ok=True)
+            deleted_clip_count += 1
         except Exception:
             continue
 
@@ -508,10 +470,10 @@ def prune_server_owned_results(
         (
             utcnow_text(),
             len(source_paths),
-            deleted_flac_count,
+            deleted_clip_count,
             cutoff_text,
             "server-owned retention pruning",
         ),
     )
     conn.commit()
-    return len(source_paths), deleted_flac_count
+    return len(source_paths), deleted_clip_count

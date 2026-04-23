@@ -98,17 +98,13 @@ def connect_db() -> sqlite3.Connection:
             source_path TEXT NOT NULL,
             channel_index INTEGER NOT NULL DEFAULT 0,
             window_index INTEGER NOT NULL,
-            start_frame INTEGER NOT NULL,
-            end_frame INTEGER NOT NULL,
-            start_sec REAL NOT NULL,
-            end_sec REAL NOT NULL,
             event_started_at TEXT,
             event_ended_at TEXT,
             window_volume REAL,
-            top_label TEXT NOT NULL,
-            top_score REAL NOT NULL,
-            top_likely_score REAL,
-            flac_path TEXT,
+            label TEXT NOT NULL,
+            score REAL NOT NULL,
+            likely_score REAL,
+            clip_path TEXT,
             deleted_at TEXT,
             UNIQUE (source_path, channel_index, window_index)
         )
@@ -118,11 +114,11 @@ def connect_db() -> sqlite3.Connection:
     ensure_column(conn, "detections", "event_started_at", "TEXT")
     ensure_column(conn, "detections", "event_ended_at", "TEXT")
     ensure_column(conn, "detections", "window_volume", "REAL")
-    ensure_column(conn, "detections", "top_likely_score", "REAL")
-    ensure_column(conn, "detections", "flac_path", "TEXT")
+    ensure_column(conn, "detections", "likely_score", "REAL")
+    ensure_column(conn, "detections", "clip_path", "TEXT")
     ensure_column(conn, "detections", "deleted_at", "TEXT")
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_detections_flac ON detections (deleted_at, flac_path)"
+        "CREATE INDEX IF NOT EXISTS idx_detections_clip ON detections (deleted_at, clip_path)"
     )
     conn.commit()
     for path in (DB_PATH, DB_PATH.with_name(f"{DB_PATH.name}-wal"), DB_PATH.with_name(f"{DB_PATH.name}-shm")):
@@ -146,32 +142,34 @@ def choose_victim_file(conn: sqlite3.Connection) -> tuple[int, Path] | None:
     rows = conn.execute(
         """
         SELECT id,
-               flac_path,
-               top_score,
+               clip_path,
+               score,
                window_volume,
-               start_sec,
-               end_sec
+               CASE
+                   WHEN event_started_at IS NOT NULL AND event_ended_at IS NOT NULL
+                   THEN (julianday(event_ended_at) - julianday(event_started_at)) * 86400.0
+                   ELSE 0.0
+               END AS duration_sec
         FROM detections
         WHERE deleted_at IS NULL
-          AND flac_path IS NOT NULL
+          AND clip_path IS NOT NULL
         ORDER BY id
         """
     ).fetchall()
     if not rows:
-        trace("no BirdNET FLAC runs remain with undeleted files")
+        trace("no BirdNET clips remain with undeleted files")
         return None
 
     grouped: dict[str, dict[str, float | int | list[tuple[int, str, float, float | None, float]]]] = {}
-    for run_id, rel_path, top_score, window_volume, start_sec, end_sec in rows:
+    for run_id, rel_path, score, window_volume, duration_sec in rows:
         label_dir = str(Path(rel_path).parent)
-        duration_sec = float(end_sec) - float(start_sec)
         bucket = grouped.setdefault(
             label_dir,
             {"clip_count": 0, "total_duration_sec": 0.0, "rows": []},
         )
         bucket["clip_count"] = int(bucket["clip_count"]) + 1
         bucket["total_duration_sec"] = float(bucket["total_duration_sec"]) + duration_sec
-        bucket["rows"].append((run_id, rel_path, float(top_score), None if window_volume is None else float(window_volume), duration_sec))
+        bucket["rows"].append((run_id, rel_path, float(score), None if window_volume is None else float(window_volume), duration_sec))
 
     ordered_dirs = sorted(
         grouped.items(),
