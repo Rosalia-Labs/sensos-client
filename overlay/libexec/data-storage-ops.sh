@@ -4,7 +4,7 @@
 
 DATA_MOUNT="${SENSOS_DATA_MOUNT:-/sensos/data}"
 DATA_SERVICES=(
-    "sensos-arecord.service"
+    "sensos-record-audio.service"
     "sensos-compress-audio.service"
     "sensos-read-i2c.service"
     "sensos-upload-i2c.service"

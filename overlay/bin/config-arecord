@@ -469,7 +469,7 @@ test_configuration() {
 
 apply_service_state() {
     local -a managed_units=(
-        "sensos-arecord.service"
+        "sensos-record-audio.service"
         "sensos-compress-audio.service"
         "sensos-thin-data.service"
     )
@@ -477,8 +477,8 @@ apply_service_state() {
 
     if [[ "$(normalize_bool "${enable_service}")" == "true" ]]; then
         sudo systemctl daemon-reload
-        echo "Enabling sensos-arecord.service..."
-        sudo systemctl enable sensos-arecord.service
+        echo "Enabling sensos-record-audio.service..."
+        sudo systemctl enable sensos-record-audio.service
         echo "Enabling sensos-compress-audio.service..."
         sudo systemctl enable sensos-compress-audio.service
         echo "Enabling sensos-thin-data.service..."
@@ -487,8 +487,8 @@ apply_service_state() {
 
     if [[ "$(normalize_bool "${start_service}")" == "true" ]]; then
         sudo systemctl daemon-reload
-        echo "Starting sensos-arecord.service..."
-        sudo systemctl start sensos-arecord.service
+        echo "Starting sensos-record-audio.service..."
+        sudo systemctl start sensos-record-audio.service
         echo "Starting sensos-compress-audio.service..."
         sudo systemctl start sensos-compress-audio.service
         echo "Starting sensos-thin-data.service..."
@@ -508,7 +508,7 @@ main() {
     local device_row card_number device_number native_device plughw_device
     local native_params plughw_params
 
-    maybe_stop_service "sensos-arecord.service" \
+    maybe_stop_service "sensos-record-audio.service" \
         "Recording service is still running; note that arecord may fail if the service is using the device."
     maybe_stop_service "sensos-compress-audio.service" \
         "Compression service is still running; queued files may be moved while you reconfigure."

@@ -132,7 +132,7 @@ def build_lines() -> list[str]:
     processed = summarize_tree(PROCESSED_ROOT, ".flac")
     birdnet_db = birdnet_db_summary()
 
-    arecord_en, arecord_ac = systemd_state("sensos-arecord.service")
+    arecord_en, arecord_ac = systemd_state("sensos-record-audio.service")
     compress_en, compress_ac = systemd_state("sensos-compress-audio.service")
     birdnet_en, birdnet_ac = systemd_state("sensos-birdnet.service")
 

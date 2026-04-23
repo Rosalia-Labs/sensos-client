@@ -10,7 +10,7 @@ START_FREE_PERCENT="${SENSOS_START_FREE_PERCENT:-15}"
 LOGGER_TAG="data-space-monitor"
 
 SERVICES=(
-    "sensos-arecord.service"
+    "sensos-record-audio.service"
     "sensos-read-i2c.service"
 )
 

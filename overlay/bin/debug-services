@@ -12,7 +12,7 @@ OVERLAY_ROOT="$(resolve_overlay_root)"
 UNIT_DIR="${OVERLAY_ROOT}/systemd"
 
 SENSOS_UNITS=(
-    "sensos-arecord.service"
+    "sensos-record-audio.service"
     "sensos-birdnet.service"
     "sensos-compress-audio.service"
     "sensos-gps.service"

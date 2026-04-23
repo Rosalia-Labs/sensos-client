@@ -1,6 +1,6 @@
 [Unit]
 Description=Thin retained data when disk space is low
-After=multi-user.target sensos-arecord.service sensos-compress-audio.service
+After=multi-user.target sensos-record-audio.service sensos-compress-audio.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
 

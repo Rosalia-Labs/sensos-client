@@ -355,13 +355,13 @@ Behavior:
 - if required recording selections are missing and stdin is not interactive, exits with a clear missing-flags error
 - may ask to stop active recording/compression/thinning services before reconfiguring when run interactively
 - writes recording config and can enable/start the recording pipeline services
-- `--enable-service` enables `sensos-arecord.service`, `sensos-compress-audio.service`, and `sensos-thin-data.service` for future boot
+- `--enable-service` enables `sensos-record-audio.service`, `sensos-compress-audio.service`, and `sensos-thin-data.service` for future boot
 - `--start-service` is what starts those services immediately; without it, `config-arecord` leaves them stopped at the end
 - later `./install` and `./upgrade` runs preserve or disable those three audio services as a group based on whether `/sensos/etc/arecord.conf` exists; they do not implicitly start disabled services, but active restart-safe SensOS worker services are restarted during upgrade so new code takes effect
 
 ### `play-live-audio`
 
-Temporarily stops `sensos-arecord.service`, captures live audio from the same
+Temporarily stops `sensos-record-audio.service`, captures live audio from the same
 configured device, and restarts the recording service when the debug session
 ends.
 
@@ -396,7 +396,7 @@ debug-audio-pipeline
 
 Behavior:
 
-- shows `sensos-arecord.service`, `sensos-compress-audio.service`, and `sensos-birdnet.service`
+- shows `sensos-record-audio.service`, `sensos-compress-audio.service`, and `sensos-birdnet.service`
 - shows queued WAV count plus newest and oldest queued-file ages
 - shows compressed FLAC count and newest compressed-file age
 - shows processed-output count and newest processed-file age
@@ -434,8 +434,8 @@ Playback helpers for the SSH streaming example:
 Behavior:
 
 - reads `/sensos/etc/arecord.conf` and reuses that device/format/channel/rate by default
-- stops `sensos-arecord.service` first if it is active, unless `--skip-service-stop` is set
-- restarts `sensos-arecord.service` automatically on normal exit or interruption if it had been active when the command started
+- stops `sensos-record-audio.service` first if it is active, unless `--skip-service-stop` is set
+- restarts `sensos-record-audio.service` automatically on normal exit or interruption if it had been active when the command started
 - writes control/status messages to stderr so stdout stays clean for the WAV stream
 - requires stdout to be piped or redirected unless `--play-local` is used
 - is intended for brief setup/debug listening windows rather than normal operation

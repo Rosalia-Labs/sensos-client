@@ -12,7 +12,7 @@ debug-services
 Example output shape:
 
 ```text
-sensos-arecord.service              enabled=enabled    active=active    sub=running      load=loaded     SensOS audio recorder
+sensos-record-audio.service              enabled=enabled    active=active    sub=running      load=loaded     SensOS audio recorder
 sensos-send-status-update.timer     enabled=enabled    active=active    sub=waiting      load=loaded     Periodic SensOS status updates
 sensos-hotspot.service              enabled=disabled   active=inactive  sub=dead         load=loaded     SensOS Wi-Fi hotspot
 ```
