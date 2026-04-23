@@ -341,7 +341,16 @@ clean_mountpoint_if_needed() {
 
 mount_source_for_path() {
     local target_path="$1"
-    findmnt -rn -o SOURCE --target "${target_path}" 2>/dev/null || true
+    local target_and_source=""
+    local resolved_target=""
+    local resolved_source=""
+    target_and_source="$(findmnt -rn -o TARGET,SOURCE --target "${target_path}" 2>/dev/null || true)"
+    [[ -n "${target_and_source}" ]] || return 0
+    resolved_target="${target_and_source%% *}"
+    resolved_source="${target_and_source#* }"
+    if [[ "${resolved_target}" == "${target_path}" ]]; then
+        printf '%s\n' "${resolved_source}"
+    fi
 }
 
 resolve_existing_data_mount_state() {
