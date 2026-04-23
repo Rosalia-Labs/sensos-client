@@ -49,12 +49,17 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    conn.execute(
-        """
-        ALTER TABLE detections
-        ADD COLUMN IF NOT EXISTS sent_to_server INTEGER NOT NULL DEFAULT 0
-        """
-    )
+    columns = {
+        str(row[1]).strip().lower()
+        for row in conn.execute("PRAGMA table_info(detections)").fetchall()
+    }
+    if "sent_to_server" not in columns:
+        conn.execute(
+            """
+            ALTER TABLE detections
+            ADD COLUMN sent_to_server INTEGER NOT NULL DEFAULT 0
+            """
+        )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_detections_source ON detections (source_path, window_index)"
     )

@@ -7,8 +7,10 @@ import importlib.util
 import json
 import os
 import socket
+import sqlite3
 import sys
 import time
+import traceback
 from pathlib import Path
 from urllib import error, request
 
@@ -218,11 +220,23 @@ def main() -> int:
     while True:
         try:
             run_upload_session(config, network_config, api_password, client_version)
+        except sqlite3.OperationalError as exc:
+            print(
+                f"[ERROR] BirdNET upload SQLite OperationalError: {exc}",
+                file=sys.stderr,
+            )
+            print(
+                "[ERROR] Hint: check birdnet.db permissions, free disk space, "
+                "and concurrent DB writers (database locked).",
+                file=sys.stderr,
+            )
+            traceback.print_exc()
         except Exception as exc:
             print(
                 f"[ERROR] Unhandled BirdNET upload error: {exc.__class__.__name__}: {exc}",
                 file=sys.stderr,
             )
+            traceback.print_exc()
         time.sleep(config["session_interval_sec"])
 
 
