@@ -628,7 +628,7 @@ def process_audio(
                 source_key,
                 d.channel_index,
                 d.window_index,
-                d.max_score_start_frame,
+                max(0, d.max_score_start_frame - d.start_frame),
                 d.label,
                 d.score,
                 d.likely_score,
