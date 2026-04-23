@@ -251,6 +251,7 @@ def connect_db() -> sqlite3.Connection:
             clip_end_time TEXT NOT NULL,
             clip_path TEXT,
             clip_size_bytes INTEGER,
+            sent_to_server INTEGER NOT NULL DEFAULT 0,
             deleted_at TEXT,
             UNIQUE (source_path, channel_index, window_index)
         )
