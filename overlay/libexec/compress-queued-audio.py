@@ -6,9 +6,16 @@ import importlib.util
 import os
 import sys
 import time
+import traceback
 from pathlib import Path
 
-import soundfile as sf
+try:
+    import soundfile as sf
+except Exception as exc:
+    raise RuntimeError(
+        "Failed to import Python package 'soundfile'. "
+        "Install sensos-client/python/requirements.txt into the runtime venv."
+    ) from exc
 
 SCRIPT_FILE = os.path.realpath(__file__)
 SCRIPT_DIR = os.path.dirname(SCRIPT_FILE)
@@ -37,6 +44,13 @@ ERROR_SLEEP_SEC = int(os.environ.get("AUDIO_COMPRESS_ERROR_SLEEP_SEC", "10"))
 
 
 def ensure_runtime_dirs() -> None:
+    for root in (AUDIO_ROOT, QUEUED_ROOT, COMPRESSED_ROOT):
+        root.mkdir(parents=True, exist_ok=True)
+        if not os.access(root, os.W_OK | os.X_OK):
+            raise PermissionError(
+                f"Runtime directory is not writable by uid={os.geteuid()}: {root}"
+            )
+
     create_dir(str(COMPRESSED_ROOT), "sensos-admin", "sensos-data", 0o2775)
 
 
@@ -106,6 +120,10 @@ def compress_once(source_path: Path) -> None:
 
 def main() -> None:
     setup_logging("compress_queued_audio.log")
+    print(
+        f"compress-queued-audio starting with python={sys.executable} "
+        f"client_root={CLIENT_ROOT}"
+    )
     ensure_runtime_dirs()
 
     while True:
@@ -127,6 +145,7 @@ def main() -> None:
                 print(f"Compression failure for {next_wav}: {exc}", file=sys.stderr)
             else:
                 print(f"Compression failure: {exc}", file=sys.stderr)
+            traceback.print_exc()
             time.sleep(ERROR_SLEEP_SEC)
 
 
