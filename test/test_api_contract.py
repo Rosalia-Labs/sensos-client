@@ -258,12 +258,10 @@ class ApiContractTests(unittest.TestCase):
         self.assertIsInstance(payload["usb_devices"], str)
         self.assertIsInstance(payload["network_interfaces"], dict)
 
-    def test_i2c_upload_payload_includes_batch_metadata_and_normalized_readings(self):
+    def test_i2c_upload_payload_includes_normalized_readings(self):
         payload = i2c_upload.build_i2c_upload_payload(
             hostname="sensor-1",
             client_version="1.2.3",
-            batch_id=17,
-            ownership_mode="server-owns",
             readings=[
                 {
                     "id": 101,
@@ -284,16 +282,8 @@ class ApiContractTests(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(payload["schema_version"], 1)
         self.assertEqual(payload["hostname"], "sensor-1")
         self.assertEqual(payload["client_version"], "1.2.3")
-        self.assertEqual(payload["batch_id"], 17)
-        self.assertEqual(payload["ownership_mode"], "server-owns")
-        self.assertEqual(payload["reading_count"], 2)
-        self.assertEqual(payload["first_reading_id"], 101)
-        self.assertEqual(payload["last_reading_id"], 102)
-        self.assertEqual(payload["first_recorded_at"], "2026-04-07T12:00:00Z")
-        self.assertEqual(payload["last_recorded_at"], "2026-04-07T12:00:00Z")
         self.assertEqual(
             payload["readings"][0],
             {
@@ -306,10 +296,9 @@ class ApiContractTests(unittest.TestCase):
             },
         )
 
-    def test_i2c_upload_response_requires_receipt_and_full_acceptance(self):
+    def test_i2c_upload_response_accepts_ok_status(self):
         parsed = i2c_upload.parse_upload_response(
-            '{"status":"ok","receipt_id":"receipt-123","accepted_count":2,"server_received_at":"2026-04-07T12:01:00Z"}',
-            2,
+            '{"status":"ok","receipt_id":"receipt-123","accepted_count":2,"server_received_at":"2026-04-07T12:01:00Z"}'
         )
 
         self.assertEqual(
@@ -321,11 +310,10 @@ class ApiContractTests(unittest.TestCase):
             },
         )
 
-    def test_i2c_upload_response_rejects_partial_acceptance(self):
+    def test_i2c_upload_response_rejects_non_ok_status(self):
         with self.assertRaises(ValueError):
             i2c_upload.parse_upload_response(
-                '{"status":"ok","receipt_id":"receipt-123","accepted_count":1,"server_received_at":"2026-04-07T12:01:00Z"}',
-                2,
+                '{"status":"error","receipt_id":"receipt-123","accepted_count":1,"server_received_at":"2026-04-07T12:01:00Z"}'
             )
 
     def test_i2c_run_upload_session_uses_server_host_in_request_path(self):
@@ -346,34 +334,31 @@ class ApiContractTests(unittest.TestCase):
         with mock.patch.object(i2c_upload, "connect_db", return_value=fake_db):
             with mock.patch.object(i2c_upload, "ensure_schema"):
                 with mock.patch.object(i2c_upload, "select_pending_readings", return_value=fake_rows):
-                    with mock.patch.object(i2c_upload, "create_upload_batch", return_value=17):
-                        with mock.patch.object(
-                            i2c_upload,
-                            "post_i2c_batch",
-                            return_value=(
-                                200,
-                                '{"status":"ok","receipt_id":"receipt-123","accepted_count":1,"server_received_at":"2026-04-07T12:01:00Z"}',
-                            ),
-                        ) as post_mock:
-                            with mock.patch.object(i2c_upload, "mark_upload_success"):
-                                with mock.patch.object(i2c_upload, "socket") as socket_mock:
-                                    socket_mock.gethostname.return_value = "sensor-1"
-                                    i2c_upload.run_upload_session(
-                                        {
-                                            "ownership_mode": "client-retains",
-                                            "batch_size": 100,
-                                            "connect_timeout_sec": 5,
-                                            "read_timeout_sec": 10,
-                                            "delete_after_days": None,
-                                        },
-                                        {
-                                            "SERVER_WG_IP": "10.254.0.1",
-                                            "SERVER_PORT": "8765",
-                                            "PEER_UUID": "peer-123",
-                                        },
-                                        "peer-secret",
-                                        "1.2.3",
-                                    )
+                    with mock.patch.object(
+                        i2c_upload,
+                        "post_i2c_readings",
+                        return_value=(
+                            200,
+                            '{"status":"ok","receipt_id":"receipt-123","accepted_count":1,"server_received_at":"2026-04-07T12:01:00Z"}',
+                        ),
+                    ) as post_mock:
+                        with mock.patch.object(i2c_upload, "mark_readings_sent"):
+                            with mock.patch.object(i2c_upload, "socket") as socket_mock:
+                                socket_mock.gethostname.return_value = "sensor-1"
+                                i2c_upload.run_upload_session(
+                                    {
+                                        "batch_size": 100,
+                                        "connect_timeout_sec": 5,
+                                        "read_timeout_sec": 10,
+                                    },
+                                    {
+                                        "SERVER_WG_IP": "10.254.0.1",
+                                        "SERVER_PORT": "8765",
+                                        "PEER_UUID": "peer-123",
+                                    },
+                                    "peer-secret",
+                                    "1.2.3",
+                                )
 
         self.assertEqual(
             post_mock.call_args.args[:4],

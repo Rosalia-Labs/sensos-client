@@ -21,14 +21,9 @@ CONFIG_FILE = OVERLAY_ROOT / "etc" / "i2c-uploads.conf"
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from i2c_data import (
-    MODE_CLIENT_RETAINS,
-    MODE_SERVER_OWNS,
     connect_db,
-    create_upload_batch,
     ensure_schema,
-    mark_upload_failure,
-    mark_upload_success,
-    prune_server_owned_readings,
+    mark_readings_sent,
     select_pending_readings,
     utcnow_text,
 )
@@ -69,73 +64,29 @@ def require_int(config: dict, key: str, *, minimum: int = 1) -> int:
     return value
 
 
-def optional_int(config: dict, key: str) -> int | None:
-    raw_value = config.get(key, "").strip()
-    if not raw_value:
-        return None
-    try:
-        value = int(raw_value)
-    except ValueError as exc:
-        raise SystemExit(f"[ERROR] Invalid integer for {key}: {raw_value}") from exc
-    if value <= 0:
-        raise SystemExit(f"[ERROR] {key} must be > 0 when set.")
-    return value
-
-
 def read_i2c_upload_config() -> dict:
     config = read_kv_config(str(CONFIG_FILE))
     if not config:
         raise SystemExit(f"[ERROR] Config file missing or empty: {CONFIG_FILE}")
 
-    ownership_mode = config.get("OWNERSHIP_MODEL", "").strip()
-    if ownership_mode not in (MODE_CLIENT_RETAINS, MODE_SERVER_OWNS):
-        raise SystemExit(
-            f"[ERROR] OWNERSHIP_MODEL must be '{MODE_CLIENT_RETAINS}' or '{MODE_SERVER_OWNS}'."
-        )
-
-    delete_after_days = optional_int(config, "DELETE_AFTER_DAYS")
-    if ownership_mode != MODE_SERVER_OWNS and delete_after_days is not None:
-        raise SystemExit(
-            "[ERROR] DELETE_AFTER_DAYS may only be set when OWNERSHIP_MODEL=server-owns."
-        )
-
     return {
-        "ownership_mode": ownership_mode,
         "session_interval_sec": require_int(config, "SESSION_INTERVAL_SEC"),
         "batch_size": require_int(config, "BATCH_SIZE"),
         "connect_timeout_sec": require_int(config, "CONNECT_TIMEOUT_SEC"),
         "read_timeout_sec": require_int(config, "READ_TIMEOUT_SEC"),
-        "delete_after_days": delete_after_days,
     }
 
 
-def build_i2c_upload_payload(
-    *,
-    hostname: str,
-    client_version: str,
-    batch_id: int,
-    ownership_mode: str,
-    readings: list[dict],
-) -> dict:
-    first_reading = readings[0]
-    last_reading = readings[-1]
+def build_i2c_upload_payload(*, hostname: str, client_version: str, readings: list[dict]) -> dict:
     return {
-        "schema_version": 1,
         "hostname": hostname,
         "client_version": client_version,
-        "batch_id": batch_id,
         "sent_at": utcnow_text(),
-        "ownership_mode": ownership_mode,
-        "reading_count": len(readings),
-        "first_reading_id": first_reading["id"],
-        "last_reading_id": last_reading["id"],
-        "first_recorded_at": first_reading["timestamp"],
-        "last_recorded_at": last_reading["timestamp"],
         "readings": readings,
     }
 
 
-def parse_upload_response(body: str, expected_count: int) -> dict:
+def parse_upload_response(body: str) -> dict:
     try:
         payload = json.loads(body)
     except json.JSONDecodeError as exc:
@@ -148,15 +99,6 @@ def parse_upload_response(body: str, expected_count: int) -> dict:
 
     if status != "ok":
         raise ValueError(f"server returned status={status or 'missing'}")
-    if not receipt_id:
-        raise ValueError("server response missing receipt_id")
-    if accepted_count != expected_count:
-        raise ValueError(
-            f"server accepted_count {accepted_count!r} did not match {expected_count}"
-        )
-    if not server_received_at:
-        raise ValueError("server response missing server_received_at")
-
     return {
         "receipt_id": receipt_id,
         "accepted_count": accepted_count,
@@ -164,7 +106,7 @@ def parse_upload_response(body: str, expected_count: int) -> dict:
     }
 
 
-def post_i2c_batch(
+def post_i2c_readings(
     server_host: str,
     port: str,
     peer_uuid: str,
@@ -175,7 +117,7 @@ def post_i2c_batch(
     read_timeout_sec: int,
 ) -> tuple[int, str]:
     timeout = max(connect_timeout_sec, read_timeout_sec)
-    url = f"http://{server_host}:{port}/api/v1/client/peer/i2c-readings/batches"
+    url = f"http://{server_host}:{port}/api/v1/client/peer/i2c-readings"
     req = request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
@@ -212,25 +154,14 @@ def run_upload_session(config: dict, network_config: dict, api_password: str, cl
     with connect_db() as conn:
         ensure_schema(conn)
         rows = select_pending_readings(conn, config["batch_size"])
-        if not rows:
-            if config["ownership_mode"] == MODE_SERVER_OWNS and config["delete_after_days"] is not None:
-                deleted = prune_server_owned_readings(
-                    conn,
-                    older_than_days=config["delete_after_days"],
-                )
-                if deleted:
-                    print(f"[INFO] Pruned {deleted} server-owned I2C readings.")
-            print("[INFO] No pending I2C readings to upload.")
-            return
-
-        batch_id = create_upload_batch(conn, rows, config["ownership_mode"])
+    if not rows:
+        print("[INFO] No pending I2C readings to upload.")
+        return
 
     payload_readings = reading_rows_to_payload(rows)
     payload = build_i2c_upload_payload(
         hostname=hostname,
         client_version=client_version,
-        batch_id=batch_id,
-        ownership_mode=config["ownership_mode"],
         readings=payload_readings,
     )
 
@@ -238,10 +169,10 @@ def run_upload_session(config: dict, network_config: dict, api_password: str, cl
     response_body = None
     try:
         print(
-            f"[INFO] Uploading I2C batch {batch_id} with {len(payload_readings)} readings "
-            f"to http://{server_host}:{server_port}/api/v1/client/peer/i2c-readings/batches"
+            f"[INFO] Uploading {len(payload_readings)} I2C readings "
+            f"to http://{server_host}:{server_port}/api/v1/client/peer/i2c-readings"
         )
-        response_status, response_body = post_i2c_batch(
+        response_status, response_body = post_i2c_readings(
             server_host,
             server_port,
             peer_uuid,
@@ -250,47 +181,31 @@ def run_upload_session(config: dict, network_config: dict, api_password: str, cl
             connect_timeout_sec=config["connect_timeout_sec"],
             read_timeout_sec=config["read_timeout_sec"],
         )
-        receipt = parse_upload_response(response_body, len(payload_readings))
+        receipt = parse_upload_response(response_body)
     except error.HTTPError as exc:
         response_status = exc.code
         response_body = exc.read().decode("utf-8", errors="replace")
         message = f"HTTP {exc.code}: {response_body}"
-        with connect_db() as conn:
-            ensure_schema(conn)
-            mark_upload_failure(conn, batch_id, rows, message, response_status, response_body)
-        print(f"[ERROR] I2C upload failed for batch {batch_id}: {message}", file=sys.stderr)
+        print(f"[ERROR] I2C upload failed: {message}", file=sys.stderr)
         return
     except Exception as exc:
         message = str(exc)
-        with connect_db() as conn:
-            ensure_schema(conn)
-            mark_upload_failure(conn, batch_id, rows, message, response_status, response_body)
-        print(f"[ERROR] I2C upload failed for batch {batch_id}: {message}", file=sys.stderr)
+        if response_status is not None:
+            message = f"{message} (HTTP {response_status})"
+        if response_body:
+            message = f"{message}; response={response_body}"
+        print(f"[ERROR] I2C upload failed: {message}", file=sys.stderr)
         return
 
     with connect_db() as conn:
         ensure_schema(conn)
-        mark_upload_success(
-            conn,
-            batch_id,
-            rows,
-            config["ownership_mode"],
-            receipt["receipt_id"],
-            receipt["server_received_at"],
-            response_status,
-            response_body or "",
-        )
-        if config["ownership_mode"] == MODE_SERVER_OWNS and config["delete_after_days"] is not None:
-            deleted = prune_server_owned_readings(
-                conn,
-                older_than_days=config["delete_after_days"],
-            )
-            if deleted:
-                print(f"[INFO] Pruned {deleted} server-owned I2C readings.")
+        mark_readings_sent(conn, [int(row["id"]) for row in rows])
 
     print(
-        f"[SUCCESS] Uploaded batch {batch_id}; receipt={receipt['receipt_id']} "
-        f"accepted_count={receipt['accepted_count']}"
+        f"[SUCCESS] Uploaded {len(payload_readings)} I2C readings; "
+        f"receipt={receipt.get('receipt_id') or 'n/a'} "
+        f"accepted={receipt.get('accepted_count')!r} "
+        f"server_received_at={receipt.get('server_received_at') or 'n/a'}"
     )
 
 
@@ -303,7 +218,7 @@ def main() -> int:
 
     print(
         "[INFO] Starting continuous I2C uploader "
-        f"(ownership_mode={config['ownership_mode']}, session_interval_sec={config['session_interval_sec']})"
+        f"(session_interval_sec={config['session_interval_sec']})"
     )
     while True:
         try:
