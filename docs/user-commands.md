@@ -447,6 +447,7 @@ Configures periodic I2C sensor polling and optionally enables/starts the reader 
 Important flags:
 
 - `--interval`
+- `--subsamples`
 - `--bme280-0x76-interval`
 - `--bme280-0x77-interval`
 - `--scd30-interval`
@@ -461,12 +462,15 @@ Typical use:
 ```sh
 config-i2c-sensors
 config-i2c-sensors --interval 60 --scd30-interval 120 --start-service
+config-i2c-sensors --interval 60 --subsamples 4 --start-service
 config-i2c-sensors --disable
 ```
 
 Behavior:
 
 - writes `/sensos/etc/i2c-sensors.conf`
+- defaults to `INTERVAL_SEC=300` and `SUBSAMPLES_PER_INTERVAL=5`
+- supports `SUBSAMPLES_PER_INTERVAL` to take evenly spaced subsamples within each interval and store averaged values
 - automatically applies Raspberry Pi host I2C enablement when needed
 - ensures `/sensos/data/microenv` exists with shared permissions
 - installs optional I2C/GPIO Python dependencies on demand before enabling the reader service
