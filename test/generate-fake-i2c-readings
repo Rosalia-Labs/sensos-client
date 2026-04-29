@@ -67,8 +67,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--seed",
         type=int,
-        default=7,
-        help="Random seed for deterministic output (default: 7)",
+        default=None,
+        help="Random seed for deterministic output (default: random)",
     )
     parser.add_argument(
         "--mark-sent",
@@ -135,11 +135,13 @@ def main() -> int:
 
     db_path = Path(args.db_path)
     start_at = parse_start_at(args.start_at, args.points, args.spacing_sec)
-    rng = random.Random(args.seed)
+    seed = args.seed if args.seed is not None else random.SystemRandom().randrange(0, 2**32)
+    rng = random.Random(seed)
     sent = 1 if args.mark_sent else 0
     rows = gen_rowset(args.points, args.spacing_sec, start_at, rng, sent)
 
     print(f"db_path={db_path}")
+    print(f"seed={seed}")
     print(f"timestamps={args.points} spacing_sec={args.spacing_sec} rows={len(rows)} sent_to_server={sent}")
     print(f"start={to_rfc3339_utc(start_at)} end={to_rfc3339_utc(start_at + timedelta(seconds=(args.points - 1) * args.spacing_sec))}")
     print("sample:")

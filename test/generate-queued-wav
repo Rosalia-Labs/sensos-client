@@ -54,8 +54,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--seed",
         type=int,
-        default=1234,
-        help="Random seed for deterministic output (default: 1234)",
+        default=None,
+        help="Random seed for deterministic output (default: random)",
     )
     parser.add_argument(
         "--start-time",
@@ -250,7 +250,8 @@ def write_wav(path: Path, frames: bytes, sample_rate: int) -> None:
 
 def main() -> int:
     args = parse_args()
-    rng = random.Random(args.seed)
+    seed = args.seed if args.seed is not None else random.SystemRandom().randrange(0, 2**32)
+    rng = random.Random(seed)
     start = parse_start_time(args.start_time)
 
     if args.count <= 0:
@@ -261,6 +262,7 @@ def main() -> int:
         raise SystemExit("--sample-rate must be positive")
 
     ensure_output_root_ready(args.output_root)
+    print(f"seed={seed}")
 
     for index in range(args.count):
         timestamp = start + timedelta(seconds=index * args.spacing_sec)
