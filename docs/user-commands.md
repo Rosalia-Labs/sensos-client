@@ -489,7 +489,6 @@ Important flags:
 - `--delete-after-days`
 - `--enable-service`
 - `--start-service`
-- `--disable`
 
 Typical use:
 
@@ -533,7 +532,6 @@ Typical use:
 ```sh
 config-birdnet-uploads --ownership-model client-retains --session-interval-sec 3600 --start-service
 config-birdnet-uploads --ownership-model server-owns --batch-size 100 --delete-after-days 30 --start-service
-config-birdnet-uploads --disable
 ```
 
 Behavior:
