@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+
+from __future__ import annotations
+
+import argparse
+import math
+import os
+import random
+import sqlite3
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+
+def default_db_path() -> Path:
+    client_root = Path(os.environ.get("SENSOS_CLIENT_ROOT", "/sensos"))
+    return client_root / "data" / "microenv" / "i2c_readings.db"
+
+
+def ensure_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS i2c_readings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            device_address TEXT NOT NULL,
+            sensor_type TEXT NOT NULL,
+            key TEXT NOT NULL,
+            value REAL,
+            sent_to_server INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_i2c_time ON i2c_readings (timestamp)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_i2c_pending_upload ON i2c_readings (sent_to_server, timestamp, id)"
+    )
+    conn.commit()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Generate synthetic I2C readings for upload/display testing."
+    )
+    parser.add_argument(
+        "--db-path",
+        default=str(default_db_path()),
+        help="Path to i2c_readings.db (default: $SENSOS_CLIENT_ROOT/data/microenv/i2c_readings.db)",
+    )
+    parser.add_argument(
+        "--points",
+        type=int,
+        default=120,
+        help="Number of timestamps to generate (default: 120)",
+    )
+    parser.add_argument(
+        "--spacing-sec",
+        type=int,
+        default=60,
+        help="Seconds between generated timestamps (default: 60)",
+    )
+    parser.add_argument(
+        "--start-at",
+        default=None,
+        help="UTC start time (RFC3339 like 2026-04-28T18:00:00Z). Default is now - points*spacing.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=7,
+        help="Random seed for deterministic output (default: 7)",
+    )
+    parser.add_argument(
+        "--mark-sent",
+        action="store_true",
+        help="Insert rows as already sent (sent_to_server=1). Default inserts pending rows.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print sample rows but do not write to SQLite.",
+    )
+    return parser.parse_args()
+
+
+def parse_start_at(raw: str | None, points: int, spacing_sec: int) -> datetime:
+    if raw:
+        text = raw.strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        dt = datetime.fromisoformat(text)
+        return dt.astimezone(UTC)
+    return datetime.now(UTC) - timedelta(seconds=points * spacing_sec)
+
+
+def to_rfc3339_utc(dt: datetime) -> str:
+    return dt.replace(microsecond=0).astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def gen_rowset(points: int, spacing_sec: int, start_at: datetime, rng: random.Random, sent: int) -> list[tuple]:
+    rows: list[tuple] = []
+    for i in range(points):
+        ts = start_at + timedelta(seconds=i * spacing_sec)
+        t = i / max(points - 1, 1)
+        cycle = math.sin(2.0 * math.pi * t)
+        noise = lambda scale: rng.uniform(-scale, scale)
+
+        temp_c = 24.0 + 2.4 * cycle + noise(0.35)
+        humidity = 58.0 - 8.0 * cycle + noise(1.2)
+        pressure = 1012.0 + 2.0 * math.cos(2.0 * math.pi * t) + noise(0.35)
+        co2 = 520.0 + 90.0 * max(0.0, math.sin(4.0 * math.pi * t)) + noise(9.0)
+        lux = max(0.0, 260.0 + 220.0 * math.sin(2.0 * math.pi * t - 1.2) + noise(20.0))
+        volts = max(0.0, min(3.3, 0.18 + lux / 1000.0 + noise(0.01)))
+
+        ts_text = to_rfc3339_utc(ts)
+        rows.extend(
+            [
+                (ts_text, "0x76", "BME280", "temperature_c", round(temp_c, 2), sent),
+                (ts_text, "0x76", "BME280", "humidity_pct", round(humidity, 2), sent),
+                (ts_text, "0x76", "BME280", "pressure_hpa", round(pressure, 2), sent),
+                (ts_text, "0x61", "SCD30", "co2_ppm", round(co2, 1), sent),
+                (ts_text, "0x49", "LT150", "lux", round(lux, 1), sent),
+                (ts_text, "0x49", "LT150", "volts", round(volts, 3), sent),
+            ]
+        )
+    return rows
+
+
+def main() -> int:
+    args = parse_args()
+    if args.points <= 0:
+        raise SystemExit("--points must be > 0")
+    if args.spacing_sec <= 0:
+        raise SystemExit("--spacing-sec must be > 0")
+
+    db_path = Path(args.db_path)
+    start_at = parse_start_at(args.start_at, args.points, args.spacing_sec)
+    rng = random.Random(args.seed)
+    sent = 1 if args.mark_sent else 0
+    rows = gen_rowset(args.points, args.spacing_sec, start_at, rng, sent)
+
+    print(f"db_path={db_path}")
+    print(f"timestamps={args.points} spacing_sec={args.spacing_sec} rows={len(rows)} sent_to_server={sent}")
+    print(f"start={to_rfc3339_utc(start_at)} end={to_rfc3339_utc(start_at + timedelta(seconds=(args.points - 1) * args.spacing_sec))}")
+    print("sample:")
+    for sample in rows[:6]:
+        print(sample)
+
+    if args.dry_run:
+        print("dry-run: no rows written")
+        return 0
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db_path, timeout=30) as conn:
+        ensure_schema(conn)
+        conn.executemany(
+            """
+            INSERT INTO i2c_readings (timestamp, device_address, sensor_type, key, value, sent_to_server)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        conn.commit()
+
+    print(f"inserted={len(rows)}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
