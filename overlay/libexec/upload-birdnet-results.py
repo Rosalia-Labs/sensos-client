@@ -141,7 +141,15 @@ def post_birdnet_detections(
         return response.status, response.read().decode("utf-8", errors="replace")
 
 
-def run_upload_session(config: dict, network_config: dict, api_password: str, client_version: str) -> None:
+def run_upload_session(
+    config: dict, network_config: dict, api_password: str, client_version: str
+) -> bool:
+    """Run one upload attempt.
+
+    Returns True when the caller should sleep before the next attempt.
+    Returns False when more pending detections remain and the caller should
+    immediately run another session to drain backlog.
+    """
     server_host = require_nonempty(network_config.get("SERVER_WG_IP"), "SERVER_WG_IP")
     server_port = require_nonempty(network_config.get("SERVER_PORT"), "SERVER_PORT")
     peer_uuid = require_peer_uuid(network_config)
@@ -152,7 +160,7 @@ def run_upload_session(config: dict, network_config: dict, api_password: str, cl
         rows = select_pending_detections(conn, config["batch_size"])
     if not rows:
         print("[INFO] No pending BirdNET detections to upload.")
-        return
+        return True
 
     payload = build_upload_payload(
         hostname=hostname,
@@ -180,10 +188,10 @@ def run_upload_session(config: dict, network_config: dict, api_password: str, cl
         response_status = exc.code
         response_body = exc.read().decode("utf-8", errors="replace")
         print(f"[ERROR] BirdNET upload failed: HTTP {exc.code}: {response_body}", file=sys.stderr)
-        return
+        return True
     except error.URLError as exc:
         print(f"[ERROR] BirdNET upload network error: {exc}", file=sys.stderr)
-        return
+        return True
     except Exception as exc:
         message = f"{exc.__class__.__name__}: {exc}"
         if response_status is not None:
@@ -191,7 +199,7 @@ def run_upload_session(config: dict, network_config: dict, api_password: str, cl
         if response_body:
             message = f"{message}; response={response_body}"
         print(f"[ERROR] BirdNET upload failed: {message}", file=sys.stderr)
-        return
+        return True
 
     with connect_db() as conn:
         ensure_schema(conn)
@@ -202,6 +210,12 @@ def run_upload_session(config: dict, network_config: dict, api_password: str, cl
         f"accepted={receipt.get('accepted_count')!r} "
         f"server_received_at={receipt.get('server_received_at') or 'n/a'}"
     )
+    with connect_db() as conn:
+        ensure_schema(conn)
+        has_more = bool(select_pending_detections(conn, 1))
+    if has_more:
+        print("[INFO] Additional pending BirdNET detections remain; continuing without sleep.")
+    return not has_more
 
 
 def main() -> int:
@@ -218,8 +232,11 @@ def main() -> int:
 
     client_version = read_client_version_text(str(OVERLAY_ROOT))
     while True:
+        should_sleep = True
         try:
-            run_upload_session(config, network_config, api_password, client_version)
+            should_sleep = run_upload_session(
+                config, network_config, api_password, client_version
+            )
         except sqlite3.OperationalError as exc:
             print(
                 f"[ERROR] BirdNET upload SQLite OperationalError: {exc}",
@@ -237,7 +254,8 @@ def main() -> int:
                 file=sys.stderr,
             )
             traceback.print_exc()
-        time.sleep(config["session_interval_sec"])
+        if should_sleep:
+            time.sleep(config["session_interval_sec"])
 
 
 if __name__ == "__main__":

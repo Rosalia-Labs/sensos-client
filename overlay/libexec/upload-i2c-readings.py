@@ -145,7 +145,15 @@ def reading_rows_to_payload(rows) -> list[dict]:
     ]
 
 
-def run_upload_session(config: dict, network_config: dict, api_password: str, client_version: str) -> None:
+def run_upload_session(
+    config: dict, network_config: dict, api_password: str, client_version: str
+) -> bool:
+    """Run one upload attempt.
+
+    Returns True when the caller should sleep before the next attempt.
+    Returns False when pending readings remain and the caller should continue
+    immediately to drain backlog.
+    """
     server_host = require_nonempty(network_config.get("SERVER_WG_IP"), "SERVER_WG_IP")
     server_port = require_nonempty(network_config.get("SERVER_PORT"), "SERVER_PORT")
     peer_uuid = require_peer_uuid(network_config)
@@ -156,7 +164,7 @@ def run_upload_session(config: dict, network_config: dict, api_password: str, cl
         rows = select_pending_readings(conn, config["batch_size"])
     if not rows:
         print("[INFO] No pending I2C readings to upload.")
-        return
+        return True
 
     payload_readings = reading_rows_to_payload(rows)
     payload = build_i2c_upload_payload(
@@ -187,7 +195,7 @@ def run_upload_session(config: dict, network_config: dict, api_password: str, cl
         response_body = exc.read().decode("utf-8", errors="replace")
         message = f"HTTP {exc.code}: {response_body}"
         print(f"[ERROR] I2C upload failed: {message}", file=sys.stderr)
-        return
+        return True
     except Exception as exc:
         message = str(exc)
         if response_status is not None:
@@ -195,7 +203,7 @@ def run_upload_session(config: dict, network_config: dict, api_password: str, cl
         if response_body:
             message = f"{message}; response={response_body}"
         print(f"[ERROR] I2C upload failed: {message}", file=sys.stderr)
-        return
+        return True
 
     with connect_db() as conn:
         ensure_schema(conn)
@@ -207,6 +215,12 @@ def run_upload_session(config: dict, network_config: dict, api_password: str, cl
         f"accepted={receipt.get('accepted_count')!r} "
         f"server_received_at={receipt.get('server_received_at') or 'n/a'}"
     )
+    with connect_db() as conn:
+        ensure_schema(conn)
+        has_more = bool(select_pending_readings(conn, 1))
+    if has_more:
+        print("[INFO] Additional pending I2C readings remain; continuing without sleep.")
+    return not has_more
 
 
 def main() -> int:
@@ -221,11 +235,15 @@ def main() -> int:
         f"(session_interval_sec={config['session_interval_sec']})"
     )
     while True:
+        should_sleep = True
         try:
-            run_upload_session(config, network_config, api_password, client_version)
+            should_sleep = run_upload_session(
+                config, network_config, api_password, client_version
+            )
         except Exception as exc:
             print(f"[ERROR] Unhandled upload session failure: {exc}", file=sys.stderr)
-        time.sleep(config["session_interval_sec"])
+        if should_sleep:
+            time.sleep(config["session_interval_sec"])
 
 
 if __name__ == "__main__":
