@@ -495,7 +495,6 @@ Typical use:
 ```sh
 config-i2c-uploads --ownership-model client-retains --session-interval-sec 3600 --start-service
 config-i2c-uploads --ownership-model server-owns --batch-size 1000 --delete-after-days 30 --start-service
-config-i2c-uploads --disable
 ```
 
 Behavior:
