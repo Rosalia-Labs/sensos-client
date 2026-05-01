@@ -43,11 +43,11 @@ RETIRED_UNITS=(
 
 OPTIONAL_AUDIO_UNITS=(
     sensos-record-audio.service
-    sensos-thin-data.service
 )
 
 ALWAYS_ON_SENSOS_UNITS=(
     sensos-compress-audio.service
+    sensos-thin-data.service
 )
 
 RESTART_SAFE_SENSOS_UNITS=(

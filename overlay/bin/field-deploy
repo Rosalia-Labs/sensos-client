@@ -14,7 +14,7 @@ CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${OVERLAY_ROOT}}"
 PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
 DATA_STORAGE_OPS_LIB="${OVERLAY_ROOT}/libexec/data-storage-ops.sh"
 SENSOS_ADMIN_HELPER_LIB="${OVERLAY_ROOT}/libexec/ensure-sensos-admin.sh"
-DEBUG_SERVICES_CMD="${OVERLAY_ROOT}/bin/debug-services"
+DEBUG_SERVICES_CMD=""
 NETWORK_CONF="${CLIENT_ROOT}/etc/network.conf"
 ARECORD_CONF="${CLIENT_ROOT}/etc/arecord.conf"
 BIRDNET_ENV="${CLIENT_ROOT}/etc/birdnet.env"
@@ -69,6 +69,25 @@ read_kv() {
     awk -F= -v k="${key}" '$1==k {print $2}' "${path}" | tail -n 1 | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
 }
 
+resolve_exec_cmd() {
+    local preferred_path="$1"
+    local command_name="$2"
+
+    if [[ -x "${preferred_path}" ]]; then
+        printf '%s\n' "${preferred_path}"
+        return 0
+    fi
+
+    local resolved_path
+    resolved_path="$(command -v "${command_name}" 2>/dev/null || true)"
+    if [[ -n "${resolved_path}" && -x "${resolved_path}" ]]; then
+        printf '%s\n' "${resolved_path}"
+        return 0
+    fi
+
+    return 1
+}
+
 service_enabled() {
     local unit="$1"
     systemctl is-enabled --quiet "${unit}" >/dev/null 2>&1
@@ -115,6 +134,7 @@ print_deployment_overview() {
 
 main() {
     local network_name
+    DEBUG_SERVICES_CMD="$(resolve_exec_cmd "${OVERLAY_ROOT}/bin/debug-services" "debug-services" || true)"
 
     network_name="$(read_kv "${NETWORK_CONF}" "NETWORK_NAME")"
     [[ -n "${network_name}" ]] || {
@@ -141,7 +161,7 @@ main() {
         echo "⚠️ wg-quick@${network_name} is not active" >&2
     fi
 
-    if [[ -x "${DEBUG_SERVICES_CMD}" ]]; then
+    if [[ -n "${DEBUG_SERVICES_CMD}" && -x "${DEBUG_SERVICES_CMD}" ]]; then
         echo ""
         "${DEBUG_SERVICES_CMD}" || true
     fi
