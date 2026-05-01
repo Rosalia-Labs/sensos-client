@@ -26,6 +26,7 @@ PARTED_BIN=""
 PARTPROBE_BIN=""
 MKFS_EXT4_BIN=""
 PARTITION_ALREADY_MOUNTED_AT_DATA=0
+AUTO_ENTERED_ARCHIVE_MODE=0
 
 [[ -f "${PARSE_SWITCHES_LIB}" ]] || {
     echo "❌ Missing parse-switches library at ${PARSE_SWITCHES_LIB}"
@@ -81,6 +82,28 @@ ensure_archive_mode_active_for_storage_changes() {
     fi
 
     "${ARCHIVE_MODE_CMD}" --enter || die "Failed to enter archive mode automatically."
+    AUTO_ENTERED_ARCHIVE_MODE=1
+}
+
+maybe_exit_archive_mode_after_storage_changes() {
+    [[ "${AUTO_ENTERED_ARCHIVE_MODE}" == "1" ]] || return 0
+
+    if [[ "${yes}" == "true" ]]; then
+        "${ARCHIVE_MODE_CMD}" --exit || die "Failed to exit archive mode automatically."
+        return 0
+    fi
+
+    if is_interactive; then
+        if confirm_yes_no "Exit archive mode now (runs: archive-mode --exit)?" true; then
+            "${ARCHIVE_MODE_CMD}" --exit || die "Failed to exit archive mode automatically."
+        else
+            echo "ℹ️  Leaving archive mode active. Run: archive-mode --exit"
+        fi
+        return 0
+    fi
+
+    echo "ℹ️  Archive mode was entered automatically and remains active (non-interactive run)."
+    echo "ℹ️  Run: archive-mode --exit"
 }
 
 require_cmd() {
@@ -491,6 +514,7 @@ main() {
     persist_mount_if_requested
     write_storage_metadata
     finalize_mount_permissions
+    maybe_exit_archive_mode_after_storage_changes
 
     echo "✅ Storage configured at ${DATA_MOUNT}"
 }
