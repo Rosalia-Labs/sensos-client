@@ -5,6 +5,7 @@
 import os
 import sys
 import pwd
+import shlex
 import importlib.util
 import datetime
 import shutil
@@ -35,6 +36,7 @@ SENSOS_KEYS_DIR = os.path.join(CLIENT_ROOT, "keys")
 SENSOS_NET_CONF = os.path.join(SENSOS_ETC_DIR, "network.conf")
 REQUESTS = None
 STATUS_UPDATE_TIMER = "sensos-send-status-update.timer"
+WG_MANAGED_MARKER = "# Managed by SensOS config-network"
 
 
 def http_requests():
@@ -278,6 +280,7 @@ def write_wireguard_config(wg_ip, server_pubkey, wg_public_ip, wg_port, network_
     allowed_ips = f"{base_ip}.0.0/16"
 
     config = f"""
+{WG_MANAGED_MARKER}
 [Interface]
 PrivateKey = {private_key}
 Address = {wg_ip}/32
@@ -484,13 +487,48 @@ def sensos_config_files_exist(args):
 
 
 def remove_sensos_config_files(network_name):
+    managed_networks = set()
+
+    previous_network_name = read_network_conf().get("NETWORK_NAME", "").strip()
+    if previous_network_name:
+        managed_networks.add(previous_network_name)
+    if network_name:
+        managed_networks.add(network_name)
+
+    for entry in os.listdir(WG_DIR):
+        if not entry.endswith(".conf"):
+            continue
+        candidate = entry[:-5]
+        conf_path = os.path.join(WG_DIR, entry)
+        private_key_path = os.path.join(WG_DIR, f"{candidate}-private.key")
+        public_key_path = os.path.join(WG_DIR, f"{candidate}-public.key")
+        conf_body = read_file(conf_path) or ""
+        if (
+            WG_MANAGED_MARKER in conf_body
+            or (os.path.exists(private_key_path) and os.path.exists(public_key_path))
+        ):
+            managed_networks.add(candidate)
+
+    for managed_network in sorted(managed_networks):
+        if not managed_network:
+            continue
+        if not re.fullmatch(r"[A-Za-z0-9_.@-]+", managed_network):
+            print(f"⚠️ Skipping unexpected network name during cleanup: {managed_network}")
+            continue
+
+        privileged_shell(
+            f"systemctl disable --now {shlex.quote(f'wg-quick@{managed_network}')}",
+            silent=True,
+        )
+        remove_file(os.path.join(WG_DIR, f"{managed_network}-private.key"))
+        remove_file(os.path.join(WG_DIR, f"{managed_network}-public.key"))
+        remove_file(os.path.join(WG_DIR, f"{managed_network}.conf"))
+
     files_to_remove = [
-        os.path.join(WG_DIR, f"{network_name}-private.key"),
-        os.path.join(WG_DIR, f"{network_name}-public.key"),
-        os.path.join(WG_DIR, f"{network_name}.conf"),
         os.path.join(SENSOS_ADMIN_HOME, ".ssh", "id_ed25519"),
         os.path.join(SENSOS_ADMIN_HOME, ".ssh", "id_ed25519.pub"),
         SENSOS_NET_CONF,
+        API_PASSWORD_FILE,
     ]
     for file_path in files_to_remove:
         remove_file(file_path)

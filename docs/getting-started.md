@@ -200,6 +200,40 @@ Run this before commands that need:
 - `SERVER_PORT`
 - client API password
 
+### Staged Provisioning And Network Cutover
+
+A practical field workflow is:
+
+1. enroll/configure on a temporary setup network (for example `testing`)
+2. finish full device configuration and validation while internet access is convenient
+3. clear test data and re-enroll on the operational network (for example `biosense`)
+
+This works, with two important notes:
+
+- some setup/config flows may require internet access depending on what you run
+  (for example package installs, Python dependency installs, model downloads, or
+  uploads/tests against external endpoints)
+- changing `--network` can leave old WireGuard artifacts unless you explicitly
+  retire the previous interface/unit
+
+Recommended cutover sequence:
+
+```sh
+# 1) Quiesce and clear data from the testing epoch
+archive-mode --enter
+archive-mode --exit --clear-data
+
+# 2) Re-enroll onto the operational network
+config-network --setup-server <server-host-or-ip> --setup-port <setup-port> --network biosense --force
+```
+
+Why `--force` is required for cutover:
+
+- it fully removes existing managed enrollment artifacts before re-enrolling
+- this includes prior SensOS-managed WireGuard config/key files, prior
+  `wg-quick@<network>` units, `/sensos/etc/network.conf`, and the saved client
+  API password file
+
 ### `upload-hardware-profile`
 
 Uploads the local machine's hardware inventory to the server for the already enrolled peer.
@@ -271,6 +305,7 @@ Behavior:
 - if no device is supplied and stdin is interactive, prompts for a block device or `none`
 - if no device is supplied and stdin is not interactive, exits with a clear error naming `--device`
 - can prepare `/sensos/data` on the current filesystem without a separate disk
+- when a storage change is requested and `/sensos/data` writer services are active, it enters archive mode automatically before proceeding
 - the normal external-disk path is: create one GPT table, create one ext4 partition, mount it at `/sensos/data`, and persist it in `/etc/fstab`
 - `--wipe` is the explicit non-interactive flag for destructive reprovisioning of a selected disk
 - `--yes` skips confirmations, but only when paired with an explicit destructive action such as `--wipe`
