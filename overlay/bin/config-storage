@@ -21,7 +21,7 @@ PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
 CACHE_SYS_INFO_SCRIPT="${OVERLAY_ROOT}/libexec/cache-sys-info.sh"
 DATA_STORAGE_OPS_LIB="${OVERLAY_ROOT}/libexec/data-storage-ops.sh"
 SENSOS_ADMIN_HELPER_LIB="${OVERLAY_ROOT}/libexec/ensure-sensos-admin.sh"
-ARCHIVE_MODE_CMD="${OVERLAY_ROOT}/bin/archive-mode"
+ARCHIVE_MODE_CMD="archive-mode"
 PARTED_BIN=""
 PARTPROBE_BIN=""
 MKFS_EXT4_BIN=""
@@ -70,7 +70,10 @@ ensure_archive_mode_active_for_storage_changes() {
         return 0
     fi
 
-    [[ -x "${ARCHIVE_MODE_CMD}" ]] || die "archive-mode helper not found at ${ARCHIVE_MODE_CMD}"
+    local archive_mode_path=""
+    archive_mode_path="$(command -v archive-mode 2>/dev/null || true)"
+    [[ -n "${archive_mode_path}" && -x "${archive_mode_path}" ]] || die "archive-mode helper not found in PATH"
+    ARCHIVE_MODE_CMD="${archive_mode_path}"
 
     echo "ℹ️  Data-writer services are active; entering archive mode before storage changes."
     if [[ "${yes}" != "true" ]] && is_interactive; then
