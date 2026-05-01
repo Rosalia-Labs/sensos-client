@@ -535,38 +535,6 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(args.port, 18765)
         self.assertEqual(args.config_port, 8765)
 
-    def test_config_network_keeps_port_as_backward_compatible_setup_port_alias(self):
-        argv = [
-            "config-network",
-            "--setup-server",
-            "10.0.2.2",
-            "--port",
-            "18765",
-            "--network",
-            "testing",
-        ]
-        with mock.patch.object(sys, "argv", argv):
-            args = config_network.parse_args()
-
-        self.assertEqual(args.port, 18765)
-        self.assertEqual(args.config_port, 8765)
-
-    def test_config_network_keeps_legacy_server_and_api_port_aliases(self):
-        argv = [
-            "config-network",
-            "--config-server",
-            "10.0.2.2",
-            "--config-port",
-            "9777",
-            "--network",
-            "testing",
-        ]
-        with mock.patch.object(sys, "argv", argv):
-            args = config_network.parse_args()
-
-        self.assertEqual(args.config_server, "10.0.2.2")
-        self.assertEqual(args.config_port, 9777)
-
     def test_write_client_settings_separates_setup_and_steady_state_api_ports(self):
         args = SimpleNamespace(
             config_server="10.0.2.2",

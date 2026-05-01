@@ -54,11 +54,8 @@ def parse_args():
 
     arg_defs = [
         (["--setup-server"], {"help": "Setup-time enrollment server hostname or IP (required)", "dest": "config_server"}),
-        (["--config-server"], {"help": argparse.SUPPRESS, "dest": "config_server"}),
         (["--setup-port"], {"help": "Setup-time enrollment API port (default: 8765)", "dest": "port", "type": int, "default": 8765}),
-        (["--port"], {"help": argparse.SUPPRESS, "dest": "port", "type": int}),
         (["--api-port"], {"help": "Steady-state API port to store for post-setup WireGuard access (default: 8765)", "dest": "config_port", "type": int}),
-        (["--config-port"], {"help": argparse.SUPPRESS, "dest": "config_port", "type": int}),
         (["--network"], {"help": "Network name (required)", "dest": "network"}),
         (["--subnet"], {"help": "Subnet offset for WireGuard IP assignment (default: 1, i.e., x.x.1.1)", "dest": "subnet", "type": int, "default": 1}),
         (["--wg-endpoint"], {"help": "WireGuard endpoint as host, host:port, or [ipv6-literal]:port (optional override)", "dest": "wg_endpoint"}),

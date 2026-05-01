@@ -112,9 +112,7 @@ def main():
         (["--latitude"], {"type": float, "help": "Latitude"}),
         (["--longitude"], {"type": float, "help": "Longitude"}),
         (["--setup-server"], {"help": "Override setup-time API server hostname or IP", "dest": "config_server"}),
-        (["--config-server"], {"help": argparse.SUPPRESS, "dest": "config_server"}),
         (["--setup-port"], {"help": "Override setup-time API port", "dest": "port"}),
-        (["--port"], {"help": argparse.SUPPRESS, "dest": "port"}),
     ]
     args = parse_args_with_defaults(arg_defs, ["global", "config_location"])
     args = fill_missing_location_args(args)

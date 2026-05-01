@@ -186,8 +186,7 @@ config-network --setup-server 10.0.2.2 --setup-port 18765 --api-port 8765 --netw
 
 If you omit `--api-port`, the client now still stores steady-state API port
 `8765` in `/sensos/etc/network.conf`. The setup API port `18765` is only for
-enrollment. `--port` still works as a backward-compatible alias for
-`--setup-port`.
+enrollment.
 
 In the standard QEMU flow, do not override `--wg-endpoint` just to translate an
 old internal container port like `15182`. The server should publish the

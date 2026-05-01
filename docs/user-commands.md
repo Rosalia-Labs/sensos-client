@@ -154,8 +154,8 @@ Primary network enrollment command. This is the core command that registers the 
 Important flags from the source:
 
 - `--setup-server`
-- `--setup-port` (`--port` is still accepted as a legacy alias)
-- `--api-port` (`--config-port` is still accepted as a legacy alias)
+- `--setup-port`
+- `--api-port`
 - `--network`
 - `--subnet`
 - `--wg-endpoint`
@@ -179,9 +179,7 @@ Main gotchas:
 - `--setup-server` is only the server address reachable from the current setup environment
 - hostnames are fine here when the client can resolve them; literal IPs are also fine and can be simpler in lab or QEMU testing
 - `--setup-port` is the setup-time enrollment API port only
-- `--port` remains as a backward-compatible alias for `--setup-port`
 - `--api-port` is the steady-state in-tunnel API port saved into `/sensos/etc/network.conf` for later WireGuard-side API calls such as `config-location`, status updates, and hardware-profile upload
-- `--config-port` remains as a backward-compatible alias for `--api-port`
 - if `--api-port` is omitted, it defaults to `8765` even when setup enrollment uses a forwarded port such as `18765`
 - the server will usually return a `wg_endpoint` suitable for the chosen network, but if the deployed device must reach a different public or routed endpoint, you need to override it with `--wg-endpoint`
 - `--wg-endpoint` accepts a host, `host:port`, or `[ipv6-literal]:port`
@@ -230,8 +228,8 @@ Important flags:
 
 - `--latitude`
 - `--longitude`
-- `--setup-server` (`--config-server` is still accepted as a legacy alias)
-- `--setup-port` (`--port` is still accepted as a legacy alias)
+- `--setup-server`
+- `--setup-port`
 
 Typical use:
 

@@ -26,14 +26,6 @@ Git commit hashes are useful for traceability, but they are not the primary vers
 
 ## Meaning
 
-Before `1.0.0`, this repo should be treated as pre-stable:
-
-- `MAJOR`: reserved for the eventual stable compatibility line (`1.0.0` and beyond)
-- `MINOR`: the main release boundary during `0.x`; may include breaking deployment, state-layout, or migration-contract changes
-- `PATCH`: bug fixes and idempotence fixes that do not intentionally change the desired setup contract
-
-After `1.0.0`, use stricter semver-style meaning:
-
 - `MAJOR`: breaking compatibility, incompatible state layout, or migration contract changes
 - `MINOR`: backward-compatible features or additive setup/state changes
 - `PATCH`: bug fixes and idempotence fixes that do not change the migration contract
@@ -65,32 +57,6 @@ Before a release:
 - decide whether the change is `MAJOR`, `MINOR`, or `PATCH`
 - bump [`VERSION`](../VERSION) intentionally
 - if the release changes persisted state or setup behavior, add or update migration logic
-
-During `0.x`, prefer `MINOR` bumps for meaningful deployment-model or setup-contract changes, even when they are not backward-compatible.
-
-## Working Mode During Active Stabilization
-
-While the repo is still in a high-churn bug-swatting phase, use a rolling
-`-dev` version for the current migration boundary.
-
-Example:
-
-```text
-0.6.0-dev
-```
-
-In this mode:
-
-- do not bump `PATCH` for every bug fix or idempotence fix
-- keep the same `MAJOR.MINOR.PATCH-dev` while you are stabilizing one intended deployment contract
-- bump `MINOR` when the migration boundary changes in a meaningful way
-  - service renames
-  - command renames
-  - state-layout changes
-  - install or upgrade contract changes
-- cut the non-`-dev` version only when that migration line is stable enough to treat as a release boundary
-
-This keeps the migration key meaningful without forcing noisy version churn for every repair commit.
 
 When running setup on a Pi:
 
