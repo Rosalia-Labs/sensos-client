@@ -3,7 +3,8 @@ Client side configuration scripts
 
 Read this first:
 
-- [Getting started and command guide](docs/getting-started.md)
+- [Getting started tutorial](docs/getting-started.md)
+- [Command reference](docs/command-reference.md)
 
 Other docs:
 
