@@ -40,17 +40,17 @@ Reference:
 - [`config-time`](command-reference.md#config-time)
 - [`config-network`](command-reference.md#config-network)
 
-## 3. Set Device Metadata
+## 3. Set Device Metadata And Storage
 
 ```sh
 config-location --latitude <lat> --longitude <lon>
-upload-hardware-profile
+config-storage
 ```
 
 Reference:
 
 - [`config-location`](command-reference.md#config-location)
-- [`upload-hardware-profile`](command-reference.md#upload-hardware-profile)
+- [`config-storage`](command-reference.md#config-storage)
 
 ## 4. Configure Optional Features
 
@@ -74,6 +74,17 @@ For staged deployment and network cutover, follow:
 - [`Staged Provisioning And Network Cutover`](command-reference.md#staged-provisioning-and-network-cutover)
 - [`prep-for-deployment`](command-reference.md#prep-for-deployment)
 - [`field-deploy`](command-reference.md#field-deploy)
+
+## Optional: Upload Hardware Inventory
+
+Upload hardware inventory after enrollment, ideally on the final deployed
+hardware:
+
+```sh
+upload-hardware-profile
+```
+
+Reference: [`upload-hardware-profile`](command-reference.md#upload-hardware-profile)
 
 ## Ongoing Operations
 
