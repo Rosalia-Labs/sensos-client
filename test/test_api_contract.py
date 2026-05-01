@@ -133,6 +133,24 @@ class ApiContractTests(unittest.TestCase):
             "Basic " + base64.b64encode(b"peer-123:peer-secret").decode(),
         )
 
+    def test_force_cleanup_falls_back_to_privileged_ls_when_wireguard_dir_not_readable(self):
+        with mock.patch.object(config_network, "read_network_conf", return_value={}):
+            with mock.patch.object(config_network.os, "listdir", side_effect=PermissionError("denied")):
+                with mock.patch.object(config_network.os.path, "exists", return_value=False):
+                    with mock.patch.object(
+                        config_network,
+                        "privileged_shell",
+                        return_value=("testing.conf\nREADME.txt\n", 0),
+                    ) as privileged_shell_mock:
+                        with mock.patch.object(config_network, "read_file", return_value=""):
+                            with mock.patch.object(config_network, "remove_file") as remove_file_mock:
+                                config_network.remove_sensos_config_files("testing")
+
+        privileged_shell_mock.assert_any_call("ls -1 /etc/wireguard", silent=True)
+        remove_file_mock.assert_any_call("/etc/wireguard/testing-private.key")
+        remove_file_mock.assert_any_call("/etc/wireguard/testing-public.key")
+        remove_file_mock.assert_any_call("/etc/wireguard/testing.conf")
+
     def test_client_status_payload_uses_current_server_field_names(self):
         payload = send_status_update.build_client_status_payload(
             hostname="sensor-1",
