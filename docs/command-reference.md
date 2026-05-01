@@ -8,22 +8,7 @@ Most of these commands are installed onto the device under `/usr/local/bin` by t
 
 ## Typical Setup Sequence
 
-Typical order on a newly configured device:
-
-1. `config-time`
-2. `config-network`
-3. `config-location`
-4. `config-storage`
-5. `config-arecord`
-6. `config-i2c-sensors`
-7. `config-i2c-uploads`
-8. `config-birdnet`
-9. other feature-specific commands as needed
-
-Notes:
-
-- `config-storage` can be run earlier. In practice it is often run after network and location are set, but before recording runs for long.
-- Commands that change system state usually expect `sensos-admin` or use `sudo` internally.
+Canonical setup order is documented in the [Getting Started Tutorial](getting-started.md).
 
 ## SSH Over Cellular
 

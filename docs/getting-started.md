@@ -4,6 +4,23 @@ This guide is the shortest path to bring up a SensOS client device.
 For full command syntax, flags, and edge cases, use the
 [`Command Reference`](command-reference.md).
 
+## Typical Setup Sequence
+
+1. `config-time`
+2. `config-network`
+3. `config-location`
+4. `config-storage`
+5. `config-arecord`
+6. `config-i2c-sensors`
+7. `config-i2c-uploads`
+8. `config-birdnet`
+9. other feature-specific setup as needed
+
+Notes:
+
+- `config-storage` can be run earlier, but run it before long recording sessions.
+- Commands that change system state usually expect `sensos-admin` or use `sudo` internally.
+
 ## Before You Start
 
 - Use a Debian-family host/device image supported by this repo.
