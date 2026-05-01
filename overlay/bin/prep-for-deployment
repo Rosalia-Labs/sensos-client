@@ -1,0 +1,259 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+set -euo pipefail
+
+SCRIPT_FILE="$(realpath "${BASH_SOURCE[0]}")"
+resolve_overlay_root() {
+    printf '%s\n' "${SENSOS_CLIENT_ROOT:-/sensos}"
+}
+OVERLAY_ROOT="$(resolve_overlay_root)"
+CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${OVERLAY_ROOT}}"
+
+PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
+DATA_STORAGE_OPS_LIB="${OVERLAY_ROOT}/libexec/data-storage-ops.sh"
+SENSOS_ADMIN_HELPER_LIB="${OVERLAY_ROOT}/libexec/ensure-sensos-admin.sh"
+CONFIG_NETWORK_CMD="${OVERLAY_ROOT}/bin/config-network"
+DEBUG_SERVICES_CMD="${OVERLAY_ROOT}/bin/debug-services"
+NETWORK_CONF="${CLIENT_ROOT}/etc/network.conf"
+LOCATION_CONF="${CLIENT_ROOT}/etc/location.conf"
+
+[[ -f "${PARSE_SWITCHES_LIB}" ]] || { echo "ERROR: missing ${PARSE_SWITCHES_LIB}" >&2; exit 1; }
+source "${PARSE_SWITCHES_LIB}"
+[[ -f "${DATA_STORAGE_OPS_LIB}" ]] || { echo "ERROR: missing ${DATA_STORAGE_OPS_LIB}" >&2; exit 1; }
+source "${DATA_STORAGE_OPS_LIB}"
+[[ -f "${SENSOS_ADMIN_HELPER_LIB}" ]] || { echo "ERROR: missing ${SENSOS_ADMIN_HELPER_LIB}" >&2; exit 1; }
+source "${SENSOS_ADMIN_HELPER_LIB}"
+
+ensure_sensos_admin_user "${SCRIPT_FILE}" "$@"
+
+register_option --network network "Operational network name" ""
+register_option --keep-data keep_data "Keep existing /sensos/data contents" "false"
+register_option --yes yes "Skip interactive confirmations" "false"
+
+parse_switches "prep-for-deployment" "$@"
+
+require_cmd() {
+    command -v "$1" >/dev/null 2>&1 || {
+        echo "ERROR: required command not found: $1" >&2
+        exit 1
+    }
+}
+
+is_interactive() {
+    [[ -t 0 ]]
+}
+
+confirm_yes_no() {
+    local prompt="$1"
+    local default_yes="${2:-false}"
+    local answer=""
+
+    if [[ "${yes}" == "true" ]]; then
+        return 0
+    fi
+
+    if ! is_interactive; then
+        return 1
+    fi
+
+    if [[ "${default_yes}" == "true" ]]; then
+        read -r -p "${prompt} [Y/n] " answer
+        [[ "${answer}" != [nN] ]]
+        return
+    fi
+
+    read -r -p "${prompt} [y/N] " answer
+    [[ "${answer}" == [yY] ]]
+}
+
+read_kv() {
+    local path="$1"
+    local key="$2"
+    [[ -f "${path}" ]] || return 0
+    awk -F= -v k="${key}" '$1==k {print $2}' "${path}" | tail -n 1 | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+require_existing_network_config() {
+    [[ -f "${NETWORK_CONF}" ]] || {
+        echo "ERROR: ${NETWORK_CONF} not found." >&2
+        echo "Run config-network successfully before prep-for-deployment." >&2
+        exit 1
+    }
+
+    setup_server="$(read_kv "${NETWORK_CONF}" "SETUP_API_HOST")"
+    setup_port="$(read_kv "${NETWORK_CONF}" "SETUP_API_PORT")"
+    api_port="$(read_kv "${NETWORK_CONF}" "SERVER_PORT")"
+    local current_network
+    current_network="$(read_kv "${NETWORK_CONF}" "NETWORK_NAME")"
+
+    [[ -n "${setup_server}" ]] || {
+        echo "ERROR: SETUP_API_HOST missing in ${NETWORK_CONF}." >&2
+        echo "Run config-network successfully before prep-for-deployment." >&2
+        exit 1
+    }
+    [[ -n "${setup_port}" ]] || {
+        echo "ERROR: SETUP_API_PORT missing in ${NETWORK_CONF}." >&2
+        echo "Run config-network successfully before prep-for-deployment." >&2
+        exit 1
+    }
+    [[ -n "${api_port}" ]] || {
+        echo "ERROR: SERVER_PORT missing in ${NETWORK_CONF}." >&2
+        echo "Run config-network successfully before prep-for-deployment." >&2
+        exit 1
+    }
+
+    if [[ -z "${network}" ]]; then
+        if is_interactive; then
+            read -r -p "Enter operational network name: " network
+            network="${network:-}"
+        fi
+    fi
+    [[ -n "${network}" ]] || {
+        echo "ERROR: --network is required (target operational network)." >&2
+        exit 1
+    }
+
+    if [[ -n "${current_network}" && "${network}" == "${current_network}" ]]; then
+        confirm_yes_no "Target network matches current network (${current_network}). Continue anyway?" false || {
+            echo "Aborted." >&2
+            exit 1
+        }
+    fi
+}
+
+show_clock_and_confirm() {
+    echo ""
+    echo "=== Clock Check ==="
+    if command -v timedatectl >/dev/null 2>&1; then
+        timedatectl status || true
+    else
+        date -u
+    fi
+    confirm_yes_no "Does the clock look correct for deployment?" false || {
+        echo "Aborted: fix time first (for example with config-time)." >&2
+        exit 1
+    }
+}
+
+show_location_and_confirm() {
+    local lat lon
+    lat="$(read_kv "${LOCATION_CONF}" "LATITUDE")"
+    lon="$(read_kv "${LOCATION_CONF}" "LONGITUDE")"
+
+    echo ""
+    echo "=== Location Check ==="
+    if [[ -n "${lat}" && -n "${lon}" ]]; then
+        echo "Configured field location: latitude=${lat} longitude=${lon}"
+    else
+        echo "Location is missing or incomplete in ${LOCATION_CONF}." >&2
+    fi
+
+    confirm_yes_no "Is location set to the final field location?" false || {
+        echo "Aborted: set location first (config-location) and retry." >&2
+        exit 1
+    }
+}
+
+stop_nonessential_units() {
+    data_ops_stop_data_units
+    data_ops_run_systemctl stop sensos-send-status-update.timer >/dev/null 2>&1 || true
+    data_ops_run_systemctl stop sensos-send-status-update.service >/dev/null 2>&1 || true
+    data_ops_run_systemctl stop sensos-network-capture.service >/dev/null 2>&1 || true
+}
+
+clear_test_data_if_requested() {
+    if [[ "${keep_data}" == "true" ]]; then
+        echo "ℹ️ Keeping existing ${DATA_MOUNT} contents (--keep-data)."
+        return 0
+    fi
+
+    echo "🧹 Clearing test data in ${DATA_MOUNT}..."
+    data_ops_checkpoint_sqlite_dbs || true
+    data_ops_sync_storage || true
+    data_ops_reset_data_root
+}
+
+run_network_cutover() {
+    [[ -x "${CONFIG_NETWORK_CMD}" ]] || {
+        echo "ERROR: missing config-network at ${CONFIG_NETWORK_CMD}" >&2
+        exit 1
+    }
+    [[ -n "${network}" ]] || {
+        echo "ERROR: --network is required" >&2
+        exit 1
+    }
+
+    local -a cmd
+    cmd=(
+        "${CONFIG_NETWORK_CMD}"
+        --setup-server "${setup_server}"
+        --setup-port "${setup_port}"
+        --api-port "${api_port}"
+        --network "${network}"
+        --force
+    )
+
+    echo "🔁 Switching enrollment/network to '${network}'..."
+    "${cmd[@]}"
+}
+
+post_cutover_smoke_checks() {
+    echo ""
+    echo "=== Post-cutover checks ==="
+    local configured_network configured_server configured_port
+    configured_network="$(read_kv "${NETWORK_CONF}" "NETWORK_NAME")"
+    configured_server="$(read_kv "${NETWORK_CONF}" "SERVER_WG_IP")"
+    configured_port="$(read_kv "${NETWORK_CONF}" "SERVER_PORT")"
+
+    echo "network.conf: NETWORK_NAME=${configured_network:-<missing>} SERVER_WG_IP=${configured_server:-<missing>} SERVER_PORT=${configured_port:-<missing>}"
+
+    if systemctl is-active --quiet "wg-quick@${network}"; then
+        echo "✅ wg-quick@${network} is active"
+    else
+        echo "⚠️ wg-quick@${network} is not active" >&2
+    fi
+
+    if [[ -x "${DEBUG_SERVICES_CMD}" ]]; then
+        echo ""
+        "${DEBUG_SERVICES_CMD}" || true
+    fi
+}
+
+main() {
+    require_cmd systemctl
+    require_existing_network_config
+
+    echo ""
+    echo "This command assumes the device has already been fully configured and"
+    echo "tested on a temporary/testing network."
+    echo "It will stop data services, optionally clear test data, and switch"
+    echo "network enrollment to '${network}'."
+    confirm_yes_no "Proceed with deployment prep now?" false || {
+        echo "Aborted." >&2
+        exit 1
+    }
+
+    show_clock_and_confirm
+    show_location_and_confirm
+
+    echo ""
+    echo "Stopping data collection/upload services before cutover..."
+    stop_nonessential_units
+
+    clear_test_data_if_requested
+
+    run_network_cutover
+
+    # Ensure lab collection does not restart before field deployment.
+    stop_nonessential_units
+
+    post_cutover_smoke_checks
+
+    echo ""
+    echo "✅ Prep complete. Device is cut over and data services remain stopped."
+    echo "Next step in field: run 'field-deploy'."
+}
+
+main

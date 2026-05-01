@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+set -euo pipefail
+
+SCRIPT_FILE="$(realpath "${BASH_SOURCE[0]}")"
+resolve_overlay_root() {
+    printf '%s\n' "${SENSOS_CLIENT_ROOT:-/sensos}"
+}
+OVERLAY_ROOT="$(resolve_overlay_root)"
+CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${OVERLAY_ROOT}}"
+
+PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
+DATA_STORAGE_OPS_LIB="${OVERLAY_ROOT}/libexec/data-storage-ops.sh"
+SENSOS_ADMIN_HELPER_LIB="${OVERLAY_ROOT}/libexec/ensure-sensos-admin.sh"
+DEBUG_SERVICES_CMD="${OVERLAY_ROOT}/bin/debug-services"
+NETWORK_CONF="${CLIENT_ROOT}/etc/network.conf"
+ARECORD_CONF="${CLIENT_ROOT}/etc/arecord.conf"
+BIRDNET_ENV="${CLIENT_ROOT}/etc/birdnet.env"
+I2C_UPLOADS_CONF="${CLIENT_ROOT}/etc/i2c-uploads.conf"
+BIRDNET_UPLOADS_CONF="${CLIENT_ROOT}/etc/birdnet-uploads.conf"
+
+[[ -f "${PARSE_SWITCHES_LIB}" ]] || { echo "ERROR: missing ${PARSE_SWITCHES_LIB}" >&2; exit 1; }
+source "${PARSE_SWITCHES_LIB}"
+[[ -f "${DATA_STORAGE_OPS_LIB}" ]] || { echo "ERROR: missing ${DATA_STORAGE_OPS_LIB}" >&2; exit 1; }
+source "${DATA_STORAGE_OPS_LIB}"
+[[ -f "${SENSOS_ADMIN_HELPER_LIB}" ]] || { echo "ERROR: missing ${SENSOS_ADMIN_HELPER_LIB}" >&2; exit 1; }
+source "${SENSOS_ADMIN_HELPER_LIB}"
+
+ensure_sensos_admin_user "${SCRIPT_FILE}" "$@"
+
+register_option --yes yes "Skip interactive confirmations" "false"
+register_option --start-status-updates start_status_updates "Start periodic status update timer" "true"
+
+parse_switches "field-deploy" "$@"
+
+is_interactive() {
+    [[ -t 0 ]]
+}
+
+confirm_yes_no() {
+    local prompt="$1"
+    local default_yes="${2:-false}"
+    local answer=""
+
+    if [[ "${yes}" == "true" ]]; then
+        return 0
+    fi
+
+    if ! is_interactive; then
+        return 1
+    fi
+
+    if [[ "${default_yes}" == "true" ]]; then
+        read -r -p "${prompt} [Y/n] " answer
+        [[ "${answer}" != [nN] ]]
+        return
+    fi
+
+    read -r -p "${prompt} [y/N] " answer
+    [[ "${answer}" == [yY] ]]
+}
+
+read_kv() {
+    local path="$1"
+    local key="$2"
+    [[ -f "${path}" ]] || return 0
+    awk -F= -v k="${key}" '$1==k {print $2}' "${path}" | tail -n 1 | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+service_enabled() {
+    local unit="$1"
+    systemctl is-enabled --quiet "${unit}" >/dev/null 2>&1
+}
+
+print_deployment_overview() {
+    local network_name="$1"
+    local server_ip server_port birdnet_enabled
+
+    server_ip="$(read_kv "${NETWORK_CONF}" "SERVER_WG_IP")"
+    server_port="$(read_kv "${NETWORK_CONF}" "SERVER_PORT")"
+    birdnet_enabled="$(read_kv "${BIRDNET_ENV}" "BIRDNET_ENABLED")"
+
+    echo ""
+    echo "Deployment summary:"
+    echo "  network: ${network_name}"
+    echo "  api target: ${server_ip:-<missing>}:${server_port:-<missing>}"
+    if [[ -f "${ARECORD_CONF}" ]]; then
+        echo "  audio recording: configured"
+    else
+        echo "  audio recording: not configured"
+    fi
+    if [[ "${birdnet_enabled}" == "1" ]]; then
+        echo "  birdnet processing: enabled"
+    else
+        echo "  birdnet processing: disabled"
+    fi
+    if [[ -f "${I2C_UPLOADS_CONF}" ]] && service_enabled "sensos-upload-i2c.service"; then
+        echo "  i2c uploads: enabled"
+    else
+        echo "  i2c uploads: disabled"
+    fi
+    if [[ -f "${BIRDNET_UPLOADS_CONF}" ]] && service_enabled "sensos-upload-birdnet.service"; then
+        echo "  birdnet uploads: enabled"
+    else
+        echo "  birdnet uploads: disabled"
+    fi
+    if service_enabled "sensos-send-status-update.timer"; then
+        echo "  status updates: enabled"
+    else
+        echo "  status updates: disabled"
+    fi
+}
+
+main() {
+    local network_name
+
+    network_name="$(read_kv "${NETWORK_CONF}" "NETWORK_NAME")"
+    [[ -n "${network_name}" ]] || {
+        echo "ERROR: NETWORK_NAME missing in ${NETWORK_CONF}. Run prep-for-deployment/config-network first." >&2
+        exit 1
+    }
+
+    confirm_yes_no "Start field data collection/upload services for network '${network_name}' now?" true || {
+        echo "Aborted."
+        exit 1
+    }
+
+    echo "🔄 Starting data services..."
+    data_ops_start_data_units
+
+    if [[ "${start_status_updates}" == "true" ]]; then
+        data_ops_run_systemctl start sensos-send-status-update.timer >/dev/null 2>&1 || true
+        data_ops_run_systemctl start sensos-send-status-update.service >/dev/null 2>&1 || true
+    fi
+
+    if systemctl is-active --quiet "wg-quick@${network_name}"; then
+        echo "✅ wg-quick@${network_name} is active"
+    else
+        echo "⚠️ wg-quick@${network_name} is not active" >&2
+    fi
+
+    if [[ -x "${DEBUG_SERVICES_CMD}" ]]; then
+        echo ""
+        "${DEBUG_SERVICES_CMD}" || true
+    fi
+
+    print_deployment_overview "${network_name}"
+
+    echo ""
+    echo "✅ Field deployment activation complete."
+}
+
+main

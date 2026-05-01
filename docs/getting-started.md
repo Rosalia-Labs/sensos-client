@@ -234,6 +234,46 @@ Why `--force` is required for cutover:
   `wg-quick@<network>` units, `/sensos/etc/network.conf`, and the saved client
   API password file
 
+### `prep-for-deployment`
+
+Prepares a fully configured lab/test client for field deployment cutover while
+avoiding lab data carryover.
+
+What it does:
+
+- requires that `config-network` has already completed successfully
+- reuses setup/API parameters from existing `/sensos/etc/network.conf`
+- asks for final confirmation that clock/time looks correct
+- asks for final confirmation that configured location is the field location
+- stops data collection/upload services
+- clears `/sensos/data` by default (use `--keep-data` to skip)
+- switches enrollment/network with `config-network --force`
+- leaves data services stopped so recording does not start until field activation
+
+Typical use:
+
+```sh
+prep-for-deployment \
+  --network biosense \
+  --yes
+```
+
+### `field-deploy`
+
+Final in-field activation step after `prep-for-deployment`.
+
+What it does:
+
+- starts data collection/upload services
+- starts periodic status updates by default
+- prints service status summary
+
+Typical use:
+
+```sh
+field-deploy
+```
+
 ### `upload-hardware-profile`
 
 Uploads the local machine's hardware inventory to the server for the already enrolled peer.
