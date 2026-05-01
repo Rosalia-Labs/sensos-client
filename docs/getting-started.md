@@ -6,15 +6,17 @@ For full command syntax, flags, and edge cases, use the
 
 ## Typical Setup Sequence
 
-1. `config-time`
-2. `config-network`
-3. `config-location`
-4. `config-storage`
-5. `config-arecord`
-6. `config-i2c-sensors`
-7. `config-i2c-uploads`
-8. `config-birdnet`
-9. other feature-specific setup as needed
+1. Clone repo
+2. `./install`
+3. `config-time`
+4. `config-network`
+5. `config-location`
+6. `config-storage`
+7. `config-arecord`
+8. `config-i2c-sensors`
+9. `config-i2c-uploads`
+10. `config-birdnet`
+11. other feature-specific setup as needed
 
 Notes:
 
@@ -27,7 +29,16 @@ Notes:
 - Confirm you have server setup endpoint details from your SensOS server operator.
 - Have a target network name ready (for example `testing` or `biosense`).
 
-## 1. Install Client Runtime
+## 1. Clone Repo
+
+Clone the client repo onto the device or staging machine:
+
+```sh
+git clone https://github.com/Rosalia-Labs/sensos-client.git
+cd sensos-client
+```
+
+## 2. Install Client Runtime
 
 Run from the repo root on the client device:
 
@@ -43,7 +54,7 @@ If this is a retry after a failed install, use:
 
 Reference: [`./install`](command-reference.md#top-level-repo-commands)
 
-## 2. Set Clock And Connectivity
+## 3. Set Clock And Connectivity
 
 ```sh
 config-time
@@ -57,7 +68,7 @@ Reference:
 - [`config-time`](command-reference.md#config-time)
 - [`config-network`](command-reference.md#config-network)
 
-## 3. Set Device Metadata And Storage
+## 4. Set Device Metadata And Storage
 
 ```sh
 config-location --latitude <lat> --longitude <lon>
@@ -69,7 +80,7 @@ Reference:
 - [`config-location`](command-reference.md#config-location)
 - [`config-storage`](command-reference.md#config-storage)
 
-## 4. Configure Optional Features
+## 5. Configure Optional Features
 
 Enable only what this deployment needs:
 
@@ -84,7 +95,7 @@ Reference:
 - [Network capture](network-capture.md)
 - Full command list in [`Command Reference`](command-reference.md)
 
-## 5. Validate And Move To Field
+## 6. Validate And Move To Field
 
 For staged deployment and network cutover, follow:
 
