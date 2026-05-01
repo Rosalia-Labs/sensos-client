@@ -83,10 +83,10 @@ Run as `sensos-admin`:
 sudo -u sensos-admin config-birdnet
 ```
 
-Or, to download the model bundle first and then enable BirdNET:
+If model files are missing, `config-birdnet` now downloads and installs them automatically before enabling BirdNET.
 
 ```bash
-sudo -u sensos-admin config-birdnet --download-models
+sudo -u sensos-admin config-birdnet
 ```
 
 LiteRT is the default backend. To use TensorFlow instead:

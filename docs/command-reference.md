@@ -828,7 +828,6 @@ Important flags:
 - `--disable`
 - `--enable-service`
 - `--start-service`
-- `--download-models`
 - `--models-url`
 - `--backend`
 - `--input-mode`
@@ -836,7 +835,7 @@ Important flags:
 Typical use:
 
 ```sh
-config-birdnet --download-models --start-service
+config-birdnet --start-service
 config-birdnet --backend litert --start-service
 config-birdnet --input-mode split-channels --start-service
 config-birdnet --disable
@@ -845,7 +844,7 @@ config-birdnet --disable
 Behavior:
 
 - writes `/sensos/etc/birdnet.env`
-- can download BirdNET models before enabling
+- auto-downloads BirdNET models when required files are missing
 - supports `mono` and `split-channels` multichannel input handling
 - enables `sensos-birdnet.service` for future boot by default
 - leaves the BirdNET service stopped unless `--start-service` is supplied
@@ -978,5 +977,5 @@ Then add optional features as needed:
 config-wifi --ssid <ssid> --password <pass> --start
 config-modem --service 1nce --start
 config-gps --start-service
-config-birdnet --download-models --start-service
+config-birdnet --start-service
 ```

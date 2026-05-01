@@ -61,13 +61,8 @@ def parse_args() -> argparse.Namespace:
         help="Start sensos-birdnet.service after setup.",
     )
     parser.add_argument(
-        "--download-models",
-        action="store_true",
-        help="Download and install the BirdNET model bundle before enabling BirdNET.",
-    )
-    parser.add_argument(
         "--models-url",
-        help="Override the BirdNET model zip URL used with --download-models.",
+        help="Override the BirdNET model zip URL used when auto-installing missing models.",
     )
     parser.add_argument(
         "--backend",
@@ -124,19 +119,23 @@ def write_config(enabled: bool, backend: str, input_mode: str) -> None:
     )
 
 
-def ensure_models_present() -> None:
+def missing_model_paths() -> list[Path]:
     required = [
         MODEL_ROOT / "audio-model.tflite",
         MODEL_ROOT / "labels" / "en_us.txt",
     ]
-    missing = [str(path) for path in required if not path.exists()]
-    if missing:
-        joined = "\n  ".join(missing)
-        raise SystemExit(
-            "ERROR: BirdNET model files are missing:\n"
-            f"  {joined}\n"
-            "Place model files under /sensos/birdnet/BirdNET_v2.4_tflite before enabling BirdNET."
-        )
+    return [path for path in required if not path.exists()]
+
+
+def ensure_models_present() -> None:
+    missing = [str(path) for path in missing_model_paths()]
+    if not missing:
+        return
+    joined = "\n  ".join(missing)
+    raise SystemExit(
+        "ERROR: BirdNET model files are still missing after attempted auto-install:\n"
+        f"  {joined}"
+    )
 
 
 def run_setup_step() -> None:
@@ -172,7 +171,8 @@ def main() -> int:
         print("BirdNET disabled.")
         return 0
 
-    if args.download_models:
+    if missing_model_paths():
+        print("BirdNET model files are missing; attempting automatic model install...")
         install_models(args.models_url)
 
     ensure_models_present()
