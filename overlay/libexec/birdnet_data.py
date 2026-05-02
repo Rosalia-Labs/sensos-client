@@ -23,7 +23,21 @@ def connect_db() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
+    ensure_state_file_permissions()
     return conn
+
+
+def ensure_state_file_permissions() -> None:
+    for path in (
+        DB_PATH,
+        DB_PATH.with_name(f"{DB_PATH.name}-wal"),
+        DB_PATH.with_name(f"{DB_PATH.name}-shm"),
+    ):
+        if path.exists():
+            try:
+                path.chmod(0o664)
+            except PermissionError:
+                pass
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:

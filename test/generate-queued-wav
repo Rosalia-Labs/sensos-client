@@ -70,6 +70,11 @@ def parse_args() -> argparse.Namespace:
         default=65,
         help="Seconds to advance between generated filenames (default: 65)",
     )
+    parser.add_argument(
+        "--allow-root",
+        action="store_true",
+        help="Allow running as root (disabled by default to avoid root-owned queued files).",
+    )
     return parser.parse_args()
 
 
@@ -250,6 +255,11 @@ def write_wav(path: Path, frames: bytes, sample_rate: int) -> None:
 
 def main() -> int:
     args = parse_args()
+    if os.geteuid() == 0 and not args.allow_root:
+        raise SystemExit(
+            "Refusing to run as root to avoid creating root-owned queued audio.\n"
+            "Run as a non-root user, or re-run with --allow-root if you really need it."
+        )
     seed = args.seed if args.seed is not None else random.SystemRandom().randrange(0, 2**32)
     rng = random.Random(seed)
     start = parse_start_time(args.start_time)

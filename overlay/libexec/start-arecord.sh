@@ -88,7 +88,7 @@ ensure_output_dirs() {
 
     for day_offset in 0 1; do
         queued_dir="${BASE_DIR}/queued/$(date -u -d "+${day_offset} day" +%Y/%m/%d)"
-        mkdir -p "${queued_dir}"
+        sudo install -d -m 2775 -o sensos-admin -g sensos-data "${queued_dir}"
     done
 }
 

@@ -19,7 +19,21 @@ def connect_db() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    ensure_state_file_permissions()
     return conn
+
+
+def ensure_state_file_permissions() -> None:
+    for path in (
+        DB_PATH,
+        DB_PATH.with_name(f"{DB_PATH.name}-wal"),
+        DB_PATH.with_name(f"{DB_PATH.name}-shm"),
+    ):
+        if path.exists():
+            try:
+                path.chmod(0o664)
+            except PermissionError:
+                pass
 
 
 def ensure_column(
