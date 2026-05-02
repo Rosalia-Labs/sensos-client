@@ -10,11 +10,14 @@ resolve_overlay_root() {
 }
 OVERLAY_ROOT="$(resolve_overlay_root)"
 CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${OVERLAY_ROOT}}"
+DEFAULT_DISPLAY_TIMEZONE="America/Chicago"
 
 PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
 DATA_STORAGE_OPS_LIB="${OVERLAY_ROOT}/libexec/data-storage-ops.sh"
 SENSOS_ADMIN_HELPER_LIB="${OVERLAY_ROOT}/libexec/ensure-sensos-admin.sh"
 CONFIG_NETWORK_CMD=""
+CONFIG_LOCATION_CMD=""
+UPLOAD_HARDWARE_PROFILE_CMD=""
 DEBUG_SERVICES_CMD=""
 NETWORK_CONF="${CLIENT_ROOT}/etc/network.conf"
 LOCATION_CONF="${CLIENT_ROOT}/etc/location.conf"
@@ -42,13 +45,7 @@ require_cmd() {
 }
 
 resolve_exec_cmd() {
-    local preferred_path="$1"
-    local command_name="$2"
-
-    if [[ -x "${preferred_path}" ]]; then
-        printf '%s\n' "${preferred_path}"
-        return 0
-    fi
+    local command_name="$1"
 
     local resolved_path
     resolved_path="$(command -v "${command_name}" 2>/dev/null || true)"
@@ -145,6 +142,8 @@ require_existing_network_config() {
 show_clock_and_confirm() {
     echo ""
     echo "=== Clock Check ==="
+    echo "Display time (${DEFAULT_DISPLAY_TIMEZONE}): $(TZ="${DEFAULT_DISPLAY_TIMEZONE}" date '+%a %Y-%m-%d %H:%M:%S %Z')"
+    echo "UTC time: $(date -u '+%a %Y-%m-%d %H:%M:%S UTC')"
     if command -v timedatectl >/dev/null 2>&1; then
         timedatectl status || true
     else
@@ -218,6 +217,48 @@ run_network_cutover() {
     "${cmd[@]}"
 }
 
+sync_location_after_cutover() {
+    local lat lon
+    lat="$(read_kv "${LOCATION_CONF}" "LATITUDE")"
+    lon="$(read_kv "${LOCATION_CONF}" "LONGITUDE")"
+
+    if [[ -z "${lat}" || -z "${lon}" ]]; then
+        echo "ℹ️  Location not set in ${LOCATION_CONF}; skipping server location sync."
+        return 0
+    fi
+
+    if [[ -z "${CONFIG_LOCATION_CMD}" || ! -x "${CONFIG_LOCATION_CMD}" ]]; then
+        echo "⚠️  config-location not found in PATH; cannot sync location to server after cutover." >&2
+        return 0
+    fi
+
+    echo "📍 Re-publishing configured location for the new deployment-network client identity..."
+    "${CONFIG_LOCATION_CMD}" --latitude "${lat}" --longitude "${lon}" || {
+        echo "⚠️  Failed to sync location after cutover." >&2
+        return 0
+    }
+}
+
+sync_hardware_profile_after_cutover() {
+    if [[ -z "${UPLOAD_HARDWARE_PROFILE_CMD}" || ! -x "${UPLOAD_HARDWARE_PROFILE_CMD}" ]]; then
+        echo "ℹ️  upload-hardware-profile not found in PATH; skipping hardware profile sync."
+        return 0
+    fi
+
+    echo "🧾 Uploading hardware profile for the new deployment-network client identity..."
+    "${UPLOAD_HARDWARE_PROFILE_CMD}" --transport steady-state || {
+        echo "⚠️  Hardware profile sync failed after cutover." >&2
+        return 0
+    }
+}
+
+sync_persistent_metadata_after_cutover() {
+    echo ""
+    echo "Syncing persistent client metadata to server..."
+    sync_location_after_cutover
+    sync_hardware_profile_after_cutover
+}
+
 post_cutover_smoke_checks() {
     echo ""
     echo "=== Post-cutover checks ==="
@@ -242,8 +283,10 @@ post_cutover_smoke_checks() {
 
 main() {
     require_cmd systemctl
-    CONFIG_NETWORK_CMD="$(resolve_exec_cmd "${OVERLAY_ROOT}/bin/config-network" "config-network" || true)"
-    DEBUG_SERVICES_CMD="$(resolve_exec_cmd "${OVERLAY_ROOT}/bin/debug-services" "debug-services" || true)"
+    CONFIG_NETWORK_CMD="$(resolve_exec_cmd "config-network" || true)"
+    CONFIG_LOCATION_CMD="$(resolve_exec_cmd "config-location" || true)"
+    UPLOAD_HARDWARE_PROFILE_CMD="$(resolve_exec_cmd "upload-hardware-profile" || true)"
+    DEBUG_SERVICES_CMD="$(resolve_exec_cmd "debug-services" || true)"
     require_existing_network_config
 
     echo ""
@@ -266,6 +309,7 @@ main() {
     clear_test_data_if_requested
 
     run_network_cutover
+    sync_persistent_metadata_after_cutover
 
     # Ensure lab collection does not restart before field deployment.
     stop_nonessential_units

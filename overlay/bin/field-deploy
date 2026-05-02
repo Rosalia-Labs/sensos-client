@@ -70,13 +70,7 @@ read_kv() {
 }
 
 resolve_exec_cmd() {
-    local preferred_path="$1"
-    local command_name="$2"
-
-    if [[ -x "${preferred_path}" ]]; then
-        printf '%s\n' "${preferred_path}"
-        return 0
-    fi
+    local command_name="$1"
 
     local resolved_path
     resolved_path="$(command -v "${command_name}" 2>/dev/null || true)"
@@ -134,7 +128,7 @@ print_deployment_overview() {
 
 main() {
     local network_name
-    DEBUG_SERVICES_CMD="$(resolve_exec_cmd "${OVERLAY_ROOT}/bin/debug-services" "debug-services" || true)"
+    DEBUG_SERVICES_CMD="$(resolve_exec_cmd "debug-services" || true)"
 
     network_name="$(read_kv "${NETWORK_CONF}" "NETWORK_NAME")"
     [[ -n "${network_name}" ]] || {
