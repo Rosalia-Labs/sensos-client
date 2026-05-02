@@ -11,6 +11,8 @@ resolve_overlay_root() {
 OVERLAY_ROOT="$(resolve_overlay_root)"
 CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${OVERLAY_ROOT}}"
 DEFAULT_DISPLAY_TIMEZONE="America/Chicago"
+POST_CUTOVER_API_WAIT_TIMEOUT_SEC=90
+POST_CUTOVER_API_WAIT_INTERVAL_SEC=3
 
 PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
 DATA_STORAGE_OPS_LIB="${OVERLAY_ROOT}/libexec/data-storage-ops.sh"
@@ -217,6 +219,39 @@ run_network_cutover() {
     "${cmd[@]}"
 }
 
+wait_for_wireguard_api_after_cutover() {
+    local server_wg_ip configured_port deadline now
+    server_wg_ip="$(read_kv "${NETWORK_CONF}" "SERVER_WG_IP")"
+    configured_port="$(read_kv "${NETWORK_CONF}" "SERVER_PORT")"
+
+    [[ -n "${server_wg_ip}" ]] || {
+        echo "ERROR: SERVER_WG_IP missing in ${NETWORK_CONF} after cutover." >&2
+        exit 1
+    }
+    [[ -n "${configured_port}" ]] || {
+        echo "ERROR: SERVER_PORT missing in ${NETWORK_CONF} after cutover." >&2
+        exit 1
+    }
+
+    deadline="$(( $(date +%s) + POST_CUTOVER_API_WAIT_TIMEOUT_SEC ))"
+
+    echo "⏳ Waiting for WireGuard peer ${server_wg_ip} to respond to ping..."
+    while true; do
+        if ping -c 1 -W 2 "${server_wg_ip}" >/dev/null 2>&1; then
+            echo "✅ WireGuard peer is reachable."
+            return 0
+        fi
+
+        now="$(date +%s)"
+        if (( now >= deadline )); then
+            echo "ERROR: Timed out waiting for WireGuard peer ${server_wg_ip} to respond." >&2
+            echo "Ensure WireGuard is up before metadata sync, then retry." >&2
+            exit 1
+        fi
+        sleep "${POST_CUTOVER_API_WAIT_INTERVAL_SEC}"
+    done
+}
+
 sync_location_after_cutover() {
     local lat lon
     lat="$(read_kv "${LOCATION_CONF}" "LATITUDE")"
@@ -309,6 +344,7 @@ main() {
     clear_test_data_if_requested
 
     run_network_cutover
+    wait_for_wireguard_api_after_cutover
     sync_persistent_metadata_after_cutover
 
     # Ensure lab collection does not restart before field deployment.
