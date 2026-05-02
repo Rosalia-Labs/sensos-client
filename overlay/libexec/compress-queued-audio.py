@@ -113,6 +113,10 @@ def compress_once(source_path: Path) -> None:
     create_dir(str(target_path.parent), "sensos-admin", "sensos-data", 0o2775)
     audio, sample_rate = sf.read(source_path, dtype="int32", always_2d=True)
     sf.write(target_path, audio, sample_rate, format="FLAC")
+    try:
+        target_path.chmod(0o664)
+    except PermissionError:
+        pass
     print(f"Compressed {source_path} -> {target_path}")
     source_path.unlink(missing_ok=True)
     prune_empty_dirs(source_path.parent)

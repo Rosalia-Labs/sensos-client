@@ -569,6 +569,10 @@ def write_detection_clips(
         else:
             chunk = audio[detection.start_frame : detection.end_frame, detection.channel_index]
         sf.write(clip_path, chunk, sample_rate, format="FLAC")
+        try:
+            clip_path.chmod(0o664)
+        except PermissionError:
+            pass
         written[(detection.channel_index, detection.window_index)] = (
             clip_path,
             int(clip_path.stat().st_size),
