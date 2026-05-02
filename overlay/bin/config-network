@@ -536,7 +536,6 @@ def remove_sensos_config_files(network_name):
         os.path.join(SENSOS_ADMIN_HOME, ".ssh", "id_ed25519"),
         os.path.join(SENSOS_ADMIN_HOME, ".ssh", "id_ed25519.pub"),
         SENSOS_NET_CONF,
-        API_PASSWORD_FILE,
     ]
     for file_path in files_to_remove:
         remove_file(file_path)

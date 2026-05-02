@@ -150,6 +150,7 @@ class ApiContractTests(unittest.TestCase):
         remove_file_mock.assert_any_call("/etc/wireguard/testing-private.key")
         remove_file_mock.assert_any_call("/etc/wireguard/testing-public.key")
         remove_file_mock.assert_any_call("/etc/wireguard/testing.conf")
+        self.assertNotIn(mock.call(config_network.API_PASSWORD_FILE), remove_file_mock.mock_calls)
 
     def test_client_status_payload_uses_current_server_field_names(self):
         payload = send_status_update.build_client_status_payload(
