@@ -8,6 +8,7 @@ import math
 import os
 import random
 import sqlite3
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -15,6 +16,29 @@ from pathlib import Path
 def default_db_path() -> Path:
     client_root = Path(os.environ.get("SENSOS_CLIENT_ROOT", "/sensos"))
     return client_root / "data" / "microenv" / "i2c_readings.db"
+
+
+def ensure_root(argv: list[str] | None = None) -> None:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if os.geteuid() == 0:
+        return
+    if os.environ.get("SENSOS_ROOT_REEXEC") == "1":
+        raise SystemExit("Error: failed to re-run as root.")
+
+    script_path = os.path.realpath(sys.argv[0])
+    preserve_env = ["SENSOS_CLIENT_ROOT", "SENSOS_ROOT_REEXEC"]
+    print("Re-running as root...", file=sys.stderr)
+    os.execvp(
+        "sudo",
+        [
+            "sudo",
+            f"--preserve-env={','.join(preserve_env)}",
+            "env",
+            "SENSOS_ROOT_REEXEC=1",
+            script_path,
+            *argv,
+        ],
+    )
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
@@ -127,6 +151,7 @@ def gen_rowset(points: int, spacing_sec: int, start_at: datetime, rng: random.Ra
 
 
 def main() -> int:
+    ensure_root()
     args = parse_args()
     if args.points <= 0:
         raise SystemExit("--points must be > 0")
