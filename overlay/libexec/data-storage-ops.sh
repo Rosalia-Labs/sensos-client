@@ -212,9 +212,21 @@ data_ops_reset_data_root() {
     }
 
     sudo find "${DATA_MOUNT}" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-    sudo chown sensos-admin:sensos-data "${DATA_MOUNT}"
+
+    local top_dir audio_subdir
+    for top_dir in "${DATA_LAYOUT_TOP_LEVEL_DIRS[@]}"; do
+        sudo mkdir -p "${DATA_MOUNT}/${top_dir}"
+    done
+    for audio_subdir in "${DATA_LAYOUT_AUDIO_SUBDIRS[@]}"; do
+        sudo mkdir -p "${DATA_MOUNT}/audio_recordings/${audio_subdir}"
+    done
+
+    sudo chown -R sensos-admin:sensos-data "${DATA_MOUNT}"
     sudo chmod 2775 "${DATA_MOUNT}"
-    echo "Cleared ${DATA_MOUNT}"
+    sudo find "${DATA_MOUNT}" -type d -exec chmod 2775 {} +
+    sudo find "${DATA_MOUNT}" -type f -exec chmod 0664 {} +
+
+    echo "Cleared ${DATA_MOUNT} and restored baseline layout"
 }
 
 data_ops_has_meaningful_data_content() {
