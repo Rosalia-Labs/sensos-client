@@ -7,6 +7,7 @@ I2C_REQUIREMENTS_FILE="${DEPLOY_ROOT}/etc/i2c-requirements.txt"
 VENV_DIR="${DEPLOY_ROOT}/python/venv"
 STAMP_FILE="${VENV_DIR}/.i2c-requirements.sha256"
 PYTHON_BIN="${VENV_DIR}/bin/python"
+LGPIO_AVAILABLE=1
 
 log() {
     printf '[libexec/setup-i2c-python] %s\n' "$*"
@@ -49,6 +50,23 @@ resolve_package_spec() {
     die "no installable package found for spec '${package_spec}'"
 }
 
+resolve_optional_package_spec() {
+    local package_spec="$1"
+    local candidate
+    local -a package_candidates=()
+
+    IFS='|' read -r -a package_candidates <<< "${package_spec}"
+    for candidate in "${package_candidates[@]}"; do
+        [[ -n "${candidate}" ]] || continue
+        if package_is_available "${candidate}"; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 requirements_declared() {
     grep -Eq '^\s*[^#[:space:]]' "${I2C_REQUIREMENTS_FILE}"
 }
@@ -79,9 +97,14 @@ ensure_build_support() {
     local lgpio_package
     local dev_package
 
-    lgpio_package="$(resolve_package_spec "liblgpio-dev|lgpio")"
-    log "installing ${lgpio_package} for I2C GPIO access"
-    apt-get install -y "${lgpio_package}"
+    if lgpio_package="$(resolve_optional_package_spec "liblgpio-dev|lgpio")"; then
+        log "installing ${lgpio_package} for I2C GPIO access"
+        apt-get install -y "${lgpio_package}"
+    else
+        log "no installable lgpio apt package found; continuing without lgpio support on this host"
+        LGPIO_AVAILABLE=0
+        return
+    fi
 
     if ! command -v swig >/dev/null 2>&1; then
         log "installing swig for lgpio wheel build"
@@ -101,6 +124,8 @@ ensure_build_support() {
 install_requirements_if_needed() {
     local current_digest
     local previous_digest=""
+    local requirements_file="${I2C_REQUIREMENTS_FILE}"
+    local temp_requirements_file=""
 
     current_digest="$(requirements_digest)"
     if [[ -f "${STAMP_FILE}" ]]; then
@@ -113,10 +138,21 @@ install_requirements_if_needed() {
     fi
 
     if requirements_declared; then
-        log "installing I2C Python dependencies from ${I2C_REQUIREMENTS_FILE}"
-        "${PYTHON_BIN}" -m pip install -r "${I2C_REQUIREMENTS_FILE}"
+        if [[ "${LGPIO_AVAILABLE}" -eq 0 ]]; then
+            temp_requirements_file="$(mktemp "${VENV_DIR}/i2c-requirements.no-lgpio.XXXXXX.txt")"
+            grep -Ev '^\s*(lgpio)\s*($|[<>=!~])' "${I2C_REQUIREMENTS_FILE}" > "${temp_requirements_file}" || true
+            requirements_file="${temp_requirements_file}"
+            log "installing I2C Python dependencies without lgpio on this host"
+        else
+            log "installing I2C Python dependencies from ${I2C_REQUIREMENTS_FILE}"
+        fi
+        "${PYTHON_BIN}" -m pip install -r "${requirements_file}"
     else
         log "no I2C Python requirements declared; skipping pip"
+    fi
+
+    if [[ -n "${temp_requirements_file}" && -f "${temp_requirements_file}" ]]; then
+        rm -f "${temp_requirements_file}"
     fi
 
     printf '%s\n' "${current_digest}" >"${STAMP_FILE}"
