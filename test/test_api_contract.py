@@ -247,6 +247,49 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(validation["reason"], "invalid_credentials")
         self.assertEqual(validation["status_code"], 401)
 
+    def test_get_api_password_uses_cached_api_password_without_prompt(self):
+        with mock.patch.object(
+            utils, "get_server_health", return_value={"reachable": True, "ready": True, "status": "ok"}
+        ):
+            with mock.patch.object(
+                utils.os.path,
+                "exists",
+                side_effect=lambda p: p == utils.API_PASSWORD_FILE,
+            ):
+                with mock.patch.object(utils, "read_file", return_value="setup-secret\n"):
+                    with mock.patch.object(
+                        utils,
+                        "validate_api_password",
+                        return_value={"ok": True, "reason": "accepted", "status_code": 200, "url": "x"},
+                    ):
+                        with mock.patch("builtins.input") as input_mock:
+                            password = utils.get_api_password("config.example", 8765, network_name="fieldnet")
+
+        self.assertEqual(password, "setup-secret")
+        input_mock.assert_not_called()
+
+    def test_get_api_password_strips_newline_before_validation(self):
+        with mock.patch.object(
+            utils, "get_server_health", return_value={"reachable": True, "ready": True, "status": "ok"}
+        ):
+            with mock.patch.object(
+                utils.os.path,
+                "exists",
+                side_effect=lambda p: p == utils.API_PASSWORD_FILE,
+            ):
+                with mock.patch.object(utils, "read_file", return_value="legacy-secret\n"):
+                    with mock.patch.object(utils, "validate_api_password") as validate_mock:
+                        validate_mock.return_value = {
+                            "ok": True,
+                            "reason": "accepted",
+                            "status_code": 200,
+                            "url": "x",
+                        }
+                        password = utils.get_api_password("config.example", 8765, network_name="fieldnet")
+
+        self.assertEqual(password, "legacy-secret")
+        self.assertEqual(validate_mock.call_args.args[2], "legacy-secret")
+
     def test_hardware_profile_payload_includes_required_top_level_fields(self):
         with mock.patch.object(upload_hardware_profile, "collect_model", return_value="Test Device"):
             with mock.patch.object(upload_hardware_profile, "collect_cpu", return_value={"model_name": "cpu"}):

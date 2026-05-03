@@ -409,31 +409,32 @@ def get_api_password(config_server, port, network_name=None):
     tries = 3
     for attempt in range(tries):
         if os.path.exists(API_PASSWORD_FILE):
-            stored_password = read_file(API_PASSWORD_FILE)
-            print("Testing stored client API password...")
-            validation = validate_api_password(
-                config_server,
-                port,
-                stored_password,
-                network_name=network_name,
-            )
-            if validation["ok"]:
-                print("✅ Client API password from file is valid.")
-                return stored_password
-            elif validation["reason"] == "invalid_credentials":
-                print("⚠️ Stored client API password is invalid.", file=sys.stderr)
-            elif validation["reason"] == "unreachable":
-                print(
-                    f"❌ Lost contact with configuration server at {config_server}:{port}.",
-                    file=sys.stderr,
+            stored_password = (read_file(API_PASSWORD_FILE) or "").strip()
+            if stored_password:
+                print("Testing stored client API password...")
+                validation = validate_api_password(
+                    config_server,
+                    port,
+                    stored_password,
+                    network_name=network_name,
                 )
-                return None
-            else:
-                print(
-                    "⚠️ Could not validate stored client API password due to an unexpected "
-                    f"server response ({validation['reason']}).",
-                    file=sys.stderr,
-                )
+                if validation["ok"]:
+                    print("✅ Client API password from file is valid.")
+                    return stored_password
+                elif validation["reason"] == "invalid_credentials":
+                    print("⚠️ Stored client API password is invalid.", file=sys.stderr)
+                elif validation["reason"] == "unreachable":
+                    print(
+                        f"❌ Lost contact with configuration server at {config_server}:{port}.",
+                        file=sys.stderr,
+                    )
+                    return None
+                else:
+                    print(
+                        "⚠️ Could not validate stored client API password due to an unexpected "
+                        f"server response ({validation['reason']}).",
+                        file=sys.stderr,
+                    )
         api_password = input("🔑 Enter client API password: ").strip()
         validation = validate_api_password(
             config_server,
