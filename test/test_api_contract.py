@@ -1,14 +1,18 @@
 import base64
 import contextlib
+import getpass
 import importlib.machinery
 import importlib.util
 import io
 import os
+import random
 import sys
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -53,6 +57,28 @@ class FakeResponse:
 
 
 class ApiContractTests(unittest.TestCase):
+    def setUp(self):
+        self._patches = []
+        allow_live_contract = os.environ.get("SENSOS_ALLOW_LIVE_API_CONTRACT") == "1"
+        if not allow_live_contract:
+            self._patches.extend(
+                [
+                    patch.object(config_network, "require_requests", side_effect=AssertionError("Live HTTP blocked in tests; set SENSOS_ALLOW_LIVE_API_CONTRACT=1 to allow.")),
+                    patch.object(config_location, "require_requests", side_effect=AssertionError("Live HTTP blocked in tests; set SENSOS_ALLOW_LIVE_API_CONTRACT=1 to allow.")),
+                    patch.object(upload_hardware_profile, "require_requests", side_effect=AssertionError("Live HTTP blocked in tests; set SENSOS_ALLOW_LIVE_API_CONTRACT=1 to allow.")),
+                    patch.object(i2c_upload, "require_requests", side_effect=AssertionError("Live HTTP blocked in tests; set SENSOS_ALLOW_LIVE_API_CONTRACT=1 to allow.")),
+                    patch.object(birdnet_upload, "require_requests", side_effect=AssertionError("Live HTTP blocked in tests; set SENSOS_ALLOW_LIVE_API_CONTRACT=1 to allow.")),
+                    patch.object(utils, "require_requests", side_effect=AssertionError("Live HTTP blocked in tests; set SENSOS_ALLOW_LIVE_API_CONTRACT=1 to allow.")),
+                ]
+            )
+            for p in self._patches:
+                p.start()
+            self.addCleanup(lambda: [p.stop() for p in reversed(self._patches)])
+
+    def test_contract_harness_overrides_client_root_to_repo_overlay(self):
+        self.assertEqual(os.environ.get("SENSOS_CLIENT_ROOT"), str(OVERLAY_ROOT))
+        self.assertTrue(str(utils.NETWORK_CONF).startswith(str(OVERLAY_ROOT)))
+
     def test_register_peer_parses_current_response_and_registers_wireguard_key(self):
         response = FakeResponse(
             200,
@@ -763,6 +789,190 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(entered_dt.hour, 8)
         self.assertEqual(entered_dt.minute, 30)
         self.assertEqual(entered_dt.second, 0)
+
+
+class LiveApiContractTests(unittest.TestCase):
+    @staticmethod
+    def _live_env():
+        required = [
+            "SENSOS_CONTRACT_SETUP_HOST",
+            "SENSOS_CONTRACT_SETUP_PORT",
+            "SENSOS_CONTRACT_CLIENT_PASSWORD",
+        ]
+        missing = [k for k in required if not os.environ.get(k)]
+        if missing:
+            raise unittest.SkipTest(
+                "Live contract test skipped; missing env: " + ", ".join(missing)
+            )
+        return {
+            "host": os.environ["SENSOS_CONTRACT_SETUP_HOST"],
+            "port": os.environ["SENSOS_CONTRACT_SETUP_PORT"],
+            "client_password": os.environ["SENSOS_CONTRACT_CLIENT_PASSWORD"],
+            "admin_user": os.environ.get("SENSOS_CONTRACT_ADMIN_USER", "sensos"),
+        }
+
+    @staticmethod
+    def _admin_password() -> str:
+        if not sys.stdin.isatty():
+            raise unittest.SkipTest(
+                "Live contract test skipped; requires TTY prompt for admin password."
+            )
+        password = getpass.getpass("SensOS admin API password: ").strip()
+        if not password:
+            raise unittest.SkipTest("Live contract test skipped; empty admin password.")
+        return password
+
+    @staticmethod
+    def _auth_header(username: str, password: str) -> dict:
+        token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+        return {"Authorization": f"Basic {token}"}
+
+    def test_live_enroll_and_peer_endpoints_are_idempotent_with_cleanup(self):
+        env = self._live_env()
+        admin_password = self._admin_password()
+        requests = utils.require_requests()
+        base = f"http://{env['host']}:{env['port']}"
+        suffix = f"{int(time.time())}-{random.randint(1000, 9999)}"
+        test_network = f"contract-{suffix}"
+        note = f"contract-test-{suffix}"
+        peer_ip = None
+        network_created = False
+
+        create_network_resp = requests.post(
+            f"{base}/api/v1/admin/networks",
+            json={
+                "name": test_network,
+                "wg_public_ip": env["host"],
+                "wg_port": random.randint(52000, 52999),
+            },
+            headers=self._auth_header(env["admin_user"], admin_password),
+            timeout=15,
+        )
+        self.assertEqual(
+            create_network_resp.status_code,
+            200,
+            f"create network failed: {create_network_resp.status_code} {create_network_resp.text}",
+        )
+        network_created = True
+
+        enroll_resp = requests.post(
+            f"{base}/api/v1/client/peers/enroll",
+            json={"network_name": test_network, "subnet_offset": 1, "note": note},
+            headers=self._auth_header("sensos", env["client_password"]),
+            timeout=10,
+        )
+        self.assertEqual(
+            enroll_resp.status_code,
+            200,
+            f"enroll failed: {enroll_resp.status_code} {enroll_resp.text}",
+        )
+        enroll = enroll_resp.json()
+        wg_ip = enroll["wg_ip"]
+        peer_ip = wg_ip
+        peer_uuid = enroll["peer_uuid"]
+        peer_api_password = enroll["peer_api_password"]
+
+        try:
+            wg_resp = requests.post(
+                f"{base}/api/v1/client/peer/wireguard-key",
+                json={"wg_public_key": "test-live-contract-public-key"},
+                headers=self._auth_header(peer_uuid, peer_api_password),
+                timeout=10,
+            )
+            self.assertEqual(
+                wg_resp.status_code,
+                200,
+                f"register-wireguard-key failed: {wg_resp.status_code} {wg_resp.text}",
+            )
+
+            location_resp = requests.put(
+                f"{base}/api/v1/client/peer/location",
+                json={"latitude": 30.2672, "longitude": -97.7431},
+                headers=self._auth_header(peer_uuid, peer_api_password),
+                timeout=10,
+            )
+            self.assertEqual(
+                location_resp.status_code,
+                200,
+                f"location update failed: {location_resp.status_code} {location_resp.text}",
+            )
+
+            status_resp = requests.post(
+                f"{base}/api/v1/client/peer/status",
+                json={
+                    "hostname": "contract-test-node",
+                    "uptime_seconds": 1,
+                    "disk_available_gb": 1.0,
+                    "memory_used_mb": 10,
+                    "memory_total_mb": 100,
+                    "load_1m": 0.01,
+                    "load_5m": 0.01,
+                    "load_15m": 0.01,
+                    "version": "test",
+                    "status_message": "contract-test",
+                },
+                headers=self._auth_header(peer_uuid, peer_api_password),
+                timeout=10,
+            )
+            self.assertEqual(
+                status_resp.status_code,
+                200,
+                f"status update failed: {status_resp.status_code} {status_resp.text}",
+            )
+
+            hardware_resp = requests.put(
+                f"{base}/api/v1/client/peer/hardware-profile",
+                json={
+                    "hostname": "contract-test-node",
+                    "model": "contract-test-model",
+                    "kernel_version": "test-kernel",
+                    "cpu": {"model_name": "test-cpu"},
+                    "firmware": {"bios_version": "test-bios"},
+                    "memory": {"mem_total_mb": 100},
+                    "disks": {"sda": {"path": "/dev/sda"}},
+                    "usb_devices": "",
+                    "network_interfaces": {"eth0": {"ipv4": []}},
+                },
+                headers=self._auth_header(peer_uuid, peer_api_password),
+                timeout=10,
+            )
+            self.assertEqual(
+                hardware_resp.status_code,
+                200,
+                f"hardware upload failed: {hardware_resp.status_code} {hardware_resp.text}",
+            )
+        finally:
+            if network_created:
+                delete_network_resp = requests.delete(
+                    f"{base}/api/v1/admin/networks/{test_network}",
+                    headers=self._auth_header(env["admin_user"], admin_password),
+                    timeout=15,
+                )
+                self.assertIn(
+                    delete_network_resp.status_code,
+                    (200, 404),
+                    (
+                        f"network cleanup failed for {test_network}: "
+                        f"{delete_network_resp.status_code} {delete_network_resp.text}"
+                    ),
+                )
+                if peer_ip:
+                    peer_lookup = requests.get(
+                        f"{base}/api/v1/admin/peers/{peer_ip}",
+                        headers=self._auth_header(env["admin_user"], admin_password),
+                        timeout=10,
+                    )
+                    self.assertEqual(
+                        peer_lookup.status_code,
+                        200,
+                        f"peer lookup failed: {peer_lookup.status_code} {peer_lookup.text}",
+                    )
+                    body = peer_lookup.json()
+                    self.assertEqual(
+                        body.get("exists"),
+                        False,
+                        f"peer still present after network delete: {peer_ip} -> {body}",
+                    )
 
 
 if __name__ == "__main__":
