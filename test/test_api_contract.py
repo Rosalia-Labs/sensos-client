@@ -427,57 +427,36 @@ class ApiContractTests(unittest.TestCase):
             ("10.254.0.1", "8765", "peer-123", "peer-secret"),
         )
 
-    def test_birdnet_upload_payload_includes_processed_files_and_nested_results(self):
-        payload = birdnet_upload.build_birdnet_upload_payload(
+    def test_birdnet_upload_payload_includes_current_required_fields(self):
+        detections = [
+            {
+                "source_path": "audio_recordings/compressed/2026/04/07/a.flac",
+                "channel_index": 0,
+                "window_index": 0,
+                "max_score_start_frame": 0,
+                "label": "Northern Cardinal (Cardinalis cardinalis)",
+                "score": 0.91,
+                "likely_score": 0.75,
+                "volume": 0.018,
+                "clip_start_time": "2026-04-07T12:00:00Z",
+                "clip_end_time": "2026-04-07T12:00:03Z",
+            }
+        ]
+        payload = birdnet_upload.build_upload_payload(
             hostname="sensor-1",
             client_version="1.2.3",
-            batch_id=23,
-            ownership_mode="client-retains",
-            processed_files=[
-                {
-                    "source_path": "audio_recordings/compressed/2026/04/07/a.flac",
-                    "sample_rate": 48000,
-                    "channels": 2,
-                    "frames": 144000,
-                    "started_at": "2026-04-07T12:00:00Z",
-                    "ended_at": "2026-04-07T12:00:03Z",
-                    "deleted_source": True,
-                    "detections": [
-                        {
-                            "channel_index": 0,
-                            "window_index": 0,
-                            "start_frame": 0,
-                            "end_frame": 144000,
-                            "start_sec": 0.0,
-                            "end_sec": 3.0,
-                            "event_started_at": "2026-04-07T12:00:00Z",
-                            "event_ended_at": "2026-04-07T12:00:03Z",
-                            "window_volume": 0.018,
-                            "top_label": "Northern Cardinal (Cardinalis cardinalis)",
-                            "top_score": 0.91,
-                            "top_likely_score": 0.75,
-                            "flac_path": "audio_recordings/processed/2026/04/07/Northern_Cardinal/clip.flac",
-                            "deleted_at": None,
-                        }
-                    ],
-                }
-            ],
+            detections=detections,
         )
 
-        self.assertEqual(payload["schema_version"], 1)
-        self.assertEqual(payload["batch_id"], 23)
-        self.assertEqual(payload["source_count"], 1)
-        self.assertEqual(payload["first_source_path"], "audio_recordings/compressed/2026/04/07/a.flac")
-        self.assertEqual(payload["first_started_at"], "2026-04-07T12:00:00Z")
-        self.assertEqual(payload["processed_files"][0]["detections"][0]["window_index"], 0)
-        self.assertEqual(payload["processed_files"][0]["detections"][0]["event_started_at"], "2026-04-07T12:00:00Z")
-        self.assertEqual(payload["processed_files"][0]["detections"][0]["window_volume"], 0.018)
-        self.assertEqual(payload["processed_files"][0]["detections"][0]["flac_path"], "audio_recordings/processed/2026/04/07/Northern_Cardinal/clip.flac")
+        self.assertEqual(payload["schema_version"], 2)
+        self.assertEqual(payload["hostname"], "sensor-1")
+        self.assertEqual(payload["client_version"], "1.2.3")
+        self.assertIn("sent_at", payload)
+        self.assertEqual(payload["detections"], detections)
 
     def test_birdnet_upload_response_requires_receipt_and_full_acceptance(self):
         parsed = birdnet_upload.parse_upload_response(
-            '{"status":"ok","receipt_id":"receipt-123","accepted_count":1,"server_received_at":"2026-04-07T12:01:00Z"}',
-            1,
+            '{"status":"ok","receipt_id":"receipt-123","accepted_count":1,"server_received_at":"2026-04-07T12:01:00Z"}'
         )
 
         self.assertEqual(
@@ -489,96 +468,10 @@ class ApiContractTests(unittest.TestCase):
             },
         )
 
-    def test_birdnet_upload_limits_batch_to_fit_max_request_bytes(self):
-        processed_files = [
-            {
-                "source_path": f"audio_recordings/compressed/2026/04/07/{name}.flac",
-                "sample_rate": 48000,
-                "channels": 2,
-                "frames": 144000,
-                "started_at": "2026-04-07T12:00:00Z",
-                "ended_at": "2026-04-07T12:00:03Z",
-                "deleted_source": False,
-                "detections": [
-                    {
-                        "channel_index": 0,
-                        "window_index": 0,
-                        "start_frame": 0,
-                        "end_frame": 144000,
-                        "start_sec": 0.0,
-                        "end_sec": 3.0,
-                        "event_started_at": "2026-04-07T12:00:00Z",
-                        "event_ended_at": "2026-04-07T12:00:03Z",
-                        "window_volume": 0.018,
-                        "top_label": "Northern Cardinal (Cardinalis cardinalis)",
-                        "top_score": 0.91,
-                        "top_likely_score": 0.75,
-                        "flac_path": None,
-                        "deleted_at": None,
-                    }
-                ],
-            }
-            for name in ("a", "b")
-        ]
-        one_file_bytes = birdnet_upload.payload_size_bytes(
-            birdnet_upload.build_birdnet_upload_payload(
-                hostname="sensor-1",
-                client_version="1.2.3",
-                batch_id=0,
-                ownership_mode="client-retains",
-                processed_files=[processed_files[0]],
-            )
-        )
-
-        limited = birdnet_upload.limit_processed_files_for_payload(
-            hostname="sensor-1",
-            client_version="1.2.3",
-            ownership_mode="client-retains",
-            processed_files=processed_files,
-            max_request_bytes=one_file_bytes + 10,
-        )
-
-        self.assertEqual(len(limited), 1)
-        self.assertEqual(limited[0]["source_path"], processed_files[0]["source_path"])
-
-    def test_birdnet_upload_rejects_single_file_that_exceeds_max_request_bytes(self):
-        processed_files = [
-            {
-                "source_path": "audio_recordings/compressed/2026/04/07/a.flac",
-                "sample_rate": 48000,
-                "channels": 2,
-                "frames": 144000,
-                "started_at": "2026-04-07T12:00:00Z",
-                "ended_at": "2026-04-07T12:00:03Z",
-                "deleted_source": False,
-                "detections": [
-                    {
-                        "channel_index": 0,
-                        "window_index": 0,
-                        "start_frame": 0,
-                        "end_frame": 144000,
-                        "start_sec": 0.0,
-                        "end_sec": 3.0,
-                        "event_started_at": "2026-04-07T12:00:00Z",
-                        "event_ended_at": "2026-04-07T12:00:03Z",
-                        "window_volume": 0.018,
-                        "top_label": "Northern Cardinal (Cardinalis cardinalis)",
-                        "top_score": 0.91,
-                        "top_likely_score": 0.75,
-                        "flac_path": None,
-                        "deleted_at": None,
-                    }
-                ],
-            }
-        ]
-
+    def test_birdnet_upload_response_rejects_non_ok_status(self):
         with self.assertRaises(ValueError):
-            birdnet_upload.limit_processed_files_for_payload(
-                hostname="sensor-1",
-                client_version="1.2.3",
-                ownership_mode="client-retains",
-                processed_files=processed_files,
-                max_request_bytes=32,
+            birdnet_upload.parse_upload_response(
+                '{"status":"error","receipt_id":"receipt-123","accepted_count":1}'
             )
 
     def test_config_network_defaults_steady_state_port_to_8765_not_setup_port(self):
@@ -814,8 +707,9 @@ class ApiContractTests(unittest.TestCase):
             ):
                 with mock.patch.object(config_location, "read_api_password", return_value="secret"):
                     with mock.patch.object(config_location, "send_location") as send_mock:
-                        with mock.patch.object(sys, "argv", argv):
-                            rc = config_location.main()
+                        with mock.patch.object(config_location, "ensure_sensos_admin"):
+                            with mock.patch.object(sys, "argv", argv):
+                                rc = config_location.main()
 
         self.assertEqual(rc, 0)
         send_mock.assert_called_once_with(
