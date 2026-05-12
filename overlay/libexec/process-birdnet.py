@@ -486,58 +486,6 @@ def collect_detections(
     return detections
 
 
-def merge_detections(detections: List[Detection]) -> List[Detection]:
-    if not detections:
-        return []
-
-    merged: List[Detection] = []
-    current = Detection(
-        channel_index=detections[0].channel_index,
-        window_index=detections[0].window_index,
-        start_frame=detections[0].start_frame,
-        end_frame=detections[0].end_frame,
-        max_score_start_frame=detections[0].max_score_start_frame,
-        volume=detections[0].volume,
-        label=detections[0].label,
-        score=detections[0].score,
-        likely_score=detections[0].likely_score,
-    )
-
-    for detection in detections[1:]:
-        same_label = detection.label == current.label
-        overlaps = detection.start_frame <= current.end_frame
-        if same_label and overlaps:
-            current.end_frame = max(current.end_frame, detection.end_frame)
-            if detection.score > current.score:
-                current.score = detection.score
-                current.max_score_start_frame = (
-                    detection.max_score_start_frame
-                )
-            current.volume = max(current.volume, detection.volume)
-            if detection.likely_score is not None:
-                if current.likely_score is None:
-                    current.likely_score = detection.likely_score
-                else:
-                    current.likely_score = max(current.likely_score, detection.likely_score)
-            continue
-
-        merged.append(current)
-        current = Detection(
-            channel_index=detection.channel_index,
-            window_index=detection.window_index,
-            start_frame=detection.start_frame,
-            end_frame=detection.end_frame,
-            max_score_start_frame=detection.max_score_start_frame,
-            volume=detection.volume,
-            label=detection.label,
-            score=detection.score,
-            likely_score=detection.likely_score,
-        )
-
-    merged.append(current)
-    return merged
-
-
 def write_detection_clips(
     source_path: Path,
     audio: np.ndarray,
@@ -619,7 +567,7 @@ def process_audio(
             longitude,
             source_observation_date(source_path),
         )
-        detections.extend(merge_detections(channel_detections))
+        detections.extend(channel_detections)
     written_clips = write_detection_clips(source_path, audio, sample_rate, detections)
 
     conn.executemany(
