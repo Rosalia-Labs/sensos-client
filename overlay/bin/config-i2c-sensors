@@ -124,8 +124,8 @@ mkdir -p "${output_dir}"
 sudo chown -R sensos-admin:sensos-data "${output_dir}"
 sudo chmod -R 2775 "${output_dir}"
 
-echo "Ensuring optional I2C Python dependencies are installed..."
-sudo "${CLIENT_ROOT}/libexec/setup-i2c-python.sh"
+echo "Verifying I2C Python dependencies are provisioned..."
+sudo "${CLIENT_ROOT}/libexec/setup-i2c-python.sh" --verify-only
 
 sudo systemctl daemon-reload
 if [[ "$disable_service" == "true" ]]; then

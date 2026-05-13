@@ -10,6 +10,8 @@ BIRDNET_STAMP_FILE="${BIRDNET_VENV_DIR}/.requirements.sha256"
 BIRDNET_SERVICE="sensos-birdnet.service"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 DEFAULT_BIRDNET_BACKEND="litert"
+VERIFY_ONLY=0
+PROVISION_DEPS="${SENSOS_PROVISION_BIRDNET_DEPS:-0}"
 
 log() {
     printf '[libexec/setup-birdnet] %s\n' "$*"
@@ -26,6 +28,20 @@ require_root() {
 
 require_inputs() {
     [[ -f "${BIRDNET_REQUIREMENTS_FILE}" ]] || die "missing ${BIRDNET_REQUIREMENTS_FILE}"
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --verify-only)
+                VERIFY_ONLY=1
+                ;;
+            *)
+                die "unknown option: $1"
+                ;;
+        esac
+        shift
+    done
 }
 
 birdnet_enabled() {
@@ -143,6 +159,18 @@ install_birdnet_requirements_if_needed() {
     printf '%s\n' "${current_digest}" >"${BIRDNET_STAMP_FILE}"
 }
 
+requirements_are_current() {
+    local backend="$1"
+    local current_digest
+    local previous_digest=""
+
+    current_digest="$(requirements_digest "${backend}")"
+    if [[ -f "${BIRDNET_STAMP_FILE}" ]]; then
+        previous_digest="$(head -n 1 "${BIRDNET_STAMP_FILE}" | tr -d '[:space:]')"
+    fi
+    [[ -n "${previous_digest}" && "${current_digest}" == "${previous_digest}" ]]
+}
+
 set_permissions() {
     chown -R sensos-admin:sensos-data "${BIRDNET_VENV_DIR}"
     find "${BIRDNET_VENV_DIR}" -type d -exec chmod 0755 '{}' +
@@ -163,15 +191,25 @@ reconcile_service_state() {
 main() {
     local backend
 
+    parse_args "$@"
     require_root
     require_inputs
 
-    if ! birdnet_enabled; then
+    backend="$(birdnet_backend)"
+    if [[ "${VERIFY_ONLY}" == "1" ]]; then
+        if requirements_are_current "${backend}"; then
+            log "BirdNET Python requirements already provisioned for backend ${backend}"
+            reconcile_service_state
+            return 0
+        fi
+        die "BirdNET Python requirements are not provisioned for backend ${backend}; rerun ./install or ./upgrade with connectivity"
+    fi
+
+    if ! birdnet_enabled && [[ "${PROVISION_DEPS}" != "1" ]]; then
         reconcile_service_state
         return 0
     fi
 
-    backend="$(birdnet_backend)"
     ensure_venv
     ensure_venv_pip
     install_birdnet_requirements_if_needed "${backend}"

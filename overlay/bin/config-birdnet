@@ -15,7 +15,6 @@ CONFIG_FILE = CLIENT_ROOT / "etc" / "birdnet.env"
 MODEL_ROOT = CLIENT_ROOT / "birdnet" / "BirdNET_v2.4_tflite"
 SERVICE_NAME = "sensos-birdnet.service"
 SETUP_HELPER = CLIENT_ROOT / "libexec" / "setup-birdnet.sh"
-INSTALL_MODELS_CMD = "install-birdnet-models"
 DEFAULT_BACKEND = "litert"
 DEFAULT_INPUT_MODE = "mono"
 BACKEND_ALIASES = {
@@ -59,10 +58,6 @@ def parse_args() -> argparse.Namespace:
         "--start-service",
         action="store_true",
         help="Start sensos-birdnet.service after setup.",
-    )
-    parser.add_argument(
-        "--models-url",
-        help="Override the BirdNET model zip URL used when auto-installing missing models.",
     )
     parser.add_argument(
         "--backend",
@@ -133,7 +128,7 @@ def ensure_models_present() -> None:
         return
     joined = "\n  ".join(missing)
     raise SystemExit(
-        "ERROR: BirdNET model files are still missing after attempted auto-install:\n"
+        "ERROR: BirdNET model files are missing. Rerun ./install or ./upgrade with connectivity first.\n"
         f"  {joined}"
     )
 
@@ -141,16 +136,7 @@ def ensure_models_present() -> None:
 def run_setup_step() -> None:
     if not SETUP_HELPER.exists():
         raise SystemExit(f"ERROR: missing BirdNET setup helper at {SETUP_HELPER}")
-    result = subprocess.run(["sudo", str(SETUP_HELPER)])
-    if result.returncode != 0:
-        raise SystemExit(result.returncode)
-
-
-def install_models(url: str | None) -> None:
-    cmd = [INSTALL_MODELS_CMD]
-    if url:
-        cmd.extend(["--url", url])
-    result = subprocess.run(cmd)
+    result = subprocess.run(["sudo", str(SETUP_HELPER), "--verify-only"])
     if result.returncode != 0:
         raise SystemExit(result.returncode)
 
@@ -170,10 +156,6 @@ def main() -> int:
         systemctl("disable", "--now", SERVICE_NAME)
         print("BirdNET disabled.")
         return 0
-
-    if missing_model_paths():
-        print("BirdNET model files are missing; attempting automatic model install...")
-        install_models(args.models_url)
 
     ensure_models_present()
     selected_backend = BACKEND_ALIASES[args.backend]

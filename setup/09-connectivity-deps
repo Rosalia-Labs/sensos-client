@@ -1,0 +1,81 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+CLIENT_ROOT="${SENSOS_REPO_ROOT:-${REPO_ROOT}}"
+DEPLOY_ROOT="${SENSOS_DEPLOY_ROOT:-/sensos}"
+PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
+OFFLINE="${SENSOS_OFFLINE:-0}"
+BIRDNET_MODELS_URL="${SENSOS_BIRDNET_MODELS_URL:-}"
+BIRDNET_SETUP_HELPER="${DEPLOY_ROOT}/libexec/setup-birdnet.sh"
+I2C_SETUP_HELPER="${DEPLOY_ROOT}/libexec/setup-i2c-python.sh"
+GPS_SETUP_HELPER="${DEPLOY_ROOT}/libexec/setup-gps-python.sh"
+INSTALL_BIRDNET_MODELS_CMD="${DEPLOY_ROOT}/bin/install-birdnet-models"
+BIRDNET_MODEL_ROOT="${DEPLOY_ROOT}/birdnet/BirdNET_v2.4_tflite"
+
+log() {
+    printf '[setup/09-connectivity-deps] %s\n' "$*"
+}
+
+die() {
+    printf '[setup/09-connectivity-deps] ERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+require_root() {
+    [[ "${EUID}" -eq 0 ]] || die "run as root"
+}
+
+require_inputs() {
+    [[ -x "${PRECHECK_SCRIPT}" ]] || die "missing or non-executable preflight script: ${PRECHECK_SCRIPT}"
+    [[ -x "${BIRDNET_SETUP_HELPER}" ]] || die "missing BirdNET setup helper: ${BIRDNET_SETUP_HELPER}"
+    [[ -x "${I2C_SETUP_HELPER}" ]] || die "missing I2C setup helper: ${I2C_SETUP_HELPER}"
+    [[ -x "${GPS_SETUP_HELPER}" ]] || die "missing GPS setup helper: ${GPS_SETUP_HELPER}"
+    [[ -x "${INSTALL_BIRDNET_MODELS_CMD}" ]] || die "missing BirdNET model installer: ${INSTALL_BIRDNET_MODELS_CMD}"
+}
+
+run_preflight() {
+    [[ "${SENSOS_PREFLIGHT_QUIET:-0}" == "1" ]] || log "running preflight"
+    "${PRECHECK_SCRIPT}"
+}
+
+ensure_birdnet_models() {
+    local cmd=("${INSTALL_BIRDNET_MODELS_CMD}")
+    if [[ -n "${BIRDNET_MODELS_URL}" ]]; then
+        cmd+=("--url" "${BIRDNET_MODELS_URL}")
+    fi
+
+    if [[ -d "${BIRDNET_MODEL_ROOT}" ]]; then
+        log "BirdNET models already present at ${BIRDNET_MODEL_ROOT}"
+        return 0
+    fi
+
+    log "installing BirdNET models into ${BIRDNET_MODEL_ROOT}"
+    "${cmd[@]}"
+}
+
+main() {
+    require_root
+    require_inputs
+    run_preflight
+
+    if [[ "${OFFLINE}" == "1" ]]; then
+        log "offline mode enabled; verifying connectivity-dependent dependencies are already provisioned"
+        "${I2C_SETUP_HELPER}" --verify-only
+        "${GPS_SETUP_HELPER}" --verify-only
+        "${BIRDNET_SETUP_HELPER}" --verify-only
+        [[ -d "${BIRDNET_MODEL_ROOT}" ]] || die "BirdNET models are missing at ${BIRDNET_MODEL_ROOT}; rerun ./install without --offline"
+        return 0
+    fi
+
+    "${I2C_SETUP_HELPER}"
+    "${GPS_SETUP_HELPER}"
+    SENSOS_PROVISION_BIRDNET_DEPS=1 "${BIRDNET_SETUP_HELPER}"
+    ensure_birdnet_models
+}
+
+main "$@"

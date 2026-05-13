@@ -41,7 +41,7 @@ def install_optional_python_dependencies() -> None:
     helper = os.path.join(CLIENT_ROOT, "libexec", "setup-gps-python.sh")
     if not os.path.isfile(helper):
         raise SystemExit(f"ERROR: missing GPS setup helper at {helper}")
-    result = subprocess.run(["sudo", helper], check=False)
+    result = subprocess.run(["sudo", helper, "--verify-only"], check=False)
     if result.returncode != 0:
         raise SystemExit(result.returncode)
 

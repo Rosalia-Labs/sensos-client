@@ -7,6 +7,7 @@ GPS_REQUIREMENTS_FILE="${DEPLOY_ROOT}/etc/gps-requirements.txt"
 VENV_DIR="${DEPLOY_ROOT}/python/venv"
 STAMP_FILE="${VENV_DIR}/.gps-requirements.sha256"
 PYTHON_BIN="${VENV_DIR}/bin/python"
+VERIFY_ONLY=0
 
 log() {
     printf '[libexec/setup-gps-python] %s\n' "$*"
@@ -24,6 +25,20 @@ require_root() {
 require_inputs() {
     [[ -f "${GPS_REQUIREMENTS_FILE}" ]] || die "missing ${GPS_REQUIREMENTS_FILE}"
     [[ -x "${PYTHON_BIN}" ]] || die "missing ${PYTHON_BIN}; run ./install first"
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --verify-only)
+                VERIFY_ONLY=1
+                ;;
+            *)
+                die "unknown option: $1"
+                ;;
+        esac
+        shift
+    done
 }
 
 requirements_declared() {
@@ -68,9 +83,28 @@ install_requirements_if_needed() {
     printf '%s\n' "${current_digest}" >"${STAMP_FILE}"
 }
 
+requirements_are_current() {
+    local current_digest
+    local previous_digest=""
+
+    current_digest="$(requirements_digest)"
+    if [[ -f "${STAMP_FILE}" ]]; then
+        previous_digest="$(head -n 1 "${STAMP_FILE}" | tr -d '[:space:]')"
+    fi
+    [[ -n "${previous_digest}" && "${current_digest}" == "${previous_digest}" ]]
+}
+
 main() {
+    parse_args "$@"
     require_root
     require_inputs
+    if [[ "${VERIFY_ONLY}" == "1" ]]; then
+        if requirements_are_current; then
+            log "GPS Python requirements already provisioned"
+            return 0
+        fi
+        die "GPS Python requirements are not provisioned for current config; rerun ./install or ./upgrade with connectivity"
+    fi
     install_requirements_if_needed
 }
 
