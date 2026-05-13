@@ -41,11 +41,22 @@ def ensure_state_file_permissions() -> None:
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS source_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_path TEXT NOT NULL UNIQUE,
+            birdnet_processed INTEGER NOT NULL DEFAULT 0,
+            source_deleted INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS detections (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source_path TEXT NOT NULL,
+            source_file_id INTEGER NOT NULL,
             channel_index INTEGER NOT NULL DEFAULT 0,
             window_index INTEGER NOT NULL,
             max_score_start_frame INTEGER NOT NULL,
@@ -59,23 +70,22 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             clip_size_bytes INTEGER,
             sent_to_server INTEGER NOT NULL DEFAULT 0,
             deleted_at TEXT,
-            UNIQUE (source_path, channel_index, window_index)
+            FOREIGN KEY (source_file_id) REFERENCES source_files(id) ON DELETE RESTRICT,
+            UNIQUE (source_file_id, channel_index, window_index)
         )
         """
     )
-    columns = {
-        str(row[1]).strip().lower()
-        for row in conn.execute("PRAGMA table_info(detections)").fetchall()
-    }
-    if "sent_to_server" not in columns:
-        conn.execute(
-            """
-            ALTER TABLE detections
-            ADD COLUMN sent_to_server INTEGER NOT NULL DEFAULT 0
-            """
-        )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_detections_source ON detections (source_path, window_index)"
+        """
+        CREATE INDEX IF NOT EXISTS idx_source_files_status
+        ON source_files (birdnet_processed, source_deleted, id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_detections_source_file
+        ON detections (source_file_id, window_index)
+        """
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_detections_clip_time ON detections (clip_start_time, channel_index)"
@@ -92,26 +102,65 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def get_or_create_source_file(conn: sqlite3.Connection, source_path: str) -> int:
+    conn.execute(
+        "INSERT OR IGNORE INTO source_files (source_path) VALUES (?)",
+        (source_path,),
+    )
+    row = conn.execute(
+        "SELECT id FROM source_files WHERE source_path = ?",
+        (source_path,),
+    ).fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+def mark_source_status(
+    conn: sqlite3.Connection,
+    source_path: str,
+    *,
+    birdnet_processed: bool | None = None,
+    source_deleted: bool | None = None,
+) -> None:
+    source_file_id = get_or_create_source_file(conn, source_path)
+    assignments: list[str] = []
+    params: list[int] = []
+    if birdnet_processed is not None:
+        assignments.append("birdnet_processed = ?")
+        params.append(1 if birdnet_processed else 0)
+    if source_deleted is not None:
+        assignments.append("source_deleted = ?")
+        params.append(1 if source_deleted else 0)
+    if not assignments:
+        return
+    params.append(source_file_id)
+    conn.execute(
+        f"UPDATE source_files SET {', '.join(assignments)} WHERE id = ?",
+        tuple(params),
+    )
+
+
 def select_pending_detections(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
     rows = conn.execute(
         """
-        SELECT id,
-               source_path,
-               channel_index,
-               window_index,
-               max_score_start_frame,
-               label,
-               score,
-               likely_score,
-               volume,
-               clip_start_time,
-               clip_end_time,
-               clip_path,
-               clip_size_bytes
-        FROM detections
-        WHERE deleted_at IS NULL
-          AND sent_to_server = 0
-        ORDER BY clip_start_time, id
+        SELECT d.id,
+               s.source_path,
+               d.channel_index,
+               d.window_index,
+               d.max_score_start_frame,
+               d.label,
+               d.score,
+               d.likely_score,
+               d.volume,
+               d.clip_start_time,
+               d.clip_end_time,
+               d.clip_path,
+               d.clip_size_bytes
+        FROM detections d
+        JOIN source_files s ON s.id = d.source_file_id
+        WHERE d.deleted_at IS NULL
+          AND d.sent_to_server = 0
+        ORDER BY d.clip_start_time, d.id
         LIMIT ?
         """,
         (limit,),

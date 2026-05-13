@@ -15,6 +15,7 @@ from typing import List
 
 import numpy as np
 import soundfile as sf
+from birdnet_data import ensure_schema, get_or_create_source_file, mark_source_status
 
 SCRIPT_FILE = os.path.realpath(__file__)
 SCRIPT_DIR = os.path.dirname(SCRIPT_FILE)
@@ -235,45 +236,23 @@ def connect_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS detections (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source_path TEXT NOT NULL,
-            channel_index INTEGER NOT NULL DEFAULT 0,
-            window_index INTEGER NOT NULL,
-            max_score_start_frame INTEGER NOT NULL,
-            label TEXT NOT NULL,
-            score REAL NOT NULL,
-            likely_score REAL,
-            volume REAL,
-            clip_start_time TEXT NOT NULL,
-            clip_end_time TEXT NOT NULL,
-            clip_path TEXT,
-            clip_size_bytes INTEGER,
-            sent_to_server INTEGER NOT NULL DEFAULT 0,
-            deleted_at TEXT,
-            UNIQUE (source_path, channel_index, window_index)
-        )
-        """
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_detections_source ON detections (source_path, window_index)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_detections_clip_time ON detections (clip_start_time, channel_index)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_detections_clip ON detections (deleted_at, clip_path)"
-    )
-    conn.commit()
+    ensure_schema(conn)
     ensure_state_file_permissions()
     return conn
 
 
 def was_processed_successfully(conn: sqlite3.Connection, path: Path) -> bool:
-    row = conn.execute("SELECT 1 FROM detections WHERE source_path = ?", (relative_source(path),)).fetchone()
-    return row is not None
+    row = conn.execute(
+        """
+        SELECT birdnet_processed
+        FROM source_files
+        WHERE source_path = ?
+        """,
+        (relative_source(path),),
+    ).fetchone()
+    if row is None:
+        return False
+    return bool(row[0])
 
 
 def find_next_audio(conn: sqlite3.Connection) -> Path | None:
@@ -543,6 +522,11 @@ def process_audio(
     source_path: Path,
 ) -> None:
     source_key = relative_source(source_path)
+    source_file_id = get_or_create_source_file(conn, source_key)
+    conn.execute(
+        "UPDATE source_files SET source_deleted = 0 WHERE id = ?",
+        (source_file_id,),
+    )
     source_start_dt = require_source_start_datetime(source_path)
     info = sf.info(source_path)
     if info.samplerate != SAMPLE_RATE:
@@ -550,7 +534,7 @@ def process_audio(
             f"Unsupported sample rate {info.samplerate} for {source_key}; expected {SAMPLE_RATE}"
         )
 
-    conn.execute("DELETE FROM detections WHERE source_path = ?", (source_key,))
+    conn.execute("DELETE FROM detections WHERE source_file_id = ?", (source_file_id,))
     conn.commit()
 
     audio, sample_rate = sf.read(source_path, dtype="int32", always_2d=True)
@@ -573,12 +557,12 @@ def process_audio(
     conn.executemany(
         """
         INSERT INTO detections (
-            source_path, channel_index, window_index, max_score_start_frame, label, score, likely_score, volume, clip_start_time, clip_end_time, clip_path, clip_size_bytes, deleted_at
+            source_file_id, channel_index, window_index, max_score_start_frame, label, score, likely_score, volume, clip_start_time, clip_end_time, clip_path, clip_size_bytes, deleted_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
-                source_key,
+                source_file_id,
                 d.channel_index,
                 d.window_index,
                 max(0, d.max_score_start_frame - d.start_frame),
@@ -603,9 +587,12 @@ def process_audio(
             for d in detections
         ],
     )
+    mark_source_status(conn, source_key, birdnet_processed=True)
     conn.commit()
 
     delete_source(source_path)
+    mark_source_status(conn, source_key, source_deleted=not source_path.exists())
+    conn.commit()
 
 
 def main() -> None:
@@ -649,11 +636,19 @@ def main() -> None:
             print(f"✅ Finished {next_audio}")
         except Exception as exc:
             if next_audio is not None and next_audio.exists():
+                source_key = relative_source(next_audio)
                 print(
                     f"⚠️ Failed to process {next_audio}: {exc}. Deleting source file.",
                     file=sys.stderr,
                 )
                 delete_source(next_audio)
+                mark_source_status(
+                    conn,
+                    source_key,
+                    birdnet_processed=True,
+                    source_deleted=not next_audio.exists(),
+                )
+                conn.commit()
             print(f"❌ BirdNET processing failure: {exc}", file=sys.stderr)
             time.sleep(ERROR_SLEEP_SEC)
 

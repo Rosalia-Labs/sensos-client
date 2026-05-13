@@ -10,6 +10,7 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
+from birdnet_data import ensure_schema
 
 SCRIPT_FILE = os.path.realpath(__file__)
 SCRIPT_DIR = os.path.dirname(SCRIPT_FILE)
@@ -83,32 +84,7 @@ def connect_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS detections (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source_path TEXT NOT NULL,
-            channel_index INTEGER NOT NULL DEFAULT 0,
-            window_index INTEGER NOT NULL,
-            max_score_start_frame INTEGER NOT NULL,
-            label TEXT NOT NULL,
-            score REAL NOT NULL,
-            likely_score REAL,
-            volume REAL,
-            clip_start_time TEXT NOT NULL,
-            clip_end_time TEXT NOT NULL,
-            clip_path TEXT,
-            clip_size_bytes INTEGER,
-            sent_to_server INTEGER NOT NULL DEFAULT 0,
-            deleted_at TEXT,
-            UNIQUE (source_path, channel_index, window_index)
-        )
-        """
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_detections_clip ON detections (deleted_at, clip_path)"
-    )
-    conn.commit()
+    ensure_schema(conn)
     for path in (DB_PATH, DB_PATH.with_name(f"{DB_PATH.name}-wal"), DB_PATH.with_name(f"{DB_PATH.name}-shm")):
         if path.exists():
             try:
