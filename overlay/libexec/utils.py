@@ -411,7 +411,7 @@ def get_api_password(config_server, port, network_name=None):
         if os.path.exists(API_PASSWORD_FILE):
             stored_password = (read_file(API_PASSWORD_FILE) or "").strip()
             if stored_password:
-                print("Testing stored client API password...")
+                print("Testing stored setup API password...")
                 validation = validate_api_password(
                     config_server,
                     port,
@@ -419,10 +419,10 @@ def get_api_password(config_server, port, network_name=None):
                     network_name=network_name,
                 )
                 if validation["ok"]:
-                    print("✅ Client API password from file is valid.")
+                    print("✅ Stored setup API password is valid.")
                     return stored_password
                 elif validation["reason"] == "invalid_credentials":
-                    print("⚠️ Stored client API password is invalid.", file=sys.stderr)
+                    print("⚠️ Stored setup API password is invalid.", file=sys.stderr)
                 elif validation["reason"] == "unreachable":
                     print(
                         f"❌ Lost contact with configuration server at {config_server}:{port}.",
@@ -431,11 +431,11 @@ def get_api_password(config_server, port, network_name=None):
                     return None
                 else:
                     print(
-                        "⚠️ Could not validate stored client API password due to an unexpected "
+                        "⚠️ Could not validate stored setup API password due to an unexpected "
                         f"server response ({validation['reason']}).",
                         file=sys.stderr,
                     )
-        api_password = input("🔑 Enter client API password: ").strip()
+        api_password = input("🔑 Enter setup API password: ").strip()
         validation = validate_api_password(
             config_server,
             port,
@@ -444,13 +444,13 @@ def get_api_password(config_server, port, network_name=None):
         )
         if validation["ok"]:
             if not api_password:
-                print("❌ Error: client API password is empty. Not saving.", file=sys.stderr)
+                print("❌ Error: setup API password is empty. Not saving.", file=sys.stderr)
                 continue
             write_file(API_PASSWORD_FILE, api_password + "\n", mode=0o640, user="root")
-            print(f"✅ Client API password saved securely in {API_PASSWORD_FILE}.")
+            print(f"✅ Setup API password saved securely in {API_PASSWORD_FILE}.")
             return api_password
         if validation["reason"] == "invalid_credentials":
-            print("❌ Client API password is invalid, please try again.", file=sys.stderr)
+            print("❌ Setup API password is invalid, please try again.", file=sys.stderr)
             continue
         if validation["reason"] == "unreachable":
             print(
@@ -460,12 +460,12 @@ def get_api_password(config_server, port, network_name=None):
             print("📡 Is the device online? Is the server address correct?")
             return None
         print(
-            "❌ Unable to validate client API password due to an unexpected "
+            "❌ Unable to validate setup API password due to an unexpected "
             f"server response ({validation['reason']}).",
             file=sys.stderr,
         )
     print(
-        "🚫 Failed to provide a valid client API password after 3 attempts.", file=sys.stderr
+        "🚫 Failed to provide a valid setup API password after 3 attempts.", file=sys.stderr
     )
     return None
 
