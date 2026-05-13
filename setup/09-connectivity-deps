@@ -35,7 +35,15 @@ require_inputs() {
     [[ -x "${BIRDNET_SETUP_HELPER}" ]] || die "missing BirdNET setup helper: ${BIRDNET_SETUP_HELPER}"
     [[ -x "${I2C_SETUP_HELPER}" ]] || die "missing I2C setup helper: ${I2C_SETUP_HELPER}"
     [[ -x "${GPS_SETUP_HELPER}" ]] || die "missing GPS setup helper: ${GPS_SETUP_HELPER}"
-    [[ -x "${INSTALL_BIRDNET_MODELS_CMD}" ]] || die "missing BirdNET model installer: ${INSTALL_BIRDNET_MODELS_CMD}"
+    if command -v install-birdnet-models >/dev/null 2>&1; then
+        INSTALL_BIRDNET_MODELS_CMD="$(command -v install-birdnet-models)"
+    elif [[ -x "/usr/local/bin/install-birdnet-models" ]]; then
+        INSTALL_BIRDNET_MODELS_CMD="/usr/local/bin/install-birdnet-models"
+    elif [[ -x "${INSTALL_BIRDNET_MODELS_CMD}" ]]; then
+        true
+    else
+        die "missing BirdNET model installer; expected install-birdnet-models in PATH, /usr/local/bin, or ${INSTALL_BIRDNET_MODELS_CMD}"
+    fi
 }
 
 run_preflight() {
