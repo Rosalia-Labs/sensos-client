@@ -561,8 +561,12 @@ def restart_wireguard_service(network_name: str):
 
 def enable_status_update_timer():
     print(f"⏱️ Enabling periodic status updates with {STATUS_UPDATE_TIMER}...")
+    privileged_shell("systemctl daemon-reload")
+    privileged_shell(
+        f"systemctl reset-failed {STATUS_UPDATE_TIMER} sensos-send-status-update.service || true"
+    )
     privileged_shell(f"systemctl enable {STATUS_UPDATE_TIMER}")
-    privileged_shell(f"systemctl start {STATUS_UPDATE_TIMER}")
+    privileged_shell(f"systemctl restart {STATUS_UPDATE_TIMER}")
 
 
 def main():

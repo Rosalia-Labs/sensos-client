@@ -145,7 +145,10 @@ main() {
     data_ops_start_data_units
 
     if [[ "${start_status_updates}" == "true" ]]; then
-        data_ops_run_systemctl start sensos-send-status-update.timer >/dev/null 2>&1 || true
+        data_ops_run_systemctl daemon-reload >/dev/null 2>&1 || true
+        data_ops_run_systemctl reset-failed sensos-send-status-update.timer sensos-send-status-update.service >/dev/null 2>&1 || true
+        data_ops_run_systemctl enable sensos-send-status-update.timer >/dev/null 2>&1 || true
+        data_ops_run_systemctl restart sensos-send-status-update.timer >/dev/null 2>&1 || true
         data_ops_run_systemctl start sensos-send-status-update.service >/dev/null 2>&1 || true
     fi
 

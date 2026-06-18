@@ -17,6 +17,14 @@ sensos-send-status-update.timer     enabled=enabled    active=active    sub=wait
 sensos-hotspot.service              enabled=disabled   active=inactive  sub=dead         load=loaded     SensOS Wi-Fi hotspot
 ```
 
+For the status updater specifically, the healthy pattern is:
+
+- `sensos-send-status-update.timer`: `active=active`, `sub=waiting`
+- `sensos-send-status-update.service`: usually `inactive` between runs
+
+If the service sits at `active (exited)` for days, the timer/service pairing is
+not healthy.
+
 Use it when you want a quick at-a-glance view of which SensOS services or
 timers are enabled, active, missing, or failed without paging through full
 `systemctl status` output.
