@@ -142,6 +142,9 @@ class Detection:
     label: str
     score: float
     likely_score: float | None
+    weighted_label: str
+    weighted_score: float
+    weighted_likely_score: float | None
 
 def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -184,21 +187,21 @@ def normalized_volume(audio: np.ndarray) -> float:
     return min(max(rms, 0.0), 1.0)
 
 
-def invoke_birdnet_top_label(
+def invoke_birdnet_top_labels(
     audio: np.ndarray,
     model: BirdNETModel,
     meta_model: BirdNETModel | None,
     latitude: float | None,
     longitude: float | None,
     observed_on: date,
-) -> tuple[str, float, float | None]:
+) -> tuple[str, float, float | None, str, float, float | None]:
     input_data = np.expand_dims(audio, axis=0).astype(np.float32)
     model.interpreter.set_tensor(model.input_details[0]["index"], input_data)
     model.interpreter.invoke()
     scores = model.interpreter.get_tensor(model.output_details[0]["index"])
     scores_flat = flat_sigmoid(scores.flatten())
-    top_index = int(np.argmax(scores_flat))
-    likely_score = None
+    raw_top_index = int(np.argmax(scores_flat))
+    likely_scores = None
     if (
         meta_model is not None
         and latitude is not None
@@ -214,8 +217,24 @@ def invoke_birdnet_top_label(
         likely_scores = meta_model.interpreter.get_tensor(
             meta_model.output_details[0]["index"]
         )[0]
-        likely_score = float(likely_scores[top_index])
-    return model.labels[top_index], float(scores_flat[top_index]), likely_score
+    weighting_scores = likely_scores if likely_scores is not None else np.ones_like(scores_flat)
+    weighted_top_index = int(np.argmax(scores_flat * weighting_scores))
+    raw_likely_score = (
+        float(likely_scores[raw_top_index]) if likely_scores is not None else None
+    )
+    weighted_likely_score = (
+        float(likely_scores[weighted_top_index])
+        if likely_scores is not None
+        else None
+    )
+    return (
+        model.labels[raw_top_index],
+        float(scores_flat[raw_top_index]),
+        raw_likely_score,
+        model.labels[weighted_top_index],
+        float(scores_flat[weighted_top_index]),
+        weighted_likely_score,
+    )
 
 
 def ensure_runtime_dirs() -> None:
@@ -414,7 +433,14 @@ def collect_detections(
         padded = np.zeros(WINDOW_FRAMES, dtype=np.float32)
         padded[:frames] = audio_mono[:frames]
         volume = normalized_volume(audio_mono[:frames])
-        label, score, likely_score = invoke_birdnet_top_label(
+        (
+            label,
+            score,
+            likely_score,
+            weighted_label,
+            weighted_score,
+            weighted_likely_score,
+        ) = invoke_birdnet_top_labels(
             scale_by_max_value(padded),
             model,
             meta_model,
@@ -433,6 +459,9 @@ def collect_detections(
                 label,
                 score,
                 likely_score,
+                weighted_label,
+                weighted_score,
+                weighted_likely_score,
             )
         ]
 
@@ -440,7 +469,14 @@ def collect_detections(
     for start in range(0, frames - WINDOW_FRAMES + 1, STRIDE_FRAMES):
         end = start + WINDOW_FRAMES
         window_audio = audio_mono[start:end]
-        label, score, likely_score = invoke_birdnet_top_label(
+        (
+            label,
+            score,
+            likely_score,
+            weighted_label,
+            weighted_score,
+            weighted_likely_score,
+        ) = invoke_birdnet_top_labels(
             scale_by_max_value(window_audio),
             model,
             meta_model,
@@ -459,6 +495,9 @@ def collect_detections(
                 label,
                 score,
                 likely_score,
+                weighted_label,
+                weighted_score,
+                weighted_likely_score,
             )
         )
         window_index += 1
@@ -557,8 +596,8 @@ def process_audio(
     conn.executemany(
         """
         INSERT INTO detections (
-            source_file_id, channel_index, window_index, max_score_start_frame, label, score, likely_score, volume, clip_start_time, clip_end_time, clip_path, clip_size_bytes, deleted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            source_file_id, channel_index, window_index, max_score_start_frame, label, score, likely_score, weighted_label, weighted_score, weighted_likely_score, volume, clip_start_time, clip_end_time, clip_path, clip_size_bytes, deleted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
@@ -569,6 +608,9 @@ def process_audio(
                 d.label,
                 d.score,
                 d.likely_score,
+                d.weighted_label,
+                d.weighted_score,
+                d.weighted_likely_score,
                 d.volume,
                 iso_utc_text(source_start_dt + timedelta(seconds=(d.start_frame / sample_rate))),
                 iso_utc_text(source_start_dt + timedelta(seconds=(d.end_frame / sample_rate))),

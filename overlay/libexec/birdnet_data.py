@@ -63,6 +63,9 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             label TEXT NOT NULL,
             score REAL NOT NULL,
             likely_score REAL,
+            weighted_label TEXT,
+            weighted_score REAL,
+            weighted_likely_score REAL,
             volume REAL,
             clip_start_time TEXT NOT NULL,
             clip_end_time TEXT NOT NULL,
@@ -75,6 +78,15 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    detection_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(detections)").fetchall()
+    }
+    if "weighted_label" not in detection_columns:
+        conn.execute("ALTER TABLE detections ADD COLUMN weighted_label TEXT")
+    if "weighted_score" not in detection_columns:
+        conn.execute("ALTER TABLE detections ADD COLUMN weighted_score REAL")
+    if "weighted_likely_score" not in detection_columns:
+        conn.execute("ALTER TABLE detections ADD COLUMN weighted_likely_score REAL")
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_source_files_status
@@ -97,6 +109,27 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_detections_pending_upload
         ON detections (sent_to_server, deleted_at, clip_start_time, id)
+        """
+    )
+    conn.execute(
+        """
+        UPDATE detections
+        SET weighted_label = label
+        WHERE weighted_label IS NULL
+        """
+    )
+    conn.execute(
+        """
+        UPDATE detections
+        SET weighted_score = score
+        WHERE weighted_score IS NULL
+        """
+    )
+    conn.execute(
+        """
+        UPDATE detections
+        SET weighted_likely_score = likely_score
+        WHERE weighted_likely_score IS NULL
         """
     )
     conn.commit()
@@ -151,6 +184,9 @@ def select_pending_detections(conn: sqlite3.Connection, limit: int) -> list[sqli
                d.label,
                d.score,
                d.likely_score,
+               d.weighted_label,
+               d.weighted_score,
+               d.weighted_likely_score,
                d.volume,
                d.clip_start_time,
                d.clip_end_time,

@@ -81,6 +81,17 @@ def detections_to_payload(rows) -> list[dict]:
             "likely_score": (
                 float(row["likely_score"]) if row["likely_score"] is not None else None
             ),
+            "weighted_label": row["weighted_label"],
+            "weighted_score": (
+                float(row["weighted_score"])
+                if row["weighted_score"] is not None
+                else None
+            ),
+            "weighted_likely_score": (
+                float(row["weighted_likely_score"])
+                if row["weighted_likely_score"] is not None
+                else None
+            ),
             "volume": float(row["volume"]) if row["volume"] is not None else None,
             "clip_start_time": row["clip_start_time"],
             "clip_end_time": row["clip_end_time"],
