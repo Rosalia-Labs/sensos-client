@@ -96,15 +96,17 @@ class ApiContractTests(unittest.TestCase):
         fake_requests = SimpleNamespace(post=mock.Mock(return_value=response))
         with mock.patch.object(config_network, "http_requests", return_value=fake_requests):
             with mock.patch.object(config_network, "register_wireguard_key") as register_mock:
-                result = config_network.register_peer(
-                    "config.example",
-                    8765,
-                    "fieldnet",
-                    "client-public-key",
-                    "client-password",
-                    1,
-                    note="sensor node",
-                )
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout):
+                    result = config_network.register_peer(
+                        "config.example",
+                        8765,
+                        "fieldnet",
+                        "client-public-key",
+                        "client-password",
+                        1,
+                        note="sensor node",
+                    )
 
         self.assertEqual(
             result,
@@ -118,6 +120,8 @@ class ApiContractTests(unittest.TestCase):
                 "peer-secret",
             ),
         )
+        self.assertNotIn("peer-secret", stdout.getvalue())
+        self.assertIn('"peer_api_password": "[redacted]"', stdout.getvalue())
         self.assertEqual(
             fake_requests.post.call_args.kwargs["json"],
             {

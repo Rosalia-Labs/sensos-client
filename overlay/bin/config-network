@@ -10,6 +10,7 @@ import importlib.util
 import datetime
 import shutil
 import re
+import json
 
 SCRIPT_FILE = os.path.realpath(__file__)
 SCRIPT_DIR = os.path.dirname(SCRIPT_FILE)
@@ -37,6 +38,11 @@ SENSOS_NET_CONF = os.path.join(SENSOS_ETC_DIR, "network.conf")
 REQUESTS = None
 STATUS_UPDATE_TIMER = "sensos-send-status-update.timer"
 WG_MANAGED_MARKER = "# Managed by SensOS config-network"
+SENSITIVE_RESPONSE_KEY_RE = re.compile(r"(password|secret|token)", re.IGNORECASE)
+SENSITIVE_JSON_VALUE_RE = re.compile(
+    r'("([^"]*(?:password|secret|token)[^"]*)"\s*:\s*")[^"]*(")',
+    re.IGNORECASE,
+)
 
 
 def http_requests():
@@ -44,6 +50,27 @@ def http_requests():
     if REQUESTS is None:
         REQUESTS = require_requests()
     return REQUESTS
+
+
+def redact_sensitive_fields(value):
+    if isinstance(value, dict):
+        return {
+            key: "[redacted]" if SENSITIVE_RESPONSE_KEY_RE.search(str(key)) else redact_sensitive_fields(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_sensitive_fields(item) for item in value]
+    return value
+
+
+def format_response_for_log(response):
+    try:
+        data = response.json()
+    except Exception:
+        text = response.text or ""
+        redacted_text = SENSITIVE_JSON_VALUE_RE.sub(r"\1[redacted]\3", text)
+        return f"Response Text: {redacted_text}"
+    return f"Response JSON: {json.dumps(redact_sensitive_fields(data), sort_keys=True)}"
 
 
 def parse_args():
@@ -154,7 +181,7 @@ def register_peer(config_server, port, network_name, wg_public_key, api_password
     )
 
     print(f"Status Code: {response.status_code}")
-    print(f"Response Text: {response.text}")
+    print(format_response_for_log(response))
 
     if response.status_code == 404:
         sys.exit(
