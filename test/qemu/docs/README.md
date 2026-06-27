@@ -170,12 +170,11 @@ WireGuard UDP endpoint for the selected network. For the first test network in
 the standard SensOS QEMU workflow, that endpoint is expected to be
 `10.0.2.2:51281`.
 
-If the config server is another QEMU guest started by the helper, launch that
-server VM with an extra forward first, for example:
+If the config server is another QEMU guest, launch that server VM with the
+server repo's QEMU helper. It binds the setup API and WireGuard test forwards
+for cross-VM access by default:
 
 ```bash
-SENSOS_QEMU_SSH_PORT=2223 \
-SENSOS_QEMU_EXTRA_HOST_FWD='tcp:0.0.0.0:18765-:8765,udp:0.0.0.0:51281-:51281,udp:0.0.0.0:51282-:51282,udp:0.0.0.0:51283-:51283,udp:0.0.0.0:51284-:51284,udp:0.0.0.0:51285-:51285,udp:0.0.0.0:51286-:51286,udp:0.0.0.0:51287-:51287,udp:0.0.0.0:51288-:51288,udp:0.0.0.0:51289-:51289' \
 test/qemu/launch-qemu-vm run
 ```
 
