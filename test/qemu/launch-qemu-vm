@@ -1,0 +1,285 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
+DEFAULT_ARTIFACT_ROOT="${REPO_ROOT}/test/qemu/artifacts"
+ARTIFACT_ROOT="${SENSOS_QEMU_HOME:-${DEFAULT_ARTIFACT_ROOT}}"
+IMAGE_DIR="${ARTIFACT_ROOT}/images"
+ISO_DIR="${ARTIFACT_ROOT}/iso"
+
+BASE_IMAGE="${SENSOS_QEMU_BASE_IMAGE:-${IMAGE_DIR}/debian-trixie-arm64-base.qcow2}"
+INSTALLER_ISO="${SENSOS_QEMU_INSTALLER_ISO:-${ISO_DIR}/debian-trixie-arm64-netinst.iso}"
+FIRMWARE_CODE="${SENSOS_QEMU_FIRMWARE_CODE:-/opt/local/share/qemu/edk2-aarch64-code.fd}"
+FIRMWARE_VARS="${SENSOS_QEMU_FIRMWARE_VARS:-${IMAGE_DIR}/edk2-arm64-vars.fd}"
+DATA_IMAGE="${SENSOS_QEMU_DATA_IMAGE:-${IMAGE_DIR}/debian-trixie-arm64-data.qcow2}"
+
+SSH_FORWARD_PORT="${SENSOS_QEMU_SSH_PORT:-2222}"
+EXTRA_HOST_FWD="${SENSOS_QEMU_EXTRA_HOST_FWD:-}"
+MEMORY_MB="${SENSOS_QEMU_MEMORY_MB:-4096}"
+CPU_COUNT="${SENSOS_QEMU_CPU_COUNT:-4}"
+DISK_SIZE="${SENSOS_QEMU_DISK_SIZE:-32G}"
+DATA_DISK_SIZE="${SENSOS_QEMU_DATA_DISK_SIZE:-32G}"
+
+log() {
+    printf '[test/qemu/launch-qemu-vm] %s\n' "$*"
+}
+
+die() {
+    printf '[test/qemu/launch-qemu-vm] ERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+usage() {
+    cat <<EOF
+Usage:
+  $(basename "$0") install
+  $(basename "$0") update
+  $(basename "$0") run
+
+Commands:
+  install   Boot the Debian ARM64 installer ISO and write to the base disk image.
+  update    Boot the installed base image read/write so guest changes persist.
+            Shut the guest down cleanly before exiting QEMU or writes may be lost.
+  run       Boot the installed base image with -snapshot, discarding changes on shutdown.
+
+Artifacts are kept under:
+  ${DEFAULT_ARTIFACT_ROOT}
+
+Environment overrides:
+  SENSOS_QEMU_HOME
+  SENSOS_QEMU_BASE_IMAGE
+  SENSOS_QEMU_INSTALLER_ISO
+  SENSOS_QEMU_FIRMWARE_CODE
+  SENSOS_QEMU_FIRMWARE_VARS
+  SENSOS_QEMU_DATA_IMAGE
+  SENSOS_QEMU_SSH_PORT
+  SENSOS_QEMU_EXTRA_HOST_FWD
+  SENSOS_QEMU_MEMORY_MB
+  SENSOS_QEMU_CPU_COUNT
+  SENSOS_QEMU_DISK_SIZE
+  SENSOS_QEMU_DATA_DISK_SIZE
+EOF
+}
+
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+ensure_artifact_dirs() {
+    mkdir -p "${IMAGE_DIR}" "${ISO_DIR}"
+}
+
+ensure_firmware_code() {
+    [[ -f "${FIRMWARE_CODE}" ]] || die "firmware not found at ${FIRMWARE_CODE}"
+}
+
+ensure_firmware_vars() {
+    if [[ ! -f "${FIRMWARE_VARS}" ]]; then
+        reset_firmware_vars
+    fi
+}
+
+reset_firmware_vars() {
+    local candidate
+
+    rm -f "${FIRMWARE_VARS}"
+
+    for candidate in \
+        /opt/local/share/qemu/edk2-aarch64-vars.fd \
+        /opt/local/share/qemu/edk2-arm-vars.fd \
+        /opt/local/share/qemu/edk2-arm-vars-template.fd
+    do
+        if [[ -f "${candidate}" ]]; then
+            log "seeding writable firmware vars from ${candidate}"
+            cp "${candidate}" "${FIRMWARE_VARS}"
+            return
+        fi
+    done
+
+    die "unable to find an EDK2 vars template; set SENSOS_QEMU_FIRMWARE_VARS explicitly"
+}
+
+ensure_base_image() {
+    if [[ ! -f "${BASE_IMAGE}" ]]; then
+        log "creating base image ${BASE_IMAGE} (${DISK_SIZE})"
+        qemu-img create -f qcow2 "${BASE_IMAGE}" "${DISK_SIZE}" >/dev/null
+    fi
+}
+
+recreate_base_image() {
+    if [[ -f "${BASE_IMAGE}" ]]; then
+        log "removing existing base image ${BASE_IMAGE} for fresh install"
+        rm -f "${BASE_IMAGE}"
+    fi
+
+    log "creating base image ${BASE_IMAGE} (${DISK_SIZE})"
+    qemu-img create -f qcow2 "${BASE_IMAGE}" "${DISK_SIZE}" >/dev/null
+}
+
+remove_data_image() {
+    if [[ -f "${DATA_IMAGE}" ]]; then
+        log "removing existing data image ${DATA_IMAGE}"
+        rm -f "${DATA_IMAGE}"
+    fi
+}
+
+ensure_data_image() {
+    if [[ ! -f "${DATA_IMAGE}" ]]; then
+        log "creating data image ${DATA_IMAGE} (${DATA_DISK_SIZE})"
+        qemu-img create -f qcow2 "${DATA_IMAGE}" "${DATA_DISK_SIZE}" >/dev/null
+    fi
+}
+
+require_base_image() {
+    [[ -f "${BASE_IMAGE}" ]] || die "base image not found at ${BASE_IMAGE}; run '$(basename "$0") install' first"
+}
+
+require_installer_iso() {
+    [[ -f "${INSTALLER_ISO}" ]] || die "installer ISO not found at ${INSTALLER_ISO}"
+}
+
+print_connection_hints() {
+    cat <<EOF
+
+Artifact root: ${ARTIFACT_ROOT}
+Base image:    ${BASE_IMAGE}
+Data image:    ${DATA_IMAGE}
+SSH forward:   ssh -p ${SSH_FORWARD_PORT} <user>@127.0.0.1
+Extra forwards: ${EXTRA_HOST_FWD:-<none>}
+Host access:   guest can reach macOS services at 10.0.2.2
+Repo path:     ${REPO_ROOT}
+
+EOF
+}
+
+build_netdev_arg() {
+    local netdev_arg
+    local forward_spec
+    local -a forward_specs=()
+
+    netdev_arg="user,id=net0,hostfwd=tcp:127.0.0.1:${SSH_FORWARD_PORT}-:22"
+
+    if [[ -n "${EXTRA_HOST_FWD}" ]]; then
+        IFS=',' read -r -a forward_specs <<< "${EXTRA_HOST_FWD}"
+        for forward_spec in "${forward_specs[@]}"; do
+            [[ -n "${forward_spec}" ]] || continue
+            netdev_arg+=",hostfwd=${forward_spec}"
+        done
+    fi
+
+    printf '%s\n' "${netdev_arg}"
+}
+
+run_qemu() {
+    local mode="$1"
+    shift
+    local attach_data_image="${1:-yes}"
+    shift
+    local -a extra_drives=()
+    local netdev_arg
+
+    log "launching QEMU in ${mode} mode"
+    print_connection_hints
+    netdev_arg="$(build_netdev_arg)"
+
+    if [[ "${attach_data_image}" == "yes" ]]; then
+        ensure_data_image
+        extra_drives+=(-drive "if=virtio,file=${DATA_IMAGE},format=qcow2")
+    fi
+
+    qemu-system-aarch64 \
+        -machine virt,accel=hvf \
+        -cpu host \
+        -smp "${CPU_COUNT}" \
+        -m "${MEMORY_MB}" \
+        -display cocoa \
+        -device virtio-gpu-pci \
+        -device qemu-xhci \
+        -device usb-kbd \
+        -device usb-tablet \
+        -device virtio-rng-pci \
+        -device virtio-net-pci,netdev=net0 \
+        -netdev "${netdev_arg}" \
+        -drive "if=pflash,format=raw,readonly=on,file=${FIRMWARE_CODE}" \
+        -drive "if=pflash,format=raw,file=${FIRMWARE_VARS}" \
+        ${extra_drives+"${extra_drives[@]}"} \
+        "$@"
+}
+
+run_install() {
+    require_installer_iso
+    recreate_base_image
+    remove_data_image
+    reset_firmware_vars
+
+    run_qemu install no \
+        -boot order=d \
+        -drive "if=virtio,file=${BASE_IMAGE},format=qcow2" \
+        -cdrom "${INSTALLER_ISO}"
+}
+
+run_snapshot() {
+    require_base_image
+    ensure_firmware_vars
+
+    run_qemu snapshot yes \
+        -boot order=c \
+        -drive "if=virtio,file=${BASE_IMAGE},format=qcow2" \
+        -snapshot
+}
+
+run_update() {
+    require_base_image
+    ensure_firmware_vars
+
+    run_qemu update yes \
+        -boot order=c \
+        -drive "if=virtio,file=${BASE_IMAGE},format=qcow2"
+}
+
+main() {
+    local command="${1:-}"
+
+    if [[ -z "${command}" ]]; then
+        usage
+        exit 1
+    fi
+
+    case "${command}" in
+        -h|--help|help)
+            usage
+            return
+            ;;
+    esac
+
+    require_command qemu-system-aarch64
+    require_command qemu-img
+
+    case "${command}" in
+        install)
+            ensure_artifact_dirs
+            ensure_firmware_code
+            run_install
+            ;;
+        update)
+            ensure_artifact_dirs
+            ensure_firmware_code
+            run_update
+            ;;
+        run)
+            ensure_artifact_dirs
+            ensure_firmware_code
+            run_snapshot
+            ;;
+        *)
+            usage
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

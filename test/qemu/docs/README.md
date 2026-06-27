@@ -1,8 +1,9 @@
 # QEMU Testing
 
-This directory contains the local helper for running a Debian Trixie ARM64 VM on Apple Silicon with MacPorts QEMU:
+This directory contains the local helper for running the QEMU test VM on Apple
+Silicon with MacPorts QEMU:
 
-- [run-debian-trixie-arm64](/Users/tkeitt/Projects/sensos-client/test/qemu/run-debian-trixie-arm64)
+- [`test/qemu/launch-qemu-vm`](../launch-qemu-vm)
 
 ## Artifacts
 
@@ -35,7 +36,7 @@ test/qemu/artifacts/iso/debian-trixie-arm64-netinst.iso
 2. Create and install the base VM once:
 
 ```bash
-test/qemu/run-debian-trixie-arm64 install
+test/qemu/launch-qemu-vm install
 ```
 
 The `install` command recreates the base/system image first, so rerunning it
@@ -51,7 +52,7 @@ reboot. After that, use `update` when you want to keep guest changes without
 doing a full reinstall:
 
 ```bash
-test/qemu/run-debian-trixie-arm64 update
+test/qemu/launch-qemu-vm update
 ```
 
 The `update` command boots the installed VM read/write, so changes to the base
@@ -61,7 +62,7 @@ inside the VM before exiting QEMU or writes may be lost.
 4. Use disposable `run` boots when you want a non-sticky test session:
 
 ```bash
-test/qemu/run-debian-trixie-arm64 run
+test/qemu/launch-qemu-vm run
 ```
 
 The `run` command uses `-snapshot`, so guest disk changes are discarded when
@@ -125,7 +126,7 @@ You can add extra host port forwards with `SENSOS_QEMU_EXTRA_HOST_FWD`. Use a
 comma-separated list of raw QEMU `hostfwd` rules, for example:
 
 ```bash
-SENSOS_QEMU_EXTRA_HOST_FWD='tcp:0.0.0.0:8765-:8765' test/qemu/run-debian-trixie-arm64 run
+SENSOS_QEMU_EXTRA_HOST_FWD='tcp:0.0.0.0:8765-:8765' test/qemu/launch-qemu-vm run
 ```
 
 That is useful when running two disposable VMs and you need one VM to expose a
@@ -175,7 +176,7 @@ server VM with an extra forward first, for example:
 ```bash
 SENSOS_QEMU_SSH_PORT=2223 \
 SENSOS_QEMU_EXTRA_HOST_FWD='tcp:0.0.0.0:18765-:8765,udp:0.0.0.0:51281-:51281,udp:0.0.0.0:51282-:51282,udp:0.0.0.0:51283-:51283,udp:0.0.0.0:51284-:51284,udp:0.0.0.0:51285-:51285,udp:0.0.0.0:51286-:51286,udp:0.0.0.0:51287-:51287,udp:0.0.0.0:51288-:51288,udp:0.0.0.0:51289-:51289' \
-test/qemu/run-debian-trixie-arm64 run
+test/qemu/launch-qemu-vm run
 ```
 
 Then the client VM can enroll through the setup API with:
