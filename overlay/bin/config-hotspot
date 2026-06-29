@@ -172,6 +172,14 @@ require_value_or_prompt() {
 
 SSID="${ssid:-${DEFAULT_SSID}}"
 IFACE="${interface:-wlan0}"
+
+if ! nmcli -t -f DEVICE,TYPE device status | awk -F: -v iface="${IFACE}" '$1 == iface && $2 == "wifi" {found = 1} END {exit found ? 0 : 1}'; then
+    echo "ERROR: Wi-Fi interface '${IFACE}' was not found. Available Wi-Fi interfaces:" >&2
+    nmcli -t -f DEVICE,TYPE device status 2>/dev/null | awk -F: '$2=="wifi"{print "  " $1}' >&2 || true
+    echo "Pass the correct --interface value; config-hotspot will not fall back to another radio." >&2
+    exit 1
+fi
+
 password="$(require_value_or_prompt "${password}" "--password" "Wi-Fi password (8-63 chars)")"
 
 if [[ ${#password} -lt 8 || ${#password} -gt 63 ]]; then

@@ -16,6 +16,7 @@ PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
 SENSOS_ADMIN_HELPER_LIB="${OVERLAY_ROOT}/libexec/ensure-sensos-admin.sh"
 HOTSPOT_ENV_FILE="/etc/default/sensos-hotspot"
 HOTSPOT_SERVICE="sensos-hotspot.service"
+SENSOS_AP_CONNECTION_NAME="sensosap"
 
 [[ -f "${PARSE_SWITCHES_LIB}" ]] || {
     echo "❌ Missing parse-switches library at ${PARSE_SWITCHES_LIB}" >&2
@@ -60,7 +61,7 @@ disable_hotspot_reclaim_on_next_boot() {
         return 0
     fi
 
-    echo "Wi-Fi client is using hotspot-managed interface '${target_iface}'; preventing hotspot reclaim on next boot."
+    echo "Wi-Fi client is using hotspot-managed interface '${target_iface}'; retiring hotspot startup for this interface."
 
     if [[ -f "${HOTSPOT_ENV_FILE}" ]]; then
         if grep -q '^HOTSPOT_ENABLED=' "${HOTSPOT_ENV_FILE}"; then
@@ -80,7 +81,18 @@ disable_hotspot_reclaim_on_next_boot() {
         echo "Disabled autoconnect for hotspot profile '${HOTSPOT_CONNECTION_NAME_VALUE}'."
     fi
 
-    echo "Hotspot changes were staged for the next boot; the active session is left alone for now."
+    if nmcli -t -f NAME connection show | grep -Fxq "${SENSOS_AP_CONNECTION_NAME}"; then
+        local sensos_ap_iface
+        sensos_ap_iface="$(nmcli -g connection.interface-name connection show "${SENSOS_AP_CONNECTION_NAME}" 2>/dev/null | head -n 1 || true)"
+        if [[ -z "${sensos_ap_iface}" || "${sensos_ap_iface}" == "${target_iface}" ]]; then
+            sudo nmcli connection down "${SENSOS_AP_CONNECTION_NAME}" 2>/dev/null || true
+            sudo nmcli connection modify "${SENSOS_AP_CONNECTION_NAME}" connection.autoconnect no || true
+            sudo nmcli connection modify "${SENSOS_AP_CONNECTION_NAME}" connection.autoconnect-priority -999 || true
+            echo "Disabled autoconnect for configured hotspot profile '${SENSOS_AP_CONNECTION_NAME}'."
+        fi
+    fi
+
+    echo "Hotspot mode on ${target_iface} has been retired so Wi-Fi client mode can use that radio."
 }
 
 clear_tc_limits() {
@@ -116,11 +128,38 @@ register_option --start start_now "Immediately bring Wi-Fi online after config" 
 register_option --hidden hidden "Mark SSID as hidden" "false"
 register_option --limit-up-kbit limit_up_kbit "Optional egress cap in kbit" ""
 register_option --limit-down-kbit limit_down_kbit "Optional ingress cap in kbit" ""
+register_option --replace-hotspot replace_hotspot "Allow Wi-Fi client mode to replace hotspot mode on the same interface" "false"
 
 parse_switches "${SCRIPT_NAME}" "$@"
 
 is_interactive() {
     [[ -t 0 ]]
+}
+
+confirm_yes_no() {
+    local prompt="$1"
+    local default_yes="${2:-false}"
+    local reply suffix
+
+    if [[ "${default_yes}" == "true" ]]; then
+        suffix="Y/n"
+    else
+        suffix="y/N"
+    fi
+
+    while true; do
+        read -r -p "${prompt} [${suffix}]: " reply
+        reply="${reply,,}"
+        if [[ -z "${reply}" ]]; then
+            [[ "${default_yes}" == "true" ]]
+            return
+        fi
+        case "${reply}" in
+            y|yes) return 0 ;;
+            n|no) return 1 ;;
+            *) echo "Please answer yes or no." ;;
+        esac
+    done
 }
 
 require_value_or_prompt() {
@@ -149,6 +188,34 @@ require_value_or_prompt() {
 ssid="$(require_value_or_prompt "${ssid}" "--ssid" "Wi-Fi SSID")"
 
 require_command nmcli
+
+if ! nmcli -t -f DEVICE,TYPE device status | awk -F: -v iface="${iface}" '$1 == iface && $2 == "wifi" {found = 1} END {exit found ? 0 : 1}'; then
+    echo "ERROR: Wi-Fi interface '${iface}' was not found. Available Wi-Fi interfaces:" >&2
+    nmcli -t -f DEVICE,TYPE device status 2>/dev/null | awk -F: '$2=="wifi"{print "  " $1}' >&2 || true
+    echo "Pass the correct --iface value; config-wifi will not fall back to another radio." >&2
+    exit 1
+fi
+
+load_hotspot_settings
+if [[ "${iface}" == "${HOTSPOT_INTERFACE_VALUE}" && "${replace_hotspot}" != "true" ]]; then
+    cat >&2 <<EOF
+This Wi-Fi client configuration targets ${iface}, which is also the hotspot-managed interface.
+
+On a single-radio setup, ${iface} cannot reliably host a hotspot and join upstream Wi-Fi at
+the same time. Continuing will retire hotspot startup on ${iface} and use it for client Wi-Fi.
+EOF
+    if is_interactive; then
+        if confirm_yes_no "Replace hotspot mode on ${iface} with client Wi-Fi now?" false; then
+            replace_hotspot="true"
+        else
+            echo "Aborted. Re-run with --iface wlan1 if an upstream Wi-Fi adapter is present."
+            exit 1
+        fi
+    else
+        echo "ERROR: refusing to replace hotspot mode non-interactively. Re-run with --replace-hotspot to make this explicit." >&2
+        exit 1
+    fi
+fi
 
 NM_CON_NAME="sensos-wifi-${ssid}"
 

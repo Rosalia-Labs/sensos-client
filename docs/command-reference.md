@@ -706,11 +706,13 @@ Important flags:
 - `--hidden`
 - `--limit-up-kbit`
 - `--limit-down-kbit`
+- `--replace-hotspot`
 
 Typical use:
 
 ```sh
 config-wifi --ssid MySSID --password 'secretpass' --iface wlan1 --start
+config-wifi --ssid MySSID --password 'secretpass' --iface wlan0 --replace-hotspot --start
 ```
 
 Behavior:
@@ -718,8 +720,11 @@ Behavior:
 - usually used on `wlan1` when the device also exposes an AP on `wlan0`
 - if `--ssid` is missing and stdin is interactive, prompts for it
 - if `--ssid` is missing and stdin is not interactive, exits with a clear error
+- refuses to continue when the requested `--iface` is not a detected Wi-Fi device; it does not fall back from `wlan1` to `wlan0`
 - Wi-Fi client mode and AP mode are mutually exclusive on the same interface
-- do not run `config-wifi` and `config-hotspot` against the same NIC unless you intend one to replace the other
+- when `--iface` equals the hotspot-managed interface, prompts before replacing hotspot mode in interactive use
+- non-interactive hotspot replacement requires `--replace-hotspot`
+- hotspot replacement retires both the built-in bootstrap hotspot and the configured `sensosap` hotspot on that interface
 - if the device has only one Wi-Fi NIC and that NIC must join an upstream Wi-Fi network, the device cannot also host a local AP at the same time
 - optionally applies traffic caps with `tc`
 - registers the interface with `vnstat` when available
@@ -775,6 +780,7 @@ Behavior:
 - derives a default SSID from the network name and WG IP when `--ssid` is not supplied
 - if `--password` is missing and stdin is interactive, prompts for it
 - if `--password` is missing and stdin is not interactive, exits with a clear error
+- refuses to continue when the requested `--interface` is not a detected Wi-Fi device; it does not fall back from `wlan1` to `wlan0`
 - usually used on `wlan0` when Wi‑Fi client mode is handled separately on `wlan1`
 - AP mode and Wi‑Fi client mode are mutually exclusive on the same interface
 - if the device has only one Wi-Fi NIC and that NIC is needed for `config-wifi`, you cannot keep the AP active on that same NIC
