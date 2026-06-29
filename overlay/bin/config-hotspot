@@ -21,6 +21,15 @@ PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
 SENSOS_ADMIN_HELPER_LIB="${OVERLAY_ROOT}/libexec/ensure-sensos-admin.sh"
 HOTSPOT_ENV_FILE="/etc/default/sensos-hotspot"
 HOTSPOT_SERVICE="sensos-hotspot.service"
+INTERFACE_SUPPLIED=false
+
+for arg in "$@"; do
+    case "${arg}" in
+        --interface|--interface=*)
+            INTERFACE_SUPPLIED=true
+            ;;
+    esac
+done
 
 [[ -f "${PARSE_SWITCHES_LIB}" ]] || {
     echo "❌ Missing parse-switches library at ${PARSE_SWITCHES_LIB}" >&2
@@ -140,6 +149,87 @@ is_interactive() {
     [[ -t 0 ]]
 }
 
+wifi_interface_exists() {
+    local wanted_iface="$1"
+
+    nmcli -t -f DEVICE,TYPE device status \
+        | awk -F: -v iface="${wanted_iface}" '$1 == iface && $2 == "wifi" {found = 1} END {exit found ? 0 : 1}'
+}
+
+list_wifi_interfaces() {
+    nmcli -t -f DEVICE,TYPE device status 2>/dev/null \
+        | awk -F: '$2 == "wifi" && $1 != "" {print $1}'
+}
+
+print_wifi_interfaces() {
+    local item role
+
+    while IFS= read -r item; do
+        [[ -n "${item}" ]] || continue
+        role=""
+        if [[ "${item}" == "${BOOTSTRAP_HOTSPOT_INTERFACE}" ]]; then
+            role=" (hotspot-managed)"
+        fi
+        printf '  %s%s\n' "${item}" "${role}" >&2
+    done < <(list_wifi_interfaces)
+}
+
+choose_hotspot_interface() {
+    local requested_iface="$1"
+    local default_iface="$requested_iface"
+    local choice
+    local -a wifi_ifaces=()
+
+    mapfile -t wifi_ifaces < <(list_wifi_interfaces)
+
+    if ((${#wifi_ifaces[@]} == 0)); then
+        echo "ERROR: no Wi-Fi interfaces were found by NetworkManager." >&2
+        exit 1
+    fi
+
+    if [[ "${INTERFACE_SUPPLIED}" == "true" ]]; then
+        if wifi_interface_exists "${requested_iface}"; then
+            printf '%s\n' "${requested_iface}"
+            return 0
+        fi
+        echo "ERROR: Wi-Fi interface '${requested_iface}' was not found. Available Wi-Fi interfaces:" >&2
+        print_wifi_interfaces
+        echo "Pass the correct --interface value; config-hotspot will not fall back to another radio." >&2
+        exit 1
+    fi
+
+    if ! is_interactive; then
+        if wifi_interface_exists "${requested_iface}"; then
+            printf '%s\n' "${requested_iface}"
+            return 0
+        fi
+        echo "ERROR: default Wi-Fi interface '${requested_iface}' was not found. Available Wi-Fi interfaces:" >&2
+        print_wifi_interfaces
+        echo "Pass --interface explicitly in non-interactive use." >&2
+        exit 1
+    fi
+
+    if ! wifi_interface_exists "${default_iface}"; then
+        default_iface="${wifi_ifaces[0]}"
+    fi
+
+    echo "Available Wi-Fi interfaces:" >&2
+    print_wifi_interfaces
+    echo "For hotspot/AP mode, choose the interface that should broadcast the setup SSID." >&2
+
+    while true; do
+        printf 'Wi-Fi interface for hotspot [%s]: ' "${default_iface}" >&2
+        read -r choice
+        choice="${choice:-${default_iface}}"
+        if wifi_interface_exists "${choice}"; then
+            printf '%s\n' "${choice}"
+            return 0
+        fi
+        echo "Interface '${choice}' was not found. Choose one of:" >&2
+        print_wifi_interfaces
+    done
+}
+
 require_value_or_prompt() {
     local current_value="$1"
     local option_name="$2"
@@ -173,12 +263,8 @@ require_value_or_prompt() {
 SSID="${ssid:-${DEFAULT_SSID}}"
 IFACE="${interface:-wlan0}"
 
-if ! nmcli -t -f DEVICE,TYPE device status | awk -F: -v iface="${IFACE}" '$1 == iface && $2 == "wifi" {found = 1} END {exit found ? 0 : 1}'; then
-    echo "ERROR: Wi-Fi interface '${IFACE}' was not found. Available Wi-Fi interfaces:" >&2
-    nmcli -t -f DEVICE,TYPE device status 2>/dev/null | awk -F: '$2=="wifi"{print "  " $1}' >&2 || true
-    echo "Pass the correct --interface value; config-hotspot will not fall back to another radio." >&2
-    exit 1
-fi
+load_bootstrap_hotspot_settings
+IFACE="$(choose_hotspot_interface "${IFACE}")"
 
 password="$(require_value_or_prompt "${password}" "--password" "Wi-Fi password (8-63 chars)")"
 

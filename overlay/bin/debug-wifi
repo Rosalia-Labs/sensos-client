@@ -272,6 +272,7 @@ print_operator_summary() {
     local -a ifaces=("$@")
     local radio blocks hotspot_enabled hotspot_iface hotspot_ssid hotspot_unit_enabled hotspot_unit_active hotspot_unit_sub
     local iface connection nm_mode kernel_type ssid ip4 role iface_count active_hotspot=false client_count=0 idle_count=0 unknown_count=0
+    local hotspot_target upstream_target
 
     radio="$(wifi_radio_state)"
     blocks="$(rfkill_summary)"
@@ -282,6 +283,31 @@ print_operator_summary() {
     hotspot_unit_active="$(systemctl_value active sensos-hotspot.service)"
     hotspot_unit_sub="$(systemctl_value sub sensos-hotspot.service)"
     iface_count="${#ifaces[@]}"
+    hotspot_target="${hotspot_iface:-wlan0}"
+    upstream_target=""
+
+    if ((${iface_count} > 0)); then
+        local hotspot_found=false
+        for iface in "${ifaces[@]}"; do
+            if [[ "${iface}" == "${hotspot_target}" ]]; then
+                hotspot_found=true
+                break
+            fi
+        done
+        if [[ "${hotspot_found}" != true ]]; then
+            hotspot_target="${ifaces[0]}"
+        fi
+    fi
+
+    for iface in "${ifaces[@]}"; do
+        if [[ "${iface}" != "${hotspot_target}" ]]; then
+            upstream_target="${iface}"
+            break
+        fi
+    done
+    if [[ -z "${upstream_target}" && ((${iface_count} > 0)) ]]; then
+        upstream_target="${ifaces[0]}"
+    fi
 
     if connection_active sensosap || connection_active sensos-hotspot; then
         active_hotspot=true
@@ -376,6 +402,26 @@ print_operator_summary() {
         printf '  - One or more interfaces could not be classified from NetworkManager/iw state.\n'
     fi
 
+    section "Hints"
+    if ((${iface_count} == 0)); then
+        printf '  - No Wi-Fi command can work until the OS sees a Wi-Fi interface.\n'
+        printf '  - Check whether the USB adapter is seated, then run: debug-wifi --verbose\n'
+    elif ((${iface_count} == 1)); then
+        printf '  - Single-radio choice: use %s as a hotspot, or use it for upstream Wi-Fi, but not both.\n' "${ifaces[0]}"
+        printf "  - To broadcast a setup hotspot: config-hotspot --interface %s --ssid sensos-setup --password '<8-63 character password>'\n" "${ifaces[0]}"
+        printf "  - To join upstream Wi-Fi instead: config-wifi --iface %s --ssid '<network name>' --password '<password>' --replace-hotspot --start\n" "${ifaces[0]}"
+    else
+        printf '  - Two-radio setup available: keep hotspot on %s and use upstream Wi-Fi on %s.\n' "${hotspot_target}" "${upstream_target}"
+        printf "  - Hotspot command: config-hotspot --interface %s --ssid sensos-setup --password '<8-63 character password>'\n" "${hotspot_target}"
+        printf "  - Upstream Wi-Fi command: config-wifi --iface %s --ssid '<network name>' --password '<password>' --start\n" "${upstream_target}"
+    fi
+    if [[ "${active_hotspot}" != true && ((${iface_count} > 0)) ]]; then
+        printf '  - No hotspot is active right now; phones/laptops will not see a SensOS SSID until hotspot mode starts.\n'
+    fi
+    if ((client_count > 0 && iface_count == 1)); then
+        printf '  - The current Wi-Fi client connection explains why the hotspot is not visible on this single-radio device.\n'
+    fi
+
     section "Next Steps"
     if [[ "${radio}" == "disabled" ]]; then
         printf '  sudo nmcli radio wifi on\n'
@@ -383,7 +429,7 @@ print_operator_summary() {
     if [[ "${blocks}" == "soft-blocked" ]]; then
         printf '  sudo rfkill unblock wifi\n'
     fi
-    if [[ "${active_hotspot}" != true ]]; then
+    if [[ "${active_hotspot}" != true && ((${iface_count} > 0)) ]]; then
         printf "  config-hotspot --ssid sensos-setup --password '<8-63 character password>' --interface %s --channel 6\n" "${hotspot_iface:-wlan0}"
         if connection_exists sensosap; then
             printf '  sudo nmcli connection up sensosap\n'

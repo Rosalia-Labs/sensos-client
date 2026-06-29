@@ -720,6 +720,7 @@ Behavior:
 - usually used on `wlan1` when the device also exposes an AP on `wlan0`
 - if `--ssid` is missing and stdin is interactive, prompts for it
 - if `--ssid` is missing and stdin is not interactive, exits with a clear error
+- if `--iface` is omitted in interactive use, lists detected Wi-Fi interfaces and prompts for the interface to use
 - refuses to continue when the requested `--iface` is not a detected Wi-Fi device; it does not fall back from `wlan1` to `wlan0`
 - Wi-Fi client mode and AP mode are mutually exclusive on the same interface
 - when `--iface` equals the hotspot-managed interface, prompts before replacing hotspot mode in interactive use
@@ -780,6 +781,7 @@ Behavior:
 - derives a default SSID from the network name and WG IP when `--ssid` is not supplied
 - if `--password` is missing and stdin is interactive, prompts for it
 - if `--password` is missing and stdin is not interactive, exits with a clear error
+- if `--interface` is omitted in interactive use, lists detected Wi-Fi interfaces and prompts for the interface to use
 - refuses to continue when the requested `--interface` is not a detected Wi-Fi device; it does not fall back from `wlan1` to `wlan0`
 - usually used on `wlan0` when Wi‑Fi client mode is handled separately on `wlan1`
 - AP mode and Wi‑Fi client mode are mutually exclusive on the same interface
@@ -892,6 +894,7 @@ Behavior:
   `Interpretation`, and `Next Steps` sections
 - enumerates all detected wireless interfaces, including `wlan0`, `wlan1`, or any other interface names present
 - calls out common field issues such as Wi-Fi being blocked, single-radio AP/client conflicts, inactive hotspot profiles, and disabled bootstrap hotspot config
+- gives concrete command hints for the detected layout, including single-radio replacement and two-radio hotspot/client setups
 - shows SensOS hotspot config state with hotspot passwords redacted
 - use `--verbose` to include raw `nmcli`, `iw`, `systemctl`, journal, and access-point log output
 - does not change radio state, NetworkManager profiles, or systemd services
