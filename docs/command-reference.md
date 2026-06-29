@@ -870,22 +870,24 @@ install-birdnet-models --force
 
 ### `debug-wifi`
 
-Prints a read-only Wi-Fi diagnostic report for Raspberry Pi clients.
+Prints a read-only, operator-friendly Wi-Fi diagnostic report for Raspberry Pi
+clients.
 
 Typical use:
 
 ```sh
 debug-wifi
+debug-wifi --verbose
 ```
 
 Behavior:
 
-- reports Wi-Fi radio state, rfkill blocks, regulatory domain, and NetworkManager state
+- defaults to a compact plain-language summary with `Hotspot`, `Interfaces`,
+  `Interpretation`, and `Next Steps` sections
 - enumerates all detected wireless interfaces, including `wlan0`, `wlan1`, or any other interface names present
-- shows whether each interface appears to be in AP/hotspot mode or Wi-Fi client mode
-- shows active NetworkManager connections, saved Wi-Fi profiles, visible Wi-Fi scans, IP addresses, and kernel `iw` state
-- shows SensOS hotspot config with hotspot passwords redacted
-- includes recent `sensos-hotspot.service`, NetworkManager, and `/sensos/log/access_point.log` output when available
+- calls out common field issues such as Wi-Fi being blocked, single-radio AP/client conflicts, inactive hotspot profiles, and disabled bootstrap hotspot config
+- shows SensOS hotspot config state with hotspot passwords redacted
+- use `--verbose` to include raw `nmcli`, `iw`, `systemctl`, journal, and access-point log output
 - does not change radio state, NetworkManager profiles, or systemd services
 
 ### `debug-gps`

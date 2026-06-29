@@ -13,21 +13,46 @@ CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-${OVERLAY_ROOT}}"
 HOTSPOT_ENV_FILE="/etc/default/sensos-hotspot"
 NETWORK_CONF="${CLIENT_ROOT}/etc/network.conf"
 ACCESS_POINT_LOG="${CLIENT_ROOT}/log/access_point.log"
+VERBOSE=false
 
 have_cmd() {
     command -v "$1" >/dev/null 2>&1
 }
 
+print_usage() {
+    cat <<EOF
+Usage: debug-wifi [options]
+
+Print a plain-language Wi-Fi status report.
+
+Options:
+  -v, --verbose  Include raw nmcli, iw, systemd, and log output
+  -h, --help     Show this help and exit
+EOF
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -v|--verbose)
+                VERBOSE=true
+                ;;
+            -h|--help)
+                print_usage
+                exit 0
+                ;;
+            *)
+                printf 'ERROR: unknown option: %s\n' "$1" >&2
+                print_usage >&2
+                exit 1
+                ;;
+        esac
+        shift
+    done
+}
+
 section() {
-    printf '\n## %s\n' "$*"
-}
-
-note() {
-    printf 'NOTE: %s\n' "$*"
-}
-
-warn() {
-    printf 'WARNING: %s\n' "$*"
+    printf '\n%s\n' "$*"
 }
 
 current_time() {
@@ -44,6 +69,22 @@ run_block() {
     fi
     printf '[command failed]\n'
     return 0
+}
+
+read_env_key() {
+    local path="$1"
+    local key="$2"
+
+    [[ -f "${path}" ]] || return 0
+    awk -F= -v wanted="${key}" '
+        $1 == wanted {
+            value = substr($0, length($1) + 2)
+            gsub(/^'\''|'\''$/, "", value)
+            gsub(/^"|"$/, "", value)
+            print value
+            exit
+        }
+    ' "${path}"
 }
 
 print_file_redacted() {
@@ -76,157 +117,288 @@ list_wifi_ifaces() {
     } | sort -u
 }
 
-nm_value() {
+join_by_comma() {
+    local first=true
+    local item
+
+    for item in "$@"; do
+        if [[ "${first}" == true ]]; then
+            printf '%s' "${item}"
+            first=false
+        else
+            printf ', %s' "${item}"
+        fi
+    done
+}
+
+nm_device_value() {
     local field="$1"
     local iface="$2"
 
+    have_cmd nmcli || return 0
     nmcli -g "${field}" device show "${iface}" 2>/dev/null | head -n 1 || true
+}
+
+nm_connection_value() {
+    local field="$1"
+    local con="$2"
+
+    have_cmd nmcli || return 0
+    [[ -n "${con}" && "${con}" != "--" ]] || return 0
+    nmcli -g "${field}" connection show "${con}" 2>/dev/null | head -n 1 || true
 }
 
 iw_type() {
     local iface="$1"
 
+    have_cmd iw || return 0
     iw dev "${iface}" info 2>/dev/null | awk '$1 == "type" {print $2; exit}'
 }
 
 iw_ssid() {
     local iface="$1"
 
+    have_cmd iw || return 0
     iw dev "${iface}" info 2>/dev/null | awk '$1 == "ssid" {$1=""; sub(/^ /, ""); print; exit}'
 }
 
-nm_mode_for_connection() {
+connection_exists() {
     local con="$1"
 
-    [[ -n "${con}" ]] || return 0
-    nmcli -g 802-11-wireless.mode connection show "${con}" 2>/dev/null | head -n 1 || true
+    have_cmd nmcli || return 1
+    nmcli -t -f NAME connection show 2>/dev/null | grep -Fxq "${con}"
 }
 
-print_summary_for_iface() {
-    local iface="$1"
-    local state connection mode kind ssid ip4
+connection_active() {
+    local con="$1"
 
-    state=""
-    connection=""
-    mode=""
-    kind=""
-    ssid=""
-    ip4=""
-
-    if have_cmd nmcli; then
-        state="$(nm_value GENERAL.STATE "${iface}")"
-        connection="$(nm_value GENERAL.CONNECTION "${iface}")"
-        ip4="$(nm_value IP4.ADDRESS "${iface}")"
-        mode="$(nm_mode_for_connection "${connection}")"
-    fi
-    if have_cmd iw; then
-        kind="$(iw_type "${iface}")"
-        ssid="$(iw_ssid "${iface}")"
-    fi
-
-    printf '%s:\n' "${iface}"
-    printf '  NetworkManager state: %s\n' "${state:-unknown}"
-    printf '  active connection:    %s\n' "${connection:---}"
-    printf '  NM Wi-Fi mode:        %s\n' "${mode:---}"
-    printf '  kernel Wi-Fi type:    %s\n' "${kind:---}"
-    printf '  kernel SSID:          %s\n' "${ssid:---}"
-    printf '  IPv4 address:         %s\n' "${ip4:---}"
-
-    if [[ "${kind}" == "AP" || "${mode}" == "ap" ]]; then
-        note "${iface} appears to be in access-point mode."
-    elif [[ "${kind}" == "managed" || "${mode}" == "infrastructure" ]]; then
-        note "${iface} appears to be in Wi-Fi client mode, not hotspot/AP mode."
-    elif [[ -z "${kind}" && -z "${mode}" ]]; then
-        warn "No Wi-Fi mode could be read for ${iface}; driver, rfkill, or NetworkManager state may be the issue."
-    fi
+    have_cmd nmcli || return 1
+    nmcli -t -f NAME connection show --active 2>/dev/null | grep -Fxq "${con}"
 }
 
-print_interface_details() {
-    local iface="$1"
+systemctl_value() {
+    local kind="$1"
+    local unit="$2"
 
-    section "Interface ${iface}"
-    print_summary_for_iface "${iface}"
+    have_cmd systemctl || return 0
+    case "${kind}" in
+        enabled)
+            systemctl is-enabled "${unit}" 2>/dev/null || printf 'not-found'
+            ;;
+        active)
+            systemctl is-active "${unit}" 2>/dev/null || printf 'inactive'
+            ;;
+        sub)
+            systemctl show -P SubState "${unit}" 2>/dev/null || printf '-'
+            ;;
+    esac
+}
 
-    if have_cmd ip; then
-        run_block "ip addr show ${iface}" ip addr show "${iface}"
-    fi
-    if have_cmd iw; then
-        run_block "iw dev ${iface} info" iw dev "${iface}" info
-        run_block "iw dev ${iface} link" iw dev "${iface}" link
-        run_block "iw dev ${iface} station dump" iw dev "${iface}" station dump
-    fi
-    if have_cmd nmcli; then
-        run_block "nmcli device show ${iface}" nmcli -f GENERAL.DEVICE,GENERAL.TYPE,GENERAL.STATE,GENERAL.CONNECTION,GENERAL.HWADDR,IP4.ADDRESS device show "${iface}"
+wifi_radio_state() {
+    have_cmd nmcli || {
+        printf 'unknown'
+        return 0
+    }
+    nmcli -t -f WIFI radio 2>/dev/null | head -n 1 || printf 'unknown'
+}
+
+rfkill_summary() {
+    local output
+
+    have_cmd rfkill || {
+        printf 'unknown'
+        return 0
+    }
+    output="$(rfkill list wifi 2>/dev/null || true)"
+    if [[ -z "${output}" ]]; then
+        printf 'unknown'
+    elif grep -q 'Hard blocked: yes' <<<"${output}"; then
+        printf 'hard-blocked'
+    elif grep -q 'Soft blocked: yes' <<<"${output}"; then
+        printf 'soft-blocked'
+    else
+        printf 'clear'
     fi
 }
 
-print_quick_interpretation() {
-    local -a ifaces=("$@")
-    local iface kind connection mode ssid
+connection_line() {
+    local con="$1"
+    local label="$2"
+    local exists="no"
+    local active="no"
+    local iface=""
+    local mode=""
+    local ssid=""
+    local autoconnect=""
 
-    section "Quick Interpretation"
+    if connection_exists "${con}"; then
+        exists="yes"
+        iface="$(nm_connection_value connection.interface-name "${con}")"
+        mode="$(nm_connection_value 802-11-wireless.mode "${con}")"
+        ssid="$(nm_connection_value 802-11-wireless.ssid "${con}")"
+        autoconnect="$(nm_connection_value connection.autoconnect "${con}")"
+        if connection_active "${con}"; then
+            active="yes"
+        fi
+    fi
 
-    if ((${#ifaces[@]} == 0)); then
-        warn "No Wi-Fi interface was detected. Check hardware, USB adapters, kernel modules, and rfkill output above."
+    if [[ "${exists}" == "no" ]]; then
+        printf '  %-24s not configured\n' "${label}"
         return 0
     fi
 
-    if ((${#ifaces[@]} == 1)); then
-        note "Only one Wi-Fi interface was detected (${ifaces[0]}). It cannot reliably be both a hotspot and an upstream Wi-Fi client at the same time."
+    printf '  %-24s active=%-3s interface=%-7s mode=%-6s ssid=%s starts-on-boot=%s\n' \
+        "${label}" "${active}" "${iface:---}" "${mode:---}" "${ssid:---}" "${autoconnect:---}"
+}
+
+iface_role() {
+    local iface="$1"
+    local connection="$2"
+    local nm_mode="$3"
+    local kernel_type="$4"
+
+    if [[ "${kernel_type}" == "AP" || "${nm_mode}" == "ap" ]]; then
+        printf 'hotspot'
+    elif [[ "${kernel_type}" == "managed" || "${nm_mode}" == "infrastructure" ]]; then
+        printf 'client'
+    elif [[ -z "${connection}" || "${connection}" == "--" ]]; then
+        printf 'idle'
     else
-        note "Multiple Wi-Fi interfaces were detected (${ifaces[*]}). Use separate interfaces for hotspot/AP mode and upstream Wi-Fi client mode when possible."
+        printf 'unknown'
+    fi
+}
+
+print_operator_summary() {
+    local -a ifaces=("$@")
+    local radio blocks hotspot_enabled hotspot_iface hotspot_ssid hotspot_unit_enabled hotspot_unit_active hotspot_unit_sub
+    local iface connection nm_mode kernel_type ssid ip4 role iface_count active_hotspot=false client_count=0 idle_count=0 unknown_count=0
+
+    radio="$(wifi_radio_state)"
+    blocks="$(rfkill_summary)"
+    hotspot_enabled="$(read_env_key "${HOTSPOT_ENV_FILE}" HOTSPOT_ENABLED)"
+    hotspot_iface="$(read_env_key "${HOTSPOT_ENV_FILE}" HOTSPOT_INTERFACE)"
+    hotspot_ssid="$(read_env_key "${HOTSPOT_ENV_FILE}" HOTSPOT_SSID)"
+    hotspot_unit_enabled="$(systemctl_value enabled sensos-hotspot.service)"
+    hotspot_unit_active="$(systemctl_value active sensos-hotspot.service)"
+    hotspot_unit_sub="$(systemctl_value sub sensos-hotspot.service)"
+    iface_count="${#ifaces[@]}"
+
+    if connection_active sensosap || connection_active sensos-hotspot; then
+        active_hotspot=true
+    fi
+
+    printf 'SensOS Wi-Fi Check\n'
+    printf '  host: %s\n' "$(hostname 2>/dev/null || printf unknown)"
+    printf '  time: %s\n' "$(current_time)"
+    printf '  radio: %s\n' "${radio}"
+    printf '  rfkill: %s\n' "${blocks}"
+    if ((${iface_count} == 0)); then
+        printf '  interfaces: none detected\n'
+    else
+        printf '  interfaces: '
+        join_by_comma "${ifaces[@]}"
+        printf '\n'
+    fi
+
+    section "Hotspot"
+    printf '  built-in startup hotspot: enabled=%s interface=%s ssid=%s\n' \
+        "${hotspot_enabled:-unknown}" "${hotspot_iface:-unknown}" "${hotspot_ssid:-unknown}"
+    printf '  startup service:          enabled=%s active=%s state=%s\n' \
+        "${hotspot_unit_enabled:-unknown}" "${hotspot_unit_active:-unknown}" "${hotspot_unit_sub:-unknown}"
+    connection_line sensosap "configured hotspot"
+    connection_line sensos-hotspot "built-in hotspot"
+
+    section "Interfaces"
+    if ((${iface_count} == 0)); then
+        printf '  No Wi-Fi interfaces were found by NetworkManager, iw, or ip.\n'
     fi
 
     for iface in "${ifaces[@]}"; do
-        kind=""
-        connection=""
-        mode=""
-        ssid=""
+        connection="$(nm_device_value GENERAL.CONNECTION "${iface}")"
+        [[ -n "${connection}" ]] || connection="--"
+        nm_mode="$(nm_connection_value 802-11-wireless.mode "${connection}")"
+        kernel_type="$(iw_type "${iface}")"
+        ssid="$(iw_ssid "${iface}")"
+        ip4="$(nm_device_value IP4.ADDRESS "${iface}")"
+        role="$(iface_role "${iface}" "${connection}" "${nm_mode}" "${kernel_type}")"
 
-        if have_cmd iw; then
-            kind="$(iw_type "${iface}")"
-            ssid="$(iw_ssid "${iface}")"
-        fi
-        if have_cmd nmcli; then
-            connection="$(nm_value GENERAL.CONNECTION "${iface}")"
-            mode="$(nm_mode_for_connection "${connection}")"
-        fi
+        case "${role}" in
+            hotspot) active_hotspot=true ;;
+            client) ((client_count += 1)) ;;
+            idle) ((idle_count += 1)) ;;
+            *) ((unknown_count += 1)) ;;
+        esac
 
-        if [[ "${kind}" == "AP" || "${mode}" == "ap" ]]; then
-            note "${iface}: hotspot/AP mode is active${ssid:+ with SSID '${ssid}'}."
-        elif [[ "${kind}" == "managed" || "${mode}" == "infrastructure" ]]; then
-            note "${iface}: Wi-Fi client mode is active; a hotspot on this same interface will not be visible."
-        else
-            warn "${iface}: mode is unclear from nmcli/iw output; inspect the detailed section below."
-        fi
+        printf '  %-7s role=%-8s connection=%-22s ssid=%-20s ip=%s\n' \
+            "${iface}" "${role}" "${connection}" "${ssid:---}" "${ip4:---}"
     done
+
+    section "Interpretation"
+    if [[ "${radio}" == "disabled" ]]; then
+        printf '  - Wi-Fi radio is off. Turn it on before hotspot or client Wi-Fi can work.\n'
+    fi
+    case "${blocks}" in
+        soft-blocked)
+            printf '  - Wi-Fi is soft-blocked. This is usually fixed with: sudo rfkill unblock wifi\n'
+            ;;
+        hard-blocked)
+            printf '  - Wi-Fi is hard-blocked. Check hardware switch, USB adapter state, or platform firmware.\n'
+            ;;
+    esac
+
+    if ((${iface_count} == 0)); then
+        printf '  - No Wi-Fi device is visible to the OS. Check the Pi model, USB Wi-Fi adapter, and kernel logs.\n'
+    elif ((${iface_count} == 1)); then
+        printf '  - This is a single-radio system. It cannot reliably host a hotspot and join upstream Wi-Fi at the same time.\n'
+        if ((client_count > 0)); then
+            printf '  - The only Wi-Fi interface is in client mode, so a hotspot SSID will not be visible.\n'
+        elif [[ "${active_hotspot}" == true ]]; then
+            printf '  - The only Wi-Fi interface appears to be hosting a hotspot.\n'
+        fi
+    else
+        printf '  - Multiple Wi-Fi interfaces are present. Prefer one for hotspot and one for upstream Wi-Fi.\n'
+    fi
+
+    if [[ "${active_hotspot}" != true ]]; then
+        if connection_exists sensosap; then
+            printf '  - A SensOS AP profile exists but is not active.\n'
+        elif connection_exists sensos-hotspot; then
+            printf '  - The bootstrap AP profile exists but is not active.\n'
+        else
+            printf '  - No active SensOS hotspot profile was found.\n'
+        fi
+    fi
+
+    if [[ "${hotspot_enabled}" == "0" && "${hotspot_unit_enabled}" == "enabled" ]]; then
+        printf '  - sensos-hotspot.service is enabled, but /etc/default/sensos-hotspot disables startup.\n'
+    fi
+    if ((unknown_count > 0)); then
+        printf '  - One or more interfaces could not be classified from NetworkManager/iw state.\n'
+    fi
+
+    section "Next Steps"
+    if [[ "${radio}" == "disabled" ]]; then
+        printf '  sudo nmcli radio wifi on\n'
+    fi
+    if [[ "${blocks}" == "soft-blocked" ]]; then
+        printf '  sudo rfkill unblock wifi\n'
+    fi
+    if [[ "${active_hotspot}" != true ]]; then
+        printf "  config-hotspot --ssid sensos-setup --password '<8-63 character password>' --interface %s --channel 6\n" "${hotspot_iface:-wlan0}"
+        if connection_exists sensosap; then
+            printf '  sudo nmcli connection up sensosap\n'
+        elif connection_exists sensos-hotspot; then
+            printf '  sudo systemctl restart sensos-hotspot.service\n'
+        fi
+    fi
+    printf '  debug-wifi --verbose   # include raw Linux/NetworkManager details for support\n'
 }
 
-print_hotspot_profile() {
-    local profile="$1"
-
-    if ! have_cmd nmcli; then
-        return 0
-    fi
-    if ! nmcli -t -f NAME connection show 2>/dev/null | grep -Fxq "${profile}"; then
-        printf '%s: not present\n' "${profile}"
-        return 0
-    fi
-
-    run_block "nmcli connection show ${profile}" \
-        nmcli -f connection.id,connection.interface-name,connection.autoconnect,connection.autoconnect-priority,802-11-wireless.mode,802-11-wireless.ssid,802-11-wireless.band,802-11-wireless.channel,ipv4.method connection show "${profile}"
-}
-
-main() {
-    local -a ifaces=()
+print_verbose_report() {
+    local -a ifaces=("$@")
     local iface
 
-    section "System"
-    printf 'date:     %s\n' "$(current_time)"
-    printf 'hostname: %s\n' "$(hostname 2>/dev/null || true)"
-    printf 'kernel:   %s\n' "$(uname -a)"
-
-    section "Required Tools"
+    section "Raw Tool Output"
     for cmd in nmcli iw rfkill ip systemctl journalctl; do
         if have_cmd "${cmd}"; then
             printf '%-10s present\n' "${cmd}"
@@ -235,51 +407,42 @@ main() {
         fi
     done
 
-    section "Radio And Blocks"
     if have_cmd nmcli; then
         run_block "nmcli radio" nmcli radio
+        run_block "nmcli device status" nmcli device status
+        run_block "nmcli active connections" nmcli -f NAME,TYPE,DEVICE connection show --active
+        run_block "nmcli Wi-Fi connections" nmcli -f NAME,TYPE,DEVICE,AUTOCONNECT,AUTOCONNECT-PRIORITY connection show
+        run_block "nmcli visible Wi-Fi scan" nmcli -f IN-USE,SSID,MODE,CHAN,RATE,SIGNAL,SECURITY,DEVICE device wifi list
+        for profile in sensosap sensos-hotspot; do
+            if connection_exists "${profile}"; then
+                run_block "nmcli connection show ${profile}" \
+                    nmcli -f connection.id,connection.interface-name,connection.autoconnect,connection.autoconnect-priority,802-11-wireless.mode,802-11-wireless.ssid,802-11-wireless.band,802-11-wireless.channel,ipv4.method connection show "${profile}"
+            fi
+        done
     fi
     if have_cmd rfkill; then
         run_block "rfkill list wifi" rfkill list wifi
     fi
     if have_cmd iw; then
         run_block "iw reg get" iw reg get
+        for iface in "${ifaces[@]}"; do
+            run_block "iw dev ${iface} info" iw dev "${iface}" info
+            run_block "iw dev ${iface} link" iw dev "${iface}" link
+            run_block "iw dev ${iface} station dump" iw dev "${iface}" station dump
+        done
     fi
-
-    section "NetworkManager"
-    if have_cmd nmcli; then
-        run_block "nmcli device status" nmcli device status
-        run_block "nmcli active connections" nmcli -f NAME,TYPE,DEVICE connection show --active
-        run_block "nmcli Wi-Fi connections" nmcli -f NAME,TYPE,DEVICE,AUTOCONNECT,AUTOCONNECT-PRIORITY connection show
-        run_block "nmcli visible Wi-Fi scan" nmcli -f IN-USE,SSID,MODE,CHAN,RATE,SIGNAL,SECURITY,DEVICE device wifi list
-    else
-        warn "nmcli is missing; NetworkManager state cannot be reported."
+    if have_cmd ip; then
+        for iface in "${ifaces[@]}"; do
+            run_block "ip addr show ${iface}" ip addr show "${iface}"
+        done
     fi
-
-    section "SensOS Hotspot Config"
-    print_file_redacted "${HOTSPOT_ENV_FILE}"
     if have_cmd systemctl; then
         run_block "systemctl status sensos-hotspot.service" systemctl --no-pager --full status sensos-hotspot.service
     fi
-    print_hotspot_profile "sensosap"
-    print_hotspot_profile "sensos-hotspot"
 
-    section "SensOS Network Config"
+    section "SensOS Files"
+    print_file_redacted "${HOTSPOT_ENV_FILE}"
     print_file_redacted "${NETWORK_CONF}"
-
-    mapfile -t ifaces < <(list_wifi_ifaces)
-    section "Wireless Interfaces"
-    if ((${#ifaces[@]} == 0)); then
-        warn "No wireless interfaces found by nmcli, iw, or ip."
-    else
-        printf '%s\n' "${ifaces[@]}"
-    fi
-
-    print_quick_interpretation "${ifaces[@]}"
-
-    for iface in "${ifaces[@]}"; do
-        print_interface_details "${iface}"
-    done
 
     section "Recent Logs"
     if [[ -f "${ACCESS_POINT_LOG}" ]]; then
@@ -290,6 +453,18 @@ main() {
     if have_cmd journalctl; then
         run_block "journalctl -u sensos-hotspot.service -b -n 80" journalctl -u sensos-hotspot.service -b -n 80 --no-pager
         run_block "journalctl -u NetworkManager -b -n 120" journalctl -u NetworkManager -b -n 120 --no-pager
+    fi
+}
+
+main() {
+    local -a ifaces=()
+
+    parse_args "$@"
+    mapfile -t ifaces < <(list_wifi_ifaces)
+    print_operator_summary "${ifaces[@]}"
+
+    if [[ "${VERBOSE}" == true ]]; then
+        print_verbose_report "${ifaces[@]}"
     fi
 }
 
