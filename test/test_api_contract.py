@@ -620,6 +620,37 @@ class ApiContractTests(unittest.TestCase):
         self.assertIn("WG_ENDPOINT_IP=10.0.2.2\n", written)
         self.assertIn("WG_ENDPOINT_PORT=51281\n", written)
 
+    def test_config_network_hostname_change_applies_immediately_and_drops_old_alias(self):
+        writes = {}
+
+        def fake_write_file(path, content, *args, **kwargs):
+            writes[path] = content
+
+        with mock.patch.object(
+            config_network,
+            "privileged_shell",
+            side_effect=[
+                ("testing-1-1", 0),
+                ("", 0),
+                ("", 0),
+            ],
+        ) as privileged_shell_mock:
+            with mock.patch.object(
+                config_network,
+                "read_file",
+                return_value="127.0.0.1 localhost\n127.0.1.1 testing-1-1\n",
+            ):
+                with mock.patch.object(config_network, "write_file", side_effect=fake_write_file):
+                    config_network.change_hostname("testing-1-2")
+
+        self.assertEqual(writes["/etc/hostname"], "testing-1-2\n")
+        self.assertIn("127.0.1.1 testing-1-2\n", writes["/etc/hosts"])
+        self.assertNotIn("testing-1-1", writes["/etc/hosts"])
+        privileged_shell_mock.assert_any_call(
+            "hostnamectl set-hostname testing-1-2",
+            silent=True,
+        )
+
     def test_config_network_does_not_upload_hardware_profile_during_enrollment(self):
         args = SimpleNamespace(
             config_server="10.0.2.2",
