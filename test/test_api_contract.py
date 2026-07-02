@@ -6,7 +6,9 @@ import importlib.util
 import io
 import os
 import random
+import sqlite3
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -486,6 +488,75 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(payload["client_version"], "1.2.3")
         self.assertIn("sent_at", payload)
         self.assertEqual(payload["detections"], detections)
+
+    def test_birdnet_schema_migrates_legacy_source_path_detections(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "birdnet.db"
+            with sqlite3.connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                conn.executescript(
+                    """
+                    CREATE TABLE detections (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        source_path TEXT NOT NULL,
+                        channel_index INTEGER NOT NULL DEFAULT 0,
+                        window_index INTEGER NOT NULL,
+                        max_score_start_frame INTEGER NOT NULL,
+                        label TEXT NOT NULL,
+                        score REAL NOT NULL,
+                        likely_score REAL,
+                        volume REAL,
+                        clip_start_time TEXT NOT NULL,
+                        clip_end_time TEXT NOT NULL,
+                        clip_path TEXT,
+                        clip_size_bytes INTEGER,
+                        sent_to_server INTEGER NOT NULL DEFAULT 0,
+                        deleted_at TEXT,
+                        weighted_label TEXT,
+                        weighted_score REAL,
+                        weighted_likely_score REAL,
+                        UNIQUE (source_path, channel_index, window_index)
+                    );
+                    CREATE INDEX idx_detections_source ON detections (source_path, window_index);
+                    CREATE TABLE source_files (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        source_path TEXT NOT NULL UNIQUE,
+                        birdnet_processed INTEGER NOT NULL DEFAULT 0,
+                        source_deleted INTEGER NOT NULL DEFAULT 0
+                    );
+                    INSERT INTO detections (
+                        source_path, channel_index, window_index, max_score_start_frame,
+                        label, score, likely_score, volume, clip_start_time, clip_end_time,
+                        clip_path, clip_size_bytes, weighted_label, weighted_score,
+                        weighted_likely_score
+                    ) VALUES (
+                        'audio_recordings/compressed/2026/04/07/a.flac',
+                        0, 2, 48000, 'Northern Cardinal (Cardinalis cardinalis)',
+                        0.91, 0.75, 0.018, '2026-04-07T12:00:02Z',
+                        '2026-04-07T12:00:05Z',
+                        'audio_recordings/processed/2026/04/07/cardinal/a.flac',
+                        1234, 'Blue Jay (Cyanocitta cristata)', 0.88, 0.92
+                    );
+                    """
+                )
+
+                birdnet_upload.ensure_schema(conn)
+                columns = {
+                    row["name"] for row in conn.execute("PRAGMA table_info(detections)")
+                }
+                self.assertIn("source_file_id", columns)
+                self.assertNotIn("source_path", columns)
+
+                rows = birdnet_upload.select_pending_detections(conn, 10)
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(
+                rows[0]["source_path"],
+                "audio_recordings/compressed/2026/04/07/a.flac",
+            )
+            self.assertEqual(rows[0]["weighted_label"], "Blue Jay (Cyanocitta cristata)")
+            self.assertEqual(rows[0]["weighted_score"], 0.88)
+            self.assertEqual(rows[0]["weighted_likely_score"], 0.92)
 
     def test_birdnet_upload_response_requires_receipt_and_full_acceptance(self):
         parsed = birdnet_upload.parse_upload_response(

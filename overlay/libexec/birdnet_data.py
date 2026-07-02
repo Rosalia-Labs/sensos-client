@@ -40,21 +40,42 @@ def ensure_state_file_permissions() -> None:
                 pass
 
 
-def ensure_schema(conn: sqlite3.Connection) -> None:
-    conn.execute("PRAGMA foreign_keys=ON")
+def table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({table_name})")}
+
+
+def legacy_column_expr(columns: set[str], column_name: str, fallback: str) -> str:
+    return f"d.{column_name}" if column_name in columns else fallback
+
+
+def migrate_legacy_flat_detections(conn: sqlite3.Connection) -> None:
+    columns = table_columns(conn, "detections")
+    if "source_file_id" in columns:
+        return
+    if "source_path" not in columns:
+        raise sqlite3.OperationalError(
+            "BirdNET detections table is missing both source_file_id and source_path"
+        )
+
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS source_files (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source_path TEXT NOT NULL UNIQUE,
-            birdnet_processed INTEGER NOT NULL DEFAULT 0,
-            source_deleted INTEGER NOT NULL DEFAULT 0
-        )
+        INSERT OR IGNORE INTO source_files (source_path)
+        SELECT DISTINCT source_path
+        FROM detections
+        WHERE source_path IS NOT NULL
         """
     )
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS detections (
+        CREATE TABLE detections_new (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source_file_id INTEGER NOT NULL,
             channel_index INTEGER NOT NULL DEFAULT 0,
@@ -78,6 +99,80 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    likely_score = legacy_column_expr(columns, "likely_score", "NULL")
+    weighted_label = legacy_column_expr(columns, "weighted_label", "d.label")
+    weighted_score = legacy_column_expr(columns, "weighted_score", "d.score")
+    weighted_likely_score = legacy_column_expr(
+        columns,
+        "weighted_likely_score",
+        likely_score,
+    )
+    volume = legacy_column_expr(columns, "volume", "NULL")
+    clip_path = legacy_column_expr(columns, "clip_path", "NULL")
+    clip_size_bytes = legacy_column_expr(columns, "clip_size_bytes", "NULL")
+    sent_to_server = legacy_column_expr(columns, "sent_to_server", "0")
+    deleted_at = legacy_column_expr(columns, "deleted_at", "NULL")
+    conn.execute(
+        f"""
+        INSERT INTO detections_new (
+            id, source_file_id, channel_index, window_index, max_score_start_frame,
+            label, score, likely_score, weighted_label, weighted_score,
+            weighted_likely_score, volume, clip_start_time, clip_end_time, clip_path,
+            clip_size_bytes, sent_to_server, deleted_at
+        )
+        SELECT d.id, s.id, d.channel_index, d.window_index, d.max_score_start_frame,
+               d.label, d.score, {likely_score}, {weighted_label}, {weighted_score},
+               {weighted_likely_score}, {volume}, d.clip_start_time, d.clip_end_time,
+               {clip_path}, {clip_size_bytes}, {sent_to_server}, {deleted_at}
+        FROM detections d
+        JOIN source_files s ON s.source_path = d.source_path
+        """
+    )
+    conn.execute("DROP TABLE detections")
+    conn.execute("ALTER TABLE detections_new RENAME TO detections")
+
+
+def ensure_schema(conn: sqlite3.Connection) -> None:
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS source_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_path TEXT NOT NULL UNIQUE,
+            birdnet_processed INTEGER NOT NULL DEFAULT 0,
+            source_deleted INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    if table_exists(conn, "detections"):
+        migrate_legacy_flat_detections(conn)
+    else:
+        conn.execute(
+            """
+            CREATE TABLE detections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_file_id INTEGER NOT NULL,
+                channel_index INTEGER NOT NULL DEFAULT 0,
+                window_index INTEGER NOT NULL,
+                max_score_start_frame INTEGER NOT NULL,
+                label TEXT NOT NULL,
+                score REAL NOT NULL,
+                likely_score REAL,
+                weighted_label TEXT,
+                weighted_score REAL,
+                weighted_likely_score REAL,
+                volume REAL,
+                clip_start_time TEXT NOT NULL,
+                clip_end_time TEXT NOT NULL,
+                clip_path TEXT,
+                clip_size_bytes INTEGER,
+                sent_to_server INTEGER NOT NULL DEFAULT 0,
+                deleted_at TEXT,
+                FOREIGN KEY (source_file_id) REFERENCES source_files(id) ON DELETE RESTRICT,
+                UNIQUE (source_file_id, channel_index, window_index)
+            )
+            """
+        )
     detection_columns = {
         row[1] for row in conn.execute("PRAGMA table_info(detections)").fetchall()
     }
