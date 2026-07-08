@@ -179,17 +179,21 @@ connection_active() {
 systemctl_value() {
     local kind="$1"
     local unit="$2"
+    local result
 
     have_cmd systemctl || return 0
     case "${kind}" in
         enabled)
-            systemctl is-enabled "${unit}" 2>/dev/null || printf 'not-found'
+            result="$(systemctl is-enabled "${unit}" 2>/dev/null)" || true
+            printf '%s' "${result:-not-found}"
             ;;
         active)
-            systemctl is-active "${unit}" 2>/dev/null || printf 'inactive'
+            result="$(systemctl is-active "${unit}" 2>/dev/null)" || true
+            printf '%s' "${result:-inactive}"
             ;;
         sub)
-            systemctl show -P SubState "${unit}" 2>/dev/null || printf '-'
+            result="$(systemctl show -P SubState "${unit}" 2>/dev/null)" || true
+            printf '%s' "${result:--}"
             ;;
     esac
 }
