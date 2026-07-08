@@ -1,0 +1,488 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Rosalia Labs LLC
+
+set -euo pipefail
+
+OVERLAY_ROOT="${SENSOS_CLIENT_ROOT:-/sensos}"
+NETWORK_CONF="${OVERLAY_ROOT}/etc/network.conf"
+VERBOSE=false
+
+have_cmd() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+print_usage() {
+    cat <<EOF
+Usage: debug-firewall [options]
+
+Print a plain-language firewall status report, including whether listening
+services are reachable through the current nftables rules.
+
+Options:
+  -v, --verbose  Include raw nft, iptables, ss, sysctl, and log output
+  -h, --help     Show this help and exit
+EOF
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -v|--verbose)
+                VERBOSE=true
+                ;;
+            -h|--help)
+                print_usage
+                exit 0
+                ;;
+            *)
+                printf 'ERROR: unknown option: %s\n' "$1" >&2
+                print_usage >&2
+                exit 1
+                ;;
+        esac
+        shift
+    done
+}
+
+section() {
+    printf '\n%s\n' "$*"
+}
+
+current_time() {
+    date -Is 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z'
+}
+
+run_block() {
+    local label="$1"
+    shift
+
+    printf '\n$ %s\n' "${label}"
+    if "$@" 2>&1; then
+        return 0
+    fi
+    printf '[command failed]\n'
+    return 0
+}
+
+read_env_key() {
+    local path="$1"
+    local key="$2"
+
+    [[ -f "${path}" ]] || return 0
+    awk -F= -v wanted="${key}" '
+        $1 == wanted {
+            value = substr($0, length($1) + 2)
+            gsub(/^'\''|'\''$/, "", value)
+            gsub(/^"|"$/, "", value)
+            print value
+            exit
+        }
+    ' "${path}"
+}
+
+# ── nftables ──────────────────────────────────────────────────────────────────
+
+nft_service_active() {
+    have_cmd systemctl || { printf 'unknown'; return 0; }
+    systemctl is-active nftables.service 2>/dev/null || printf 'inactive'
+}
+
+nft_service_enabled() {
+    have_cmd systemctl || { printf 'unknown'; return 0; }
+    systemctl is-enabled nftables.service 2>/dev/null || printf 'not-found'
+}
+
+nft_chain_policy() {
+    local chain="$1"
+
+    have_cmd nft || { printf 'none'; return 0; }
+    local out
+    out="$(nft list chain inet filter "${chain}" 2>/dev/null)" || { printf 'none'; return 0; }
+    awk '/type filter hook '"${chain}"'/ { for(i=1;i<=NF;i++) if($i=="policy") { gsub(/;/,"",$((i+1))); print $((i+1)); exit } }' <<<"${out}" \
+        || printf 'none'
+}
+
+nft_chain_rule_count() {
+    local chain="$1"
+
+    have_cmd nft || { printf '0'; return 0; }
+    nft list chain inet filter "${chain}" 2>/dev/null \
+        | grep -c '^\s\+[^#]' \
+        | awk '{print $1 - 1}' \
+        || printf '0'
+}
+
+# Return "yes" if a live INPUT rule accepts the given proto/port.
+# Also returns "yes" when INPUT policy is "accept" (nothing is blocked).
+nft_input_accepts() {
+    local proto="$1"
+    local port="$2"
+
+    have_cmd nft || { printf 'unknown'; return 0; }
+
+    local policy
+    policy="$(nft_chain_policy input)"
+    if [[ "${policy}" == "accept" ]]; then
+        printf 'yes'
+        return 0
+    fi
+
+    local chain
+    chain="$(nft list chain inet filter input 2>/dev/null)" || { printf 'unknown'; return 0; }
+
+    # Match patterns like:
+    #   tcp dport 22 accept
+    #   udp dport 67 accept
+    #   tcp dport { 22, 80 } accept
+    if grep -qE "${proto} dport (${port} accept|\{[^}]*\b${port}\b[^}]*\} accept)" <<<"${chain}"; then
+        printf 'yes'
+    else
+        printf 'no'
+    fi
+}
+
+nft_forward_rule_count() {
+    nft_chain_rule_count forward
+}
+
+# ── iptables-nft ──────────────────────────────────────────────────────────────
+
+ipt_forward_rule_count() {
+    have_cmd iptables || { printf '0'; return 0; }
+    iptables -t filter -S FORWARD 2>/dev/null | grep -c '^-A' || printf '0'
+}
+
+ipt_masquerade_present() {
+    have_cmd iptables || { printf 'unknown'; return 0; }
+    if iptables -t nat -S POSTROUTING 2>/dev/null | grep -q 'MASQUERADE'; then
+        printf 'yes'
+    else
+        printf 'no'
+    fi
+}
+
+# ── kernel ────────────────────────────────────────────────────────────────────
+
+ipv4_forward_enabled() {
+    local val
+    val="$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)" || { printf 'unknown'; return 0; }
+    if [[ "${val}" == "1" ]]; then printf 'yes'; else printf 'no'; fi
+}
+
+# ── services ──────────────────────────────────────────────────────────────────
+
+# Return "yes" if a socket is bound to the given protocol and port.
+port_listening() {
+    local proto="$1"   # tcp or udp
+    local port="$2"
+
+    have_cmd ss || { printf 'unknown'; return 0; }
+    local flag
+    case "${proto}" in
+        tcp) flag="-tlnp" ;;
+        udp) flag="-ulnp" ;;
+        *)   flag="-lnp"  ;;
+    esac
+    if ss "${flag}" 2>/dev/null | awk '{print $4}' | grep -qE ":${port}$"; then
+        printf 'yes'
+    else
+        printf 'no'
+    fi
+}
+
+wg_listen_port() {
+    # Prefer the Pi's own ListenPort from its wireguard config; fall back to network.conf.
+    local port=""
+
+    if have_cmd wg; then
+        port="$(wg show all listen-port 2>/dev/null | awk '{print $NF; exit}')"
+    fi
+    if [[ -z "${port}" || "${port}" == "(none)" ]]; then
+        if [[ -f "${NETWORK_CONF}" ]]; then
+            port="$(read_env_key "${NETWORK_CONF}" WG_ENDPOINT_PORT)"
+        fi
+    fi
+    if [[ -z "${port}" ]]; then
+        port="$(grep -r 'ListenPort' /etc/wireguard/ 2>/dev/null \
+            | head -n 1 | awk -F'=' '{gsub(/ /,"",$2); print $2}')"
+    fi
+    printf '%s' "${port}"
+}
+
+wg_interface_active() {
+    have_cmd wg || { printf 'no'; return 0; }
+    if wg show interfaces 2>/dev/null | grep -q '\S'; then printf 'yes'; else printf 'no'; fi
+}
+
+ap_interface() {
+    have_cmd nmcli || { printf ''; return 0; }
+    nmcli -t -f DEVICE,TYPE,STATE,CONNECTION device status 2>/dev/null \
+        | awk -F: '$2 == "wifi" && $3 ~ /connected/ {print $1; exit}'
+}
+
+ap_mode_active() {
+    have_cmd nmcli || { printf 'no'; return 0; }
+    if nmcli -t -f NAME,TYPE connection show --active 2>/dev/null \
+            | grep -q 'wifi'; then
+        local iface
+        iface="$(ap_interface)"
+        if [[ -n "${iface}" ]]; then
+            local mode
+            mode="$(nmcli -g 802-11-wireless.mode connection show \
+                "$(nmcli -g GENERAL.CONNECTION device show "${iface}" 2>/dev/null)" \
+                2>/dev/null)" || mode=""
+            if [[ "${mode}" == "ap" ]]; then printf 'yes'; return 0; fi
+        fi
+    fi
+    printf 'no'
+}
+
+# ── service table ─────────────────────────────────────────────────────────────
+
+# Print one formatted row for a service check.
+# Args: label proto port
+service_row() {
+    local label="$1"
+    local proto="$2"
+    local port="$3"
+
+    local listening rule status
+    listening="$(port_listening "${proto}" "${port}")"
+    rule="$(nft_input_accepts "${proto}" "${port}")"
+
+    if [[ "${listening}" == "yes" && "${rule}" == "no" ]]; then
+        status="BLOCKED"
+    elif [[ "${listening}" == "yes" && "${rule}" == "yes" ]]; then
+        status="ok"
+    elif [[ "${listening}" == "no" ]]; then
+        status="not-listening"
+    else
+        status="unknown"
+    fi
+
+    printf '  %-28s proto=%-4s port=%-6s listening=%-7s fw-rule=%-7s %s\n' \
+        "${label}" "${proto}" "${port}" "${listening}" "${rule}" "${status}"
+}
+
+# ── summary ───────────────────────────────────────────────────────────────────
+
+print_operator_summary() {
+    local svc_active svc_enabled
+    local input_policy forward_policy output_policy
+    local nft_fwd_rules ipt_fwd_count masquerade ip_fwd
+    local wg_port wg_active ap_iface ap_is_up
+
+    svc_active="$(nft_service_active)"
+    svc_enabled="$(nft_service_enabled)"
+    input_policy="$(nft_chain_policy input)"
+    forward_policy="$(nft_chain_policy forward)"
+    output_policy="$(nft_chain_policy output)"
+    nft_fwd_rules="$(nft_forward_rule_count)"
+    ipt_fwd_count="$(ipt_forward_rule_count)"
+    masquerade="$(ipt_masquerade_present)"
+    ip_fwd="$(ipv4_forward_enabled)"
+    wg_port="$(wg_listen_port)"
+    wg_active="$(wg_interface_active)"
+    ap_iface="$(ap_interface)"
+    ap_is_up="$(ap_mode_active)"
+
+    printf 'SensOS Firewall Check\n'
+    printf '  host:    %s\n' "$(hostname 2>/dev/null || printf unknown)"
+    printf '  time:    %s\n' "$(current_time)"
+    if have_cmd nft; then printf '  nft:     present\n'
+    else                   printf '  nft:     missing\n'; fi
+
+    section "nftables Service"
+    printf '  active:  %s\n' "${svc_active}"
+    printf '  enabled: %s\n' "${svc_enabled}"
+    printf '  config:  %s\n' "$(test -f /etc/nftables.conf && printf 'present' || printf 'missing')"
+
+    section "Live Chains  (inet filter)"
+    printf '  %-8s policy=%s\n'           "output"  "${output_policy}"
+    printf '  %-8s policy=%-6s  rules=%s\n' "forward" "${forward_policy}" "${nft_fwd_rules}"
+    printf '  %-8s policy=%-6s  rules=%s\n' "input"   "${input_policy}"   "$(nft_chain_rule_count input)"
+
+    section "Services  (listening vs. firewall)"
+    service_row "ssh (admin)" "tcp" "22"
+    if [[ "${ap_is_up}" == "yes" ]]; then
+        service_row "dhcp-server (ap clients)" "udp" "67"
+    fi
+    if [[ "${wg_active}" == "yes" && -n "${wg_port}" ]]; then
+        service_row "wireguard" "udp" "${wg_port}"
+    elif [[ -n "${wg_port}" ]]; then
+        service_row "wireguard (interface down)" "udp" "${wg_port}"
+    fi
+
+    section "Forwarding"
+    printf '  kernel ip_forward:      %s\n' "${ip_fwd}"
+    printf '  nft forward rules:      %s\n' "${nft_fwd_rules}"
+    printf '  iptables-nft fwd rules: %s\n' "${ipt_fwd_count}"
+    printf '  nat masquerade:         %s\n' "${masquerade}"
+
+    # ── interpretation ───────────────────────────────────────────────────────
+
+    local problems=0
+
+    section "Interpretation"
+
+    if [[ "${svc_active}" != "active" ]]; then
+        printf '  - nftables.service is not active; rules in /etc/nftables.conf are NOT loaded.\n'
+        ((problems += 1))
+    fi
+
+    local ssh_rule
+    ssh_rule="$(nft_input_accepts tcp 22)"
+    if [[ "${ssh_rule}" == "no" && "${input_policy}" == "drop" ]]; then
+        printf '  - SSH (tcp/22) is blocked by the firewall; remote administration is unavailable.\n'
+        ((problems += 1))
+    fi
+
+    if [[ "${ap_is_up}" == "yes" ]]; then
+        local dhcp_rule dhcp_listening
+        dhcp_rule="$(nft_input_accepts udp 67)"
+        dhcp_listening="$(port_listening udp 67)"
+        if [[ "${dhcp_rule}" == "no" && "${input_policy}" == "drop" ]]; then
+            printf '  - DHCP server blocked: INPUT policy is drop and no "udp dport 67 accept" rule exists.\n'
+            printf '    AP clients cannot get an IP address. This causes the macOS Wi-Fi exclamation-point.\n'
+            ((problems += 1))
+        fi
+        if [[ "${dhcp_listening}" == "no" ]]; then
+            printf '  - AP is active but dnsmasq is not listening on udp/67; clients cannot get an IP address.\n'
+            ((problems += 1))
+        fi
+    fi
+
+    if [[ -n "${wg_port}" ]]; then
+        local wg_rule
+        wg_rule="$(nft_input_accepts udp "${wg_port}")"
+        if [[ "${wg_rule}" == "no" && "${input_policy}" == "drop" ]]; then
+            printf '  - WireGuard (udp/%s) is blocked; the VPN tunnel will not establish.\n' "${wg_port}"
+            ((problems += 1))
+        fi
+    fi
+
+    if [[ "${forward_policy}" == "drop" && "${nft_fwd_rules}" -eq 0 ]]; then
+        printf '  - FORWARD chain: policy drop with no rules; all routed traffic is silently dropped.\n'
+        if [[ "${ipt_fwd_count}" -gt 0 ]]; then
+            printf '    NetworkManager added %s iptables-nft FORWARD rule(s), but they are unreachable\n' "${ipt_fwd_count}"
+            printf '    because the nft FORWARD chain drops packets before iptables-nft sees them.\n'
+        fi
+        ((problems += 1))
+    fi
+
+    if [[ "${ip_fwd}" == "no" ]]; then
+        printf '  - Kernel IPv4 forwarding is off (ip_forward=0); routing is disabled regardless of firewall rules.\n'
+        ((problems += 1))
+    fi
+
+    if [[ "${problems}" -eq 0 ]]; then
+        printf '  - No obvious firewall problems detected.\n'
+    fi
+
+    # ── hints ────────────────────────────────────────────────────────────────
+
+    section "Hints"
+
+    local dhcp_blocked=false wg_blocked=false fwd_blocked=false
+    [[ "${ap_is_up}" == "yes" ]] && [[ "$(nft_input_accepts udp 67)" == "no" ]] && dhcp_blocked=true
+    [[ -n "${wg_port}" ]] && [[ "$(nft_input_accepts udp "${wg_port}")" == "no" ]] && [[ "${input_policy}" == "drop" ]] && wg_blocked=true
+    [[ "${forward_policy}" == "drop" && "${nft_fwd_rules}" -eq 0 ]] && fwd_blocked=true
+
+    if [[ "${dhcp_blocked}" == true || "${wg_blocked}" == true || "${fwd_blocked}" == true ]]; then
+        printf '  - Edit /etc/nftables.conf:\n'
+        if [[ "${dhcp_blocked}" == true ]]; then
+            printf '      # in chain input — allow AP clients to request DHCP leases\n'
+            printf '      udp dport 67 accept\n'
+        fi
+        if [[ "${wg_blocked}" == true ]]; then
+            printf '      # in chain input — allow WireGuard handshake\n'
+            printf '      udp dport %s accept\n' "${wg_port}"
+        fi
+        if [[ "${fwd_blocked}" == true ]]; then
+            printf '      # in chain forward — allow established return traffic and AP client egress\n'
+            printf '      ct state established,related accept\n'
+            if [[ -n "${ap_iface}" ]]; then
+                printf '      iifname "%s" accept\n' "${ap_iface}"
+            fi
+        fi
+        printf '  - Reload without reboot: sudo systemctl reload nftables\n'
+    else
+        printf '  - To reload rules without rebooting: sudo systemctl reload nftables\n'
+    fi
+
+    printf '  - View live rules: sudo nft list ruleset\n'
+    printf '  debug-firewall --verbose   # include raw nft/iptables/sysctl details for support\n'
+}
+
+# ── verbose report ────────────────────────────────────────────────────────────
+
+print_verbose_report() {
+    section "Raw Tool Output"
+    for cmd in nft iptables ss ip sysctl wg systemctl journalctl; do
+        if have_cmd "${cmd}"; then
+            printf '%-10s present\n' "${cmd}"
+        else
+            printf '%-10s missing\n' "${cmd}"
+        fi
+    done
+
+    if have_cmd nft; then
+        run_block "nft list ruleset" nft list ruleset
+    fi
+
+    if have_cmd iptables; then
+        run_block "iptables -t filter -L -v -n --line-numbers" \
+            iptables -t filter -L -v -n --line-numbers
+        run_block "iptables -t nat -L -v -n" \
+            iptables -t nat -L -v -n
+    fi
+
+    if have_cmd ss; then
+        run_block "ss -tlnp" ss -tlnp
+        run_block "ss -ulnp" ss -ulnp
+    fi
+
+    if have_cmd ip; then
+        run_block "ip -4 addr" ip -4 addr
+        run_block "ip route" ip route
+    fi
+
+    if have_cmd wg; then
+        run_block "wg show" wg show
+    fi
+
+    if have_cmd sysctl; then
+        run_block "sysctl net.ipv4.ip_forward net.ipv4.conf.all.forwarding" \
+            sysctl net.ipv4.ip_forward net.ipv4.conf.all.forwarding
+    fi
+
+    if have_cmd systemctl; then
+        run_block "systemctl status nftables.service" \
+            systemctl --no-pager --full status nftables.service
+    fi
+
+    if have_cmd journalctl; then
+        run_block "journalctl -u nftables -b -n 60" \
+            journalctl -u nftables -b -n 60 --no-pager
+    fi
+
+    run_block "cat /etc/nftables.conf" cat /etc/nftables.conf
+
+    if pgrep -a dnsmasq >/dev/null 2>&1; then
+        run_block "pgrep -a dnsmasq" pgrep -a dnsmasq
+    fi
+}
+
+# ── main ─────────────────────────────────────────────────────────────────────
+
+main() {
+    parse_args "$@"
+    print_operator_summary
+
+    if [[ "${VERBOSE}" == true ]]; then
+        print_verbose_report
+    fi
+}
+
+main "$@"
