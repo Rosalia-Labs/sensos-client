@@ -81,6 +81,17 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(os.environ.get("SENSOS_CLIENT_ROOT"), str(OVERLAY_ROOT))
         self.assertTrue(str(utils.NETWORK_CONF).startswith(str(OVERLAY_ROOT)))
 
+    def test_network_capture_service_runs_as_runner_with_narrow_capabilities(self):
+        unit = (OVERLAY_ROOT / "systemd" / "sensos-network-capture.service").read_text()
+        launcher = (OVERLAY_ROOT / "libexec" / "start-network-capture.sh").read_text()
+
+        self.assertIn("User=sensos-runner", unit)
+        self.assertIn("Group=sensos-data", unit)
+        self.assertIn("CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW", unit)
+        self.assertIn("AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW", unit)
+        self.assertIn("NoNewPrivileges=true", unit)
+        self.assertNotIn("-Z root", launcher)
+
     def test_register_peer_parses_current_response_and_registers_wireguard_key(self):
         response = FakeResponse(
             200,
