@@ -7,6 +7,7 @@ Type=simple
 User=sensos-runner
 Group=sensos-data
 UMask=0002
+LoadCredential=api_password:/sensos/keys/api_password
 ExecStart=/sensos/python/venv/bin/python /sensos/libexec/upload-i2c-readings.py
 WorkingDirectory=/sensos/data
 StandardOutput=journal

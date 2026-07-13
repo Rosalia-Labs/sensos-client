@@ -233,14 +233,10 @@ def main() -> int:
     setup_logging("upload_birdnet_results.log")
     config = read_upload_config()
     network_config = read_network_conf()
-    api_password = read_api_password()
+    api_password = read_service_credential("api_password")
     if not network_config:
         print("[ERROR] network.conf missing or empty.", file=sys.stderr)
         return 2
-    if not api_password:
-        print("[ERROR] API password missing.", file=sys.stderr)
-        return 2
-
     client_version = read_client_version_text(str(OVERLAY_ROOT))
     while True:
         should_sleep = True

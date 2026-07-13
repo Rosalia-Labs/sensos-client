@@ -153,6 +153,41 @@ class ApiContractTests(unittest.TestCase):
         self.assertIn("-o sensos-runner -g sensos-data", sensor_config)
         self.assertIn("-o sensos-runner -g sensos-data", upload_config)
 
+    def test_service_workers_receive_api_password_as_systemd_credential(self):
+        service_names = (
+            "sensos-upload-i2c",
+            "sensos-upload-birdnet",
+            "sensos-send-status-update",
+        )
+        worker_names = (
+            "upload-i2c-readings.py",
+            "upload-birdnet-results.py",
+            "send_status_update.py",
+        )
+
+        for service_name in service_names:
+            unit = (OVERLAY_ROOT / "systemd" / f"{service_name}.service").read_text()
+            self.assertIn("User=sensos-runner", unit)
+            self.assertIn("Group=sensos-data", unit)
+            self.assertIn(
+                "LoadCredential=api_password:/sensos/keys/api_password", unit
+            )
+
+        for worker_name in worker_names:
+            worker = (OVERLAY_ROOT / "libexec" / worker_name).read_text()
+            self.assertIn('read_service_credential("api_password")', worker)
+            self.assertNotIn("read_api_password()", worker)
+            self.assertNotIn('/keys/api_password', worker)
+
+    def test_service_credential_reader_uses_runtime_directory(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            credential_path = Path(tmpdir) / "api_password"
+            credential_path.write_text("service-secret\n", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"CREDENTIALS_DIRECTORY": tmpdir}):
+                self.assertEqual(
+                    utils.read_service_credential("api_password"), "service-secret"
+                )
+
     def test_register_peer_parses_current_response_and_registers_wireguard_key(self):
         response = FakeResponse(
             200,

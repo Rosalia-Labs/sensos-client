@@ -166,6 +166,28 @@ def ensure_runtime_dir(path, mode=0o2775):
     )
 
 
+def read_service_credential(name):
+    """Read a credential supplied to a service by systemd LoadCredential=."""
+    if not name or os.path.basename(name) != name:
+        raise ValueError(f"Invalid service credential name: {name!r}")
+    credentials_dir = os.environ.get("CREDENTIALS_DIRECTORY", "").strip()
+    if not credentials_dir:
+        raise SystemExit(
+            "[ERROR] CREDENTIALS_DIRECTORY is not set; run this worker through its systemd service."
+        )
+    credential_path = os.path.join(credentials_dir, name)
+    try:
+        with open(credential_path, encoding="utf-8") as handle:
+            value = handle.read().strip()
+    except OSError as exc:
+        raise SystemExit(
+            f"[ERROR] Could not read systemd credential {name!r}: {exc}"
+        ) from exc
+    if not value:
+        raise SystemExit(f"[ERROR] Systemd credential {name!r} is empty.")
+    return value
+
+
 def read_file(filepath):
     output, rc = privileged_shell(f"cat {shlex.quote(str(filepath))}", silent=True)
     return output.strip() if output else None

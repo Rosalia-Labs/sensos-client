@@ -42,15 +42,6 @@ for name in dir(UTILS_MODULE):
         globals()[name] = getattr(UTILS_MODULE, name)
 
 
-def read_required_text(path: Path) -> str:
-    if not path.is_file():
-        raise SystemExit(f"[ERROR] {path} not found.")
-    value = path.read_text(encoding="utf-8").strip()
-    if not value:
-        raise SystemExit(f"[ERROR] {path} is empty.")
-    return value
-
-
 def require_int(config: dict, key: str, *, minimum: int = 1) -> int:
     raw_value = config.get(key, "").strip()
     if not raw_value:
@@ -227,7 +218,7 @@ def main() -> int:
     setup_logging("upload_i2c_readings.log")
     config = read_i2c_upload_config()
     network_config = read_network_conf()
-    api_password = require_nonempty(read_api_password(), "client API password")
+    api_password = read_service_credential("api_password")
     client_version = read_client_version_text(str(OVERLAY_ROOT))
 
     print(

@@ -16,6 +16,7 @@ In the current design:
 
 - the client must authenticate to the server API
 - the client stores the client API password on disk at `/sensos/keys/api_password`
+- upload and status services receive that password through systemd `LoadCredential=` and do not read the stored secret directly
 - the client also stores WireGuard material on disk
 
 That means:
