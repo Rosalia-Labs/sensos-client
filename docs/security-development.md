@@ -24,6 +24,10 @@ That means:
 - if an attacker gains local access to the device, they can likely recover the credential material needed to act as a client
 - if an attacker can image or copy the device storage, they can likely recover the same material offline
 
+The unattended `sensos-runner` account is not a sudoer. Services receive only
+their declared groups, systemd credentials, and narrowly scoped capabilities.
+Interactive configuration and repair remain the responsibility of `sensos-admin`.
+
 This is not a bug in one script. It is a consequence of the trust model.
 
 ## What The Client Secret Buys An Attacker

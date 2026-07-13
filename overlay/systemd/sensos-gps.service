@@ -7,6 +7,11 @@ StartLimitBurst=5
 [Service]
 Type=simple
 User=sensos-runner
+Group=sensos-data
+UMask=0002
+CapabilityBoundingSet=CAP_SYS_TIME
+AmbientCapabilities=CAP_SYS_TIME
+NoNewPrivileges=true
 ExecStart=/sensos/python/venv/bin/python /sensos/libexec/sensos-gps.py
 WorkingDirectory=/sensos/data
 StandardOutput=journal

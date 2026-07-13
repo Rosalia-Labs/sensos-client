@@ -6,6 +6,7 @@ import importlib.util
 import io
 import os
 import random
+import re
 import sqlite3
 import sys
 import tempfile
@@ -186,6 +187,64 @@ class ApiContractTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"CREDENTIALS_DIRECTORY": tmpdir}):
                 self.assertEqual(
                     utils.read_service_credential("api_password"), "service-secret"
+                )
+
+    def test_gps_service_uses_only_clock_capability(self):
+        unit = (OVERLAY_ROOT / "systemd" / "sensos-gps.service").read_text()
+        worker = (OVERLAY_ROOT / "libexec" / "sensos-gps.py").read_text()
+
+        self.assertIn("User=sensos-runner", unit)
+        self.assertIn("Group=sensos-data", unit)
+        self.assertIn("UMask=0002", unit)
+        self.assertIn("CapabilityBoundingSet=CAP_SYS_TIME", unit)
+        self.assertIn("AmbientCapabilities=CAP_SYS_TIME", unit)
+        self.assertIn("NoNewPrivileges=true", unit)
+        self.assertIn("time.clock_settime", worker)
+        self.assertNotIn("sudo", worker)
+        self.assertNotIn("UTILS_MODULE.create_dir", worker)
+        self.assertNotIn("UTILS_MODULE.write_file", worker)
+
+    def test_runner_has_no_sudo_membership_or_sudoers_rule(self):
+        setup_users = (REPO_ROOT / "setup" / "02-users").read_text()
+
+        self.assertNotIn("install_sudoers_rule sensos-runner", setup_users)
+        self.assertIn("remove_membership sensos-runner sudo", setup_users)
+        self.assertIn("remove_sudoers_rule sensos-runner", setup_users)
+
+    def test_runner_service_entrypoints_do_not_escalate(self):
+        systemd_dir = OVERLAY_ROOT / "systemd"
+        forbidden = (
+            re.compile(r"\bsudo\b"),
+            re.compile(r"\bprivileged_shell\b"),
+            re.compile(r"UTILS_MODULE\.(?:create_dir|write_file)"),
+        )
+
+        for unit_path in systemd_dir.glob("*.service"):
+            unit = unit_path.read_text()
+            if "User=sensos-runner" not in unit:
+                continue
+            exec_start = next(
+                line.split("=", 1)[1]
+                for line in unit.splitlines()
+                if line.startswith("ExecStart=")
+            )
+            deployed_path = next(
+                (
+                    part
+                    for part in reversed(exec_start.split())
+                    if part.startswith("/sensos/")
+                    and (OVERLAY_ROOT / part.removeprefix("/sensos/")).is_file()
+                ),
+                None,
+            )
+            self.assertIsNotNone(deployed_path, unit_path.name)
+            relative_path = deployed_path.removeprefix("/sensos/")
+            entrypoint = OVERLAY_ROOT / relative_path
+            source = entrypoint.read_text()
+            for pattern in forbidden:
+                self.assertIsNone(
+                    pattern.search(source),
+                    f"{unit_path.name} entrypoint {relative_path} matches {pattern.pattern}",
                 )
 
     def test_register_peer_parses_current_response_and_registers_wireguard_key(self):

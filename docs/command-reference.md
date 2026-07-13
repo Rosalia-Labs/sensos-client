@@ -823,6 +823,7 @@ Behavior:
 - installs optional GPS Python dependencies on demand before enabling the GPS service
 - can update time and location automatically from GPS
 - when NTP does not appear healthy, a valid GPS fix becomes the active time source
+- runs GPS polling as `sensos-runner:sensos-data`; clock adjustment receives only `CAP_SYS_TIME`, and GPS runtime files are written without sudo or ownership repair
 - reports a GPS/NTP time conflict instead of overriding a synchronized clock when the difference is too large
 - enables `sensos-gps.service` for future boot by default
 - leaves the GPS service stopped unless `--start-service` is supplied

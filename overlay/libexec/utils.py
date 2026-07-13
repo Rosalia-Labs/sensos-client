@@ -188,6 +188,26 @@ def read_service_credential(name):
     return value
 
 
+def write_runtime_file(filepath, content, mode=0o664):
+    """Atomically write service-owned runtime state without privilege escalation."""
+    filepath = os.path.abspath(os.fspath(filepath))
+    parent = os.path.dirname(filepath)
+    ensure_runtime_dir(parent)
+    fd, tmp_path = tempfile.mkstemp(prefix=f".{os.path.basename(filepath)}.", dir=parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.chmod(tmp_path, mode)
+        os.replace(tmp_path, filepath)
+        tmp_path = None
+    finally:
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
+
+
 def read_file(filepath):
     output, rc = privileged_shell(f"cat {shlex.quote(str(filepath))}", silent=True)
     return output.strip() if output else None

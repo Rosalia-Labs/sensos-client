@@ -10,8 +10,15 @@ CLIENT_ROOT="${SENSOS_REPO_ROOT:-${REPO_ROOT}}"
 PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
 ADMIN_AUTHORIZED_KEYS_SOURCE="${CLIENT_ROOT}/keys/sensos_admin_authorized_keys"
 
-SENSOS_GROUPS=(
+SENSOS_ADMIN_GROUPS=(
     sudo
+    dialout
+    plugdev
+    netdev
+    audio
+)
+
+SENSOS_RUNNER_GROUPS=(
     dialout
     plugdev
     netdev
@@ -116,6 +123,16 @@ ensure_membership() {
     fi
 }
 
+remove_membership() {
+    local user_name="$1"
+    local group_name="$2"
+
+    if id -nG "${user_name}" | tr ' ' '\n' | grep -Fxq "${group_name}"; then
+        log "removing ${user_name} from ${group_name}"
+        gpasswd -d "${user_name}" "${group_name}" >/dev/null
+    fi
+}
+
 install_sudoers_rule() {
     local user_name="$1"
     local sudoers_dir="/etc/sudoers.d"
@@ -124,6 +141,16 @@ install_sudoers_rule() {
     install -d -m 0750 "${sudoers_dir}"
     printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${user_name}" >"${sudoers_file}"
     chmod 0440 "${sudoers_file}"
+}
+
+remove_sudoers_rule() {
+    local user_name="$1"
+    local sudoers_file="/etc/sudoers.d/${user_name}"
+
+    if [[ -e "${sudoers_file}" ]]; then
+        log "removing unrestricted sudoers rule for ${user_name}"
+        rm -f "${sudoers_file}"
+    fi
 }
 
 lock_user_password() {
@@ -160,7 +187,7 @@ main() {
         ensure_group_exists "${group_name}"
     done
 
-    for group_name in "${SENSOS_GROUPS[@]}"; do
+    for group_name in "${SENSOS_ADMIN_GROUPS[@]}" "${SENSOS_RUNNER_GROUPS[@]}"; do
         require_group_exists "${group_name}"
     done
 
@@ -176,8 +203,11 @@ main() {
         ensure_membership sensos-runner "${group_name}"
     done
 
-    for group_name in "${SENSOS_GROUPS[@]}"; do
+    for group_name in "${SENSOS_ADMIN_GROUPS[@]}"; do
         ensure_membership sensos-admin "${group_name}"
+    done
+
+    for group_name in "${SENSOS_RUNNER_GROUPS[@]}"; do
         ensure_membership sensos-runner "${group_name}"
     done
 
@@ -187,7 +217,8 @@ main() {
     done
 
     install_sudoers_rule sensos-admin
-    install_sudoers_rule sensos-runner
+    remove_membership sensos-runner sudo
+    remove_sudoers_rule sensos-runner
 
     lock_user_password sensos-admin
     lock_user_password sensos-runner

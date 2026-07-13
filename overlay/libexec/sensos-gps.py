@@ -27,8 +27,8 @@ UTILS_SPEC.loader.exec_module(UTILS_MODULE)
 
 read_kv_config = UTILS_MODULE.read_kv_config
 setup_logging = UTILS_MODULE.setup_logging
-create_dir = UTILS_MODULE.create_dir
-write_file = UTILS_MODULE.write_file
+ensure_runtime_dir = UTILS_MODULE.ensure_runtime_dir
+write_runtime_file = UTILS_MODULE.write_runtime_file
 
 CONFIG_PATH = CLIENT_ROOT / "etc" / "gps.conf"
 LOCATION_CONF = CLIENT_ROOT / "etc" / "location.conf"
@@ -109,9 +109,8 @@ def read_location() -> tuple[float | None, float | None]:
 
 
 def write_location(latitude: float, longitude: float) -> None:
-    create_dir(str(LOCATION_CONF.parent), owner="sensos-admin", group="sensos-data", mode=0o2775)
     content = f"LATITUDE={latitude:.6f}\nLONGITUDE={longitude:.6f}\n"
-    write_file(str(LOCATION_CONF), content, mode=0o664, user="sensos-admin", group="sensos-data")
+    write_runtime_file(LOCATION_CONF, content)
     print(f"Updated location.conf to ({latitude:.6f}, {longitude:.6f})")
 
 
@@ -159,22 +158,19 @@ def state_lines(
 
 
 def write_state(status: str, message: str, fix: dict[str, object] | None = None) -> None:
-    create_dir(str(STATE_DIR), owner="sensos-admin", group="sensos-data", mode=0o2775)
+    ensure_runtime_dir(STATE_DIR)
     previous = read_kv_config(str(STATE_PATH))
     lines = state_lines(status, message, previous, fix)
     lines.append(f"UPDATED_AT={current_utc().replace(microsecond=0).isoformat().replace('+00:00', 'Z')}")
-    write_file(str(STATE_PATH), "\n".join(lines) + "\n", mode=0o664, user="sensos-admin", group="sensos-data")
+    write_runtime_file(STATE_PATH, "\n".join(lines) + "\n")
 
 
 def set_system_time(gps_time: datetime.datetime) -> None:
     timestamp = gps_time.astimezone(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
-    proc = subprocess.run(
-        ["sudo", "timedatectl", "set-time", timestamp],
-        text=True,
-        capture_output=True,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(proc.stderr.strip() or "failed to set system time from GPS")
+    try:
+        time.clock_settime(time.CLOCK_REALTIME, gps_time.timestamp())
+    except (OSError, PermissionError) as exc:
+        raise RuntimeError(f"failed to set system time from GPS: {exc}") from exc
     print(f"Updated system UTC time from GPS to {timestamp}")
 
 
