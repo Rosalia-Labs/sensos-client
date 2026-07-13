@@ -103,6 +103,38 @@ class ApiContractTests(unittest.TestCase):
         self.assertNotIn("sudo ", launcher)
         self.assertIn("-o sensos-runner -g sensos-data", config)
 
+    def test_audio_pipeline_workers_use_non_escalating_runtime_directories(self):
+        worker_names = (
+            "sensos-compress-audio",
+            "sensos-birdnet",
+            "sensos-thin-data",
+        )
+        launcher_names = (
+            "compress-queued-audio.py",
+            "process-birdnet.py",
+            "thin-data.py",
+        )
+
+        for service_name in worker_names:
+            unit = (OVERLAY_ROOT / "systemd" / f"{service_name}.service").read_text()
+            self.assertIn("User=sensos-runner", unit)
+            self.assertIn("Group=sensos-data", unit)
+            self.assertIn("UMask=0002", unit)
+
+        for launcher_name in launcher_names:
+            launcher = (OVERLAY_ROOT / "libexec" / launcher_name).read_text()
+            self.assertIn("ensure_runtime_dir", launcher)
+            self.assertNotIn("UTILS_MODULE.create_dir", launcher)
+
+    def test_runtime_directory_helper_creates_writable_directory_without_sudo(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target = Path(tmpdir) / "nested" / "runtime"
+            created = Path(utils.ensure_runtime_dir(target))
+
+            self.assertEqual(created, target)
+            self.assertTrue(created.is_dir())
+            self.assertTrue(os.access(created, os.W_OK | os.X_OK))
+
     def test_register_peer_parses_current_response_and_registers_wireguard_key(self):
         response = FakeResponse(
             200,

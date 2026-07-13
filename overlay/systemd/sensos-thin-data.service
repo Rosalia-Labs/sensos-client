@@ -7,6 +7,8 @@ StartLimitBurst=5
 [Service]
 Type=simple
 User=sensos-runner
+Group=sensos-data
+UMask=0002
 ExecStart=/sensos/python/venv/bin/python /sensos/libexec/thin-data.py
 WorkingDirectory=/sensos/data
 StandardOutput=journal

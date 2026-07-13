@@ -27,7 +27,7 @@ assert UTILS_SPEC.loader is not None
 UTILS_SPEC.loader.exec_module(UTILS_MODULE)
 
 setup_logging = UTILS_MODULE.setup_logging
-create_dir = UTILS_MODULE.create_dir
+ensure_runtime_dir = UTILS_MODULE.ensure_runtime_dir
 
 DATA_ROOT = CLIENT_ROOT / "data"
 AUDIO_ROOT = DATA_ROOT / "audio_recordings"
@@ -80,7 +80,7 @@ def free_percent(path: Path) -> float:
 
 
 def connect_db() -> sqlite3.Connection:
-    create_dir(str(STATE_ROOT), "sensos-admin", "sensos-data", 0o2775)
+    ensure_runtime_dir(STATE_ROOT)
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")

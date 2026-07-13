@@ -143,6 +143,29 @@ def create_dir(path, owner="root", group=None, mode=0o755):
         privileged_shell(f"chown {owner}:{group} {shlex.quote(str(path))}", silent=True)
 
 
+def ensure_runtime_dir(path, mode=0o2775):
+    """Create a service-owned directory without escalating or repairing ownership."""
+    path = os.path.abspath(os.fspath(path))
+    os.makedirs(path, mode=mode, exist_ok=True)
+    if os.access(path, os.W_OK | os.X_OK):
+        return path
+
+    st = os.stat(path)
+    try:
+        owner = pwd.getpwuid(st.st_uid).pw_name
+    except KeyError:
+        owner = str(st.st_uid)
+    try:
+        group = grp.getgrgid(st.st_gid).gr_name
+    except KeyError:
+        group = str(st.st_gid)
+    raise PermissionError(
+        f"Runtime directory is not writable: path={path} "
+        f"owner={owner} group={group} mode={stat.S_IMODE(st.st_mode):04o} "
+        f"euid={os.geteuid()} egid={os.getegid()} groups={os.getgroups()}"
+    )
+
+
 def read_file(filepath):
     output, rc = privileged_shell(f"cat {shlex.quote(str(filepath))}", silent=True)
     return output.strip() if output else None

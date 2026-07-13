@@ -33,7 +33,7 @@ UTILS_SPEC.loader.exec_module(UTILS_MODULE)
 
 read_kv_config = UTILS_MODULE.read_kv_config
 setup_logging = UTILS_MODULE.setup_logging
-create_dir = UTILS_MODULE.create_dir
+ensure_runtime_dir = UTILS_MODULE.ensure_runtime_dir
 
 CLIENT_ROOT_PATH = Path(CLIENT_ROOT)
 INPUT_ROOT = CLIENT_ROOT_PATH / "data" / "audio_recordings" / "compressed"
@@ -238,8 +238,8 @@ def invoke_birdnet_top_labels(
 
 
 def ensure_runtime_dirs() -> None:
-    create_dir(str(STATE_ROOT), "sensos-admin", "sensos-data", 0o2775)
-    create_dir(str(OUTPUT_ROOT), "sensos-admin", "sensos-data", 0o2775)
+    ensure_runtime_dir(STATE_ROOT)
+    ensure_runtime_dir(OUTPUT_ROOT)
 
 
 def ensure_state_file_permissions() -> None:
@@ -516,7 +516,7 @@ def write_detection_clips(
         if is_human_label(detection.label):
             continue
         out_dir = label_output_dir(source_path, detection.label)
-        create_dir(str(out_dir), "sensos-admin", "sensos-data", 0o2775)
+        ensure_runtime_dir(out_dir)
         start_sec = detection.start_frame / sample_rate
         end_sec = detection.end_frame / sample_rate
         filename = (
