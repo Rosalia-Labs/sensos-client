@@ -135,6 +135,24 @@ class ApiContractTests(unittest.TestCase):
             self.assertTrue(created.is_dir())
             self.assertTrue(os.access(created, os.W_OK | os.X_OK))
 
+    def test_i2c_pipeline_uses_runner_owned_runtime_directory(self):
+        for service_name in ("sensos-read-i2c", "sensos-upload-i2c"):
+            unit = (OVERLAY_ROOT / "systemd" / f"{service_name}.service").read_text()
+            self.assertIn("User=sensos-runner", unit)
+            self.assertIn("Group=sensos-data", unit)
+            self.assertIn("UMask=0002", unit)
+
+        reader = (OVERLAY_ROOT / "libexec" / "read-i2c-sensors.py").read_text()
+        data_module = (OVERLAY_ROOT / "libexec" / "i2c_data.py").read_text()
+        sensor_config = (OVERLAY_ROOT / "bin" / "config-i2c-sensors").read_text()
+        upload_config = (OVERLAY_ROOT / "bin" / "config-i2c-uploads").read_text()
+
+        self.assertIn("ensure_runtime_dir", reader)
+        self.assertNotIn("UTILS_MODULE.create_dir", reader)
+        self.assertIn("ensure_runtime_dir(DB_PATH.parent)", data_module)
+        self.assertIn("-o sensos-runner -g sensos-data", sensor_config)
+        self.assertIn("-o sensos-runner -g sensos-data", upload_config)
+
     def test_register_peer_parses_current_response_and_registers_wireguard_key(self):
         response = FakeResponse(
             200,

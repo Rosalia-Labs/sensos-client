@@ -533,7 +533,7 @@ Behavior:
 - defaults to `INTERVAL_SEC=300` and `SUBSAMPLES_PER_INTERVAL=5`
 - supports `SUBSAMPLES_PER_INTERVAL` to take evenly spaced subsamples within each interval and store averaged values
 - automatically applies Raspberry Pi host I2C enablement when needed
-- ensures `/sensos/data/microenv` exists with shared permissions
+- provisions `/sensos/data/microenv` as `sensos-runner:sensos-data`, mode `2775`; the reader and uploader use `UMask=0002` and validate the runtime directory without repairing ownership
 - installs optional I2C/GPIO Python dependencies on demand before enabling the reader service
 - enables the reader service for future boot by default
 - leaves the reader service stopped unless `--start-service` is supplied
