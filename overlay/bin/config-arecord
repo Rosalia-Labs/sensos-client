@@ -453,10 +453,13 @@ MAX_TIME=${max_time}
 BASE_DIR="${base_dir}"
 EOF
 
-    mkdir -p "${base_dir}"
-    mkdir -p "${base_dir}/queued" "${base_dir}/compressed" "${base_dir}/processed"
-    sudo chown -R sensos-admin:sensos-data "${base_dir}"
-    sudo chmod -R 2775 "${base_dir}"
+    # Runtime recording data belongs to the service account. The setgid bit
+    # keeps all descendants in sensos-data so sensos-admin retains group access.
+    sudo install -d -m 2775 -o sensos-runner -g sensos-data \
+        "${base_dir}" \
+        "${base_dir}/queued" \
+        "${base_dir}/compressed" \
+        "${base_dir}/processed"
     echo "Configuration written to ${config_file}"
 }
 

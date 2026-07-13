@@ -92,6 +92,17 @@ class ApiContractTests(unittest.TestCase):
         self.assertIn("NoNewPrivileges=true", unit)
         self.assertNotIn("-Z root", launcher)
 
+    def test_audio_service_writes_as_runner_without_runtime_sudo(self):
+        unit = (OVERLAY_ROOT / "systemd" / "sensos-record-audio.service").read_text()
+        launcher = (OVERLAY_ROOT / "libexec" / "start-arecord.sh").read_text()
+        config = (OVERLAY_ROOT / "bin" / "config-arecord").read_text()
+
+        self.assertIn("User=sensos-runner", unit)
+        self.assertIn("Group=sensos-data", unit)
+        self.assertIn("UMask=0002", unit)
+        self.assertNotIn("sudo ", launcher)
+        self.assertIn("-o sensos-runner -g sensos-data", config)
+
     def test_register_peer_parses_current_response_and_registers_wireguard_key(self):
         response = FakeResponse(
             200,
