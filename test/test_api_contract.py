@@ -104,14 +104,17 @@ class ApiContractTests(unittest.TestCase):
         self.assertNotIn("sudo ", launcher)
         self.assertIn("-o sensos-runner -g sensos-data", config)
 
-    def test_storage_provisions_runtime_paths_without_recursive_repair(self):
+    def test_storage_repairs_runtime_paths_with_type_appropriate_modes(self):
         config = (OVERLAY_ROOT / "bin" / "config-storage").read_text()
         storage_ops = (OVERLAY_ROOT / "libexec" / "data-storage-ops.sh").read_text()
 
         self.assertIn('"${CLIENT_ROOT}/data/microenv"', config)
         self.assertIn("-o sensos-runner -g sensos-data", config)
-        self.assertNotIn("chown -R", config)
         self.assertNotIn("chmod -R", config)
+        self.assertIn("chown -R sensos-runner:sensos-data", config)
+        self.assertIn('-type d -exec chmod 2775 {} +', config)
+        self.assertIn('-type f -exec chmod 0664 {} +', config)
+        self.assertNotIn('chown -R sensos-admin:sensos-data', config)
         self.assertIn('"microenv"', storage_ops)
         self.assertIn("-o sensos-runner -g sensos-data", storage_ops)
         self.assertNotIn("chown -R", storage_ops)

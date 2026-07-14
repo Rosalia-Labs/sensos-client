@@ -160,6 +160,11 @@ ensure_data_layout() {
         "${CLIENT_ROOT}/data/birdnet"
         "${CLIENT_ROOT}/data/microenv"
     )
+    local -a runtime_roots=(
+        "${CLIENT_ROOT}/data/audio_recordings"
+        "${CLIENT_ROOT}/data/birdnet"
+        "${CLIENT_ROOT}/data/microenv"
+    )
 
     echo "🔧 Ensuring SensOS data layout and permissions..."
     for dir_path in "${shared_dirs[@]}"; do
@@ -167,6 +172,15 @@ ensure_data_layout() {
     done
     for dir_path in "${runtime_dirs[@]}"; do
         sudo install -d -m 2775 -o sensos-runner -g sensos-data "${dir_path}"
+    done
+
+    # config-storage also serves as the explicit repair operation for permission
+    # drift below the worker-owned data roots. Keep directory and file modes
+    # separate so data files never acquire execute bits.
+    for dir_path in "${runtime_roots[@]}"; do
+        sudo chown -R sensos-runner:sensos-data "${dir_path}"
+        sudo find "${dir_path}" -type d -exec chmod 2775 {} +
+        sudo find "${dir_path}" -type f -exec chmod 0664 {} +
     done
 }
 

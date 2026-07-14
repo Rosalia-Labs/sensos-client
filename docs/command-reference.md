@@ -338,7 +338,7 @@ Behavior:
 - `--yes` skips confirmations, but only when paired with an explicit destructive action such as `--wipe`
 - without `--wipe`, the command will mount an already prepared partition when possible, but it will not silently repartition a disk in non-interactive use
 - this is the provisioning step for data storage; it is not a replacement for `archive-mode`
-- provisions shared roots as `sensos-admin:sensos-data` and worker runtime directories as `sensos-runner:sensos-data`, mode `2775`, without recursively changing existing data-file ownership or modes
+- provisions shared roots as `sensos-admin:sensos-data`; recursively repairs the known worker runtime trees as `sensos-runner:sensos-data`, using mode `2775` for directories and `0664` for files
 - use `config-storage` when you are setting up or changing where `/sensos/data` lives
 - use `archive-mode` when storage is already configured and you need a safe temporary archive window to copy data off, swap media, or clear `/sensos/data`
 
