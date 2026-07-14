@@ -51,9 +51,7 @@ echo "Wrote config to ${config_path}:"
 cat "${config_path}"
 
 output_dir="${CLIENT_ROOT}/data/microenv"
-mkdir -p "${output_dir}"
-sudo chown -R sensos-admin:sensos-data "${output_dir}"
-sudo chmod -R 2775 "${output_dir}"
+sudo install -d -m 2775 -o sensos-runner -g sensos-data "${output_dir}"
 
 sudo systemctl daemon-reload
 

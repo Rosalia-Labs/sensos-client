@@ -32,7 +32,7 @@ assert UTILS_SPEC.loader is not None
 UTILS_SPEC.loader.exec_module(UTILS_MODULE)
 
 setup_logging = UTILS_MODULE.setup_logging
-create_dir = UTILS_MODULE.create_dir
+ensure_runtime_dir = UTILS_MODULE.ensure_runtime_dir
 
 AUDIO_ROOT = CLIENT_ROOT / "data" / "audio_recordings"
 QUEUED_ROOT = AUDIO_ROOT / "queued"
@@ -45,13 +45,7 @@ ERROR_SLEEP_SEC = int(os.environ.get("AUDIO_COMPRESS_ERROR_SLEEP_SEC", "10"))
 
 def ensure_runtime_dirs() -> None:
     for root in (AUDIO_ROOT, QUEUED_ROOT, COMPRESSED_ROOT):
-        root.mkdir(parents=True, exist_ok=True)
-        if not os.access(root, os.W_OK | os.X_OK):
-            raise PermissionError(
-                f"Runtime directory is not writable by uid={os.geteuid()}: {root}"
-            )
-
-    create_dir(str(COMPRESSED_ROOT), "sensos-admin", "sensos-data", 0o2775)
+        ensure_runtime_dir(root)
 
 
 def is_file_stable(path: Path) -> bool:
@@ -110,7 +104,7 @@ def prune_empty_dirs(start: Path) -> None:
 
 def compress_once(source_path: Path) -> None:
     target_path = compressed_path_for(source_path)
-    create_dir(str(target_path.parent), "sensos-admin", "sensos-data", 0o2775)
+    ensure_runtime_dir(target_path.parent)
     audio, sample_rate = sf.read(source_path, dtype="int32", always_2d=True)
     sf.write(target_path, audio, sample_rate, format="FLAC")
     try:

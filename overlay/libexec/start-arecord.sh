@@ -3,6 +3,7 @@
 # Copyright (c) 2025 Rosalia Labs LLC
 
 set -u
+umask 0002
 
 SCRIPT_FILE="$(realpath "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_FILE}")" && pwd)"
@@ -78,17 +79,36 @@ location_token() {
 LOCATION_TOKEN="$(location_token)"
 OUTPUT_PATTERN="${BASE_DIR}/queued/%Y/%m/%d/sensos_%Y-%m-%dT%H-%M-%SZ${LOCATION_TOKEN}.wav"
 
-mkdir -p "$BASE_DIR"
-mkdir -p "$BASE_DIR/queued" "$BASE_DIR/compressed" "$BASE_DIR/processed"
-sudo chown -R sensos-admin:sensos-data "$BASE_DIR"
-sudo chmod -R 2775 "$BASE_DIR"
+permission_diagnostics() {
+    local target="$1"
+
+    echo "ERROR: recording path is not writable by $(id -un): ${target}" >&2
+    stat -c '  path=%n owner=%U group=%G mode=%A (%a)' "${target}" >&2 2>/dev/null || true
+    findmnt -T "${target}" -n -o 'TARGET,SOURCE,FSTYPE,OPTIONS' >&2 2>/dev/null || true
+    echo "  identity=$(id)" >&2
+}
+
+mkdir -p "$BASE_DIR" "$BASE_DIR/queued" "$BASE_DIR/compressed" "$BASE_DIR/processed" || {
+    permission_diagnostics "$BASE_DIR"
+    exit 1
+}
+
+for runtime_dir in "$BASE_DIR" "$BASE_DIR/queued" "$BASE_DIR/compressed" "$BASE_DIR/processed"; do
+    if [[ ! -w "${runtime_dir}" ]]; then
+        permission_diagnostics "${runtime_dir}"
+        exit 1
+    fi
+done
 
 ensure_output_dirs() {
     local day_offset queued_dir
 
     for day_offset in 0 1; do
         queued_dir="${BASE_DIR}/queued/$(date -u -d "+${day_offset} day" +%Y/%m/%d)"
-        sudo install -d -m 2775 -o sensos-admin -g sensos-data "${queued_dir}"
+        mkdir -p "${queued_dir}" || {
+            permission_diagnostics "$(dirname "${queued_dir}")"
+            return 1
+        }
     done
 }
 
@@ -99,7 +119,7 @@ refresh_output_dirs() {
     done
 }
 
-ensure_output_dirs
+ensure_output_dirs || exit 1
 refresh_output_dirs &
 DIR_WATCH_PID=$!
 

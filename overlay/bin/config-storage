@@ -147,24 +147,41 @@ require_storage_provisioning_tools() {
 
 ensure_data_layout() {
     local dir_path
-    local -a required_dirs=(
+    local -a shared_dirs=(
         "${CLIENT_ROOT}/data"
         "${CLIENT_ROOT}/etc"
         "${CLIENT_ROOT}/log"
+    )
+    local -a runtime_dirs=(
         "${CLIENT_ROOT}/data/audio_recordings"
         "${CLIENT_ROOT}/data/audio_recordings/queued"
         "${CLIENT_ROOT}/data/audio_recordings/compressed"
         "${CLIENT_ROOT}/data/audio_recordings/processed"
         "${CLIENT_ROOT}/data/birdnet"
+        "${CLIENT_ROOT}/data/microenv"
+    )
+    local -a runtime_roots=(
+        "${CLIENT_ROOT}/data/audio_recordings"
+        "${CLIENT_ROOT}/data/birdnet"
+        "${CLIENT_ROOT}/data/microenv"
     )
 
     echo "🔧 Ensuring SensOS data layout and permissions..."
-    for dir_path in "${required_dirs[@]}"; do
-        sudo mkdir -p "${dir_path}"
+    for dir_path in "${shared_dirs[@]}"; do
+        sudo install -d -m 2775 -o sensos-admin -g sensos-data "${dir_path}"
     done
-    sudo chown -R sensos-admin:sensos-data "${CLIENT_ROOT}/data" "${CLIENT_ROOT}/etc" "${CLIENT_ROOT}/log"
-    sudo chmod -R g+ws "${CLIENT_ROOT}/data" "${CLIENT_ROOT}/etc" "${CLIENT_ROOT}/log"
-    sudo chmod -R +rX "${CLIENT_ROOT}/data" "${CLIENT_ROOT}/etc" "${CLIENT_ROOT}/log"
+    for dir_path in "${runtime_dirs[@]}"; do
+        sudo install -d -m 2775 -o sensos-runner -g sensos-data "${dir_path}"
+    done
+
+    # config-storage also serves as the explicit repair operation for permission
+    # drift below the worker-owned data roots. Keep directory and file modes
+    # separate so data files never acquire execute bits.
+    for dir_path in "${runtime_roots[@]}"; do
+        sudo chown -R sensos-runner:sensos-data "${dir_path}"
+        sudo find "${dir_path}" -type d -exec chmod 2775 {} +
+        sudo find "${dir_path}" -type f -exec chmod 0664 {} +
+    done
 }
 
 root_mount_source() {
@@ -476,8 +493,6 @@ write_storage_metadata() {
 }
 
 finalize_mount_permissions() {
-    sudo chown -R sensos-admin:sensos-data "${DATA_MOUNT}"
-    sudo chmod -R 2775 "${DATA_MOUNT}"
     ensure_data_layout
 }
 

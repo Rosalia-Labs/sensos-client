@@ -6,6 +6,8 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
+User=sensos-runner
+Group=sensos-data
 EnvironmentFile=-/sensos/log/network_capture/active.env
 ExecStart=/sensos/libexec/start-network-capture.sh
 SuccessExitStatus=143

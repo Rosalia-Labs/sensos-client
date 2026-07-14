@@ -16,12 +16,17 @@ In the current design:
 
 - the client must authenticate to the server API
 - the client stores the client API password on disk at `/sensos/keys/api_password`
+- upload and status services receive that password through systemd `LoadCredential=` and do not read the stored secret directly
 - the client also stores WireGuard material on disk
 
 That means:
 
 - if an attacker gains local access to the device, they can likely recover the credential material needed to act as a client
 - if an attacker can image or copy the device storage, they can likely recover the same material offline
+
+The unattended `sensos-runner` account is not a sudoer. Services receive only
+their declared groups, systemd credentials, and narrowly scoped capabilities.
+Interactive configuration and repair remain the responsibility of `sensos-admin`.
 
 This is not a bug in one script. It is a consequence of the trust model.
 

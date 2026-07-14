@@ -24,6 +24,8 @@ Privilege model:
 
 - use `packet-tracing` for normal operations
 - `packet-tracing start`, `status`, and `stop` handle `sudo` internally for service control
+- packet capture itself runs as `sensos-runner:sensos-data`, not root
+- the service receives only `CAP_NET_ADMIN` and `CAP_NET_RAW` for packet capture
 - `report-network-capture` is read-only and does not self-elevate
 - saved reports and retained session data are kept writable for the shared admin/data group so `packet-tracing report --save`, `packet-tracing report --cleanup`, and `packet-tracing cleanup` do not require you to guess which helper needs `sudo`
 

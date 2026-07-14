@@ -338,6 +338,7 @@ Behavior:
 - `--yes` skips confirmations, but only when paired with an explicit destructive action such as `--wipe`
 - without `--wipe`, the command will mount an already prepared partition when possible, but it will not silently repartition a disk in non-interactive use
 - this is the provisioning step for data storage; it is not a replacement for `archive-mode`
+- provisions shared roots as `sensos-admin:sensos-data`; recursively repairs the known worker runtime trees as `sensos-runner:sensos-data`, using mode `2775` for directories and `0664` for files
 - use `config-storage` when you are setting up or changing where `/sensos/data` lives
 - use `archive-mode` when storage is already configured and you need a safe temporary archive window to copy data off, swap media, or clear `/sensos/data`
 
@@ -415,6 +416,7 @@ Behavior:
 - if required recording selections are missing and stdin is not interactive, exits with a clear missing-flags error
 - may ask to stop active recording/compression/thinning services before reconfiguring when run interactively
 - writes recording config and can enable/start the recording pipeline services
+- provisions the recording tree as `sensos-runner:sensos-data` with setgid directories; recording, compression, BirdNET processing, and thinning write with `UMask=0002` and validate writable runtime directories without repairing ownership at service startup
 - `--enable-service` enables `sensos-record-audio.service`, `sensos-compress-audio.service`, and `sensos-thin-data.service` for future boot
 - `--start-service` is what starts those services immediately; without it, `config-arecord` leaves them stopped at the end
 - later `./install` and `./upgrade` runs preserve or disable those three audio services as a group based on whether `/sensos/etc/arecord.conf` exists; they do not implicitly start disabled services, but active restart-safe SensOS worker services are restarted during upgrade so new code takes effect
@@ -532,7 +534,7 @@ Behavior:
 - defaults to `INTERVAL_SEC=300` and `SUBSAMPLES_PER_INTERVAL=5`
 - supports `SUBSAMPLES_PER_INTERVAL` to take evenly spaced subsamples within each interval and store averaged values
 - automatically applies Raspberry Pi host I2C enablement when needed
-- ensures `/sensos/data/microenv` exists with shared permissions
+- provisions `/sensos/data/microenv` as `sensos-runner:sensos-data`, mode `2775`; the reader and uploader use `UMask=0002` and validate the runtime directory without repairing ownership
 - installs optional I2C/GPIO Python dependencies on demand before enabling the reader service
 - enables the reader service for future boot by default
 - leaves the reader service stopped unless `--start-service` is supplied
@@ -822,6 +824,7 @@ Behavior:
 - installs optional GPS Python dependencies on demand before enabling the GPS service
 - can update time and location automatically from GPS
 - when NTP does not appear healthy, a valid GPS fix becomes the active time source
+- runs GPS polling as `sensos-runner:sensos-data`; clock adjustment receives only `CAP_SYS_TIME`, and GPS runtime files are written without sudo or ownership repair
 - reports a GPS/NTP time conflict instead of overriding a synchronized clock when the difference is too large
 - enables `sensos-gps.service` for future boot by default
 - leaves the GPS service stopped unless `--start-service` is supplied

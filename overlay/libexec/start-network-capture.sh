@@ -42,8 +42,9 @@ main() {
     require_positive_int "${ROTATE_FILE_COUNT}" "SENSOS_NETWORK_CAPTURE_FILE_COUNT"
     require_positive_int "${BUFFER_KIB}" "SENSOS_NETWORK_CAPTURE_BUFFER_KIB"
 
-    install -d -m 2775 "${CAPTURE_ROOT}"
-    install -d -m 2775 "${PCAP_DIR}"
+    mkdir -p "${CAPTURE_ROOT}" "${PCAP_DIR}"
+    [[ -w "${CAPTURE_ROOT}" ]] || die "capture root is not writable: ${CAPTURE_ROOT}"
+    [[ -w "${PCAP_DIR}" ]] || die "pcap directory is not writable: ${PCAP_DIR}"
 
     log "starting tcpdump on interface ${INTERFACE_NAME}; snaplen=${SNAPLEN_BYTES}B rotation=${ROTATE_FILE_COUNT}x${ROTATE_FILE_MB}MB root=${CAPTURE_ROOT}"
 
@@ -52,7 +53,6 @@ main() {
         -nn \
         -p \
         -U \
-        -Z root \
         -B "${BUFFER_KIB}" \
         -s "${SNAPLEN_BYTES}" \
         -y LINUX_SLL \

@@ -5,6 +5,8 @@ After=multi-user.target
 [Service]
 Type=simple
 User=sensos-runner
+Group=sensos-data
+UMask=0002
 ExecStart=/sensos/python/venv/bin/python /sensos/libexec/read-i2c-sensors.py
 WorkingDirectory=/sensos/data
 StandardOutput=journal

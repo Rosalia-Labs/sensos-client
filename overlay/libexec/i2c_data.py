@@ -7,6 +7,8 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
+from utils import ensure_runtime_dir
+
 
 CLIENT_ROOT = Path(os.environ.get("SENSOS_CLIENT_ROOT", "/sensos"))
 DB_PATH = CLIENT_ROOT / "data" / "microenv" / "i2c_readings.db"
@@ -16,7 +18,7 @@ def utcnow_text() -> str:
 
 
 def connect_db() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ensure_runtime_dir(DB_PATH.parent)
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     ensure_state_file_permissions()

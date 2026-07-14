@@ -6,6 +6,7 @@ import importlib.util
 import io
 import os
 import random
+import re
 import sqlite3
 import sys
 import tempfile
@@ -80,6 +81,201 @@ class ApiContractTests(unittest.TestCase):
     def test_contract_harness_overrides_client_root_to_repo_overlay(self):
         self.assertEqual(os.environ.get("SENSOS_CLIENT_ROOT"), str(OVERLAY_ROOT))
         self.assertTrue(str(utils.NETWORK_CONF).startswith(str(OVERLAY_ROOT)))
+
+    def test_network_capture_service_runs_as_runner_with_narrow_capabilities(self):
+        unit = (OVERLAY_ROOT / "systemd" / "sensos-network-capture.service").read_text()
+        launcher = (OVERLAY_ROOT / "libexec" / "start-network-capture.sh").read_text()
+
+        self.assertIn("User=sensos-runner", unit)
+        self.assertIn("Group=sensos-data", unit)
+        self.assertIn("CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW", unit)
+        self.assertIn("AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW", unit)
+        self.assertIn("NoNewPrivileges=true", unit)
+        self.assertNotIn("-Z root", launcher)
+
+    def test_audio_service_writes_as_runner_without_runtime_sudo(self):
+        unit = (OVERLAY_ROOT / "systemd" / "sensos-record-audio.service").read_text()
+        launcher = (OVERLAY_ROOT / "libexec" / "start-arecord.sh").read_text()
+        config = (OVERLAY_ROOT / "bin" / "config-arecord").read_text()
+
+        self.assertIn("User=sensos-runner", unit)
+        self.assertIn("Group=sensos-data", unit)
+        self.assertIn("UMask=0002", unit)
+        self.assertNotIn("sudo ", launcher)
+        self.assertIn("-o sensos-runner -g sensos-data", config)
+
+    def test_storage_repairs_runtime_paths_with_type_appropriate_modes(self):
+        config = (OVERLAY_ROOT / "bin" / "config-storage").read_text()
+        storage_ops = (OVERLAY_ROOT / "libexec" / "data-storage-ops.sh").read_text()
+
+        self.assertIn('"${CLIENT_ROOT}/data/microenv"', config)
+        self.assertIn("-o sensos-runner -g sensos-data", config)
+        self.assertNotIn("chmod -R", config)
+        self.assertIn("chown -R sensos-runner:sensos-data", config)
+        self.assertIn('-type d -exec chmod 2775 {} +', config)
+        self.assertIn('-type f -exec chmod 0664 {} +', config)
+        self.assertNotIn('chown -R sensos-admin:sensos-data', config)
+        self.assertIn('"microenv"', storage_ops)
+        self.assertIn("-o sensos-runner -g sensos-data", storage_ops)
+        self.assertNotIn("chown -R", storage_ops)
+
+    def test_data_generators_reexec_as_runner_without_privileged_writes(self):
+        wav_generator = (REPO_ROOT / "test" / "generate-queued-wav").read_text()
+        i2c_generator = (REPO_ROOT / "test" / "generate-fake-i2c-readings").read_text()
+
+        for generator in (wav_generator, i2c_generator):
+            self.assertIn('"sudo"', generator)
+            self.assertIn('"-u"', generator)
+            self.assertIn('"sensos-runner"', generator)
+            self.assertIn('"-g"', generator)
+            self.assertIn('"sensos-data"', generator)
+            self.assertIn("os.umask(0o002)", generator)
+
+        self.assertNotIn("write_wav_privileged", wav_generator)
+        self.assertNotIn("ensure_root", i2c_generator)
+
+    def test_audio_pipeline_workers_use_non_escalating_runtime_directories(self):
+        worker_names = (
+            "sensos-compress-audio",
+            "sensos-birdnet",
+            "sensos-thin-data",
+        )
+        launcher_names = (
+            "compress-queued-audio.py",
+            "process-birdnet.py",
+            "thin-data.py",
+        )
+
+        for service_name in worker_names:
+            unit = (OVERLAY_ROOT / "systemd" / f"{service_name}.service").read_text()
+            self.assertIn("User=sensos-runner", unit)
+            self.assertIn("Group=sensos-data", unit)
+            self.assertIn("UMask=0002", unit)
+
+        for launcher_name in launcher_names:
+            launcher = (OVERLAY_ROOT / "libexec" / launcher_name).read_text()
+            self.assertIn("ensure_runtime_dir", launcher)
+            self.assertNotIn("UTILS_MODULE.create_dir", launcher)
+
+    def test_runtime_directory_helper_creates_writable_directory_without_sudo(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target = Path(tmpdir) / "nested" / "runtime"
+            created = Path(utils.ensure_runtime_dir(target))
+
+            self.assertEqual(created, target)
+            self.assertTrue(created.is_dir())
+            self.assertTrue(os.access(created, os.W_OK | os.X_OK))
+
+    def test_i2c_pipeline_uses_runner_owned_runtime_directory(self):
+        for service_name in ("sensos-read-i2c", "sensos-upload-i2c"):
+            unit = (OVERLAY_ROOT / "systemd" / f"{service_name}.service").read_text()
+            self.assertIn("User=sensos-runner", unit)
+            self.assertIn("Group=sensos-data", unit)
+            self.assertIn("UMask=0002", unit)
+
+        reader = (OVERLAY_ROOT / "libexec" / "read-i2c-sensors.py").read_text()
+        data_module = (OVERLAY_ROOT / "libexec" / "i2c_data.py").read_text()
+        sensor_config = (OVERLAY_ROOT / "bin" / "config-i2c-sensors").read_text()
+        upload_config = (OVERLAY_ROOT / "bin" / "config-i2c-uploads").read_text()
+
+        self.assertIn("ensure_runtime_dir", reader)
+        self.assertNotIn("UTILS_MODULE.create_dir", reader)
+        self.assertIn("ensure_runtime_dir(DB_PATH.parent)", data_module)
+        self.assertIn("-o sensos-runner -g sensos-data", sensor_config)
+        self.assertIn("-o sensos-runner -g sensos-data", upload_config)
+
+    def test_service_workers_receive_api_password_as_systemd_credential(self):
+        service_names = (
+            "sensos-upload-i2c",
+            "sensos-upload-birdnet",
+            "sensos-send-status-update",
+        )
+        worker_names = (
+            "upload-i2c-readings.py",
+            "upload-birdnet-results.py",
+            "send_status_update.py",
+        )
+
+        for service_name in service_names:
+            unit = (OVERLAY_ROOT / "systemd" / f"{service_name}.service").read_text()
+            self.assertIn("User=sensos-runner", unit)
+            self.assertIn("Group=sensos-data", unit)
+            self.assertIn(
+                "LoadCredential=api_password:/sensos/keys/api_password", unit
+            )
+
+        for worker_name in worker_names:
+            worker = (OVERLAY_ROOT / "libexec" / worker_name).read_text()
+            self.assertIn('read_service_credential("api_password")', worker)
+            self.assertNotIn("read_api_password()", worker)
+            self.assertNotIn('/keys/api_password', worker)
+
+    def test_service_credential_reader_uses_runtime_directory(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            credential_path = Path(tmpdir) / "api_password"
+            credential_path.write_text("service-secret\n", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"CREDENTIALS_DIRECTORY": tmpdir}):
+                self.assertEqual(
+                    utils.read_service_credential("api_password"), "service-secret"
+                )
+
+    def test_gps_service_uses_only_clock_capability(self):
+        unit = (OVERLAY_ROOT / "systemd" / "sensos-gps.service").read_text()
+        worker = (OVERLAY_ROOT / "libexec" / "sensos-gps.py").read_text()
+
+        self.assertIn("User=sensos-runner", unit)
+        self.assertIn("Group=sensos-data", unit)
+        self.assertIn("UMask=0002", unit)
+        self.assertIn("CapabilityBoundingSet=CAP_SYS_TIME", unit)
+        self.assertIn("AmbientCapabilities=CAP_SYS_TIME", unit)
+        self.assertIn("NoNewPrivileges=true", unit)
+        self.assertIn("time.clock_settime", worker)
+        self.assertNotIn("sudo", worker)
+        self.assertNotIn("UTILS_MODULE.create_dir", worker)
+        self.assertNotIn("UTILS_MODULE.write_file", worker)
+
+    def test_runner_has_no_sudo_membership_or_sudoers_rule(self):
+        setup_users = (REPO_ROOT / "setup" / "02-users").read_text()
+
+        self.assertNotIn("install_sudoers_rule sensos-runner", setup_users)
+        self.assertIn("remove_membership sensos-runner sudo", setup_users)
+        self.assertIn("remove_sudoers_rule sensos-runner", setup_users)
+
+    def test_runner_service_entrypoints_do_not_escalate(self):
+        systemd_dir = OVERLAY_ROOT / "systemd"
+        forbidden = (
+            re.compile(r"\bsudo\b"),
+            re.compile(r"\bprivileged_shell\b"),
+            re.compile(r"UTILS_MODULE\.(?:create_dir|write_file)"),
+        )
+
+        for unit_path in systemd_dir.glob("*.service"):
+            unit = unit_path.read_text()
+            if "User=sensos-runner" not in unit:
+                continue
+            exec_start = next(
+                line.split("=", 1)[1]
+                for line in unit.splitlines()
+                if line.startswith("ExecStart=")
+            )
+            deployed_path = next(
+                (
+                    part
+                    for part in reversed(exec_start.split())
+                    if part.startswith("/sensos/")
+                    and (OVERLAY_ROOT / part.removeprefix("/sensos/")).is_file()
+                ),
+                None,
+            )
+            self.assertIsNotNone(deployed_path, unit_path.name)
+            relative_path = deployed_path.removeprefix("/sensos/")
+            entrypoint = OVERLAY_ROOT / relative_path
+            source = entrypoint.read_text()
+            for pattern in forbidden:
+                self.assertIsNone(
+                    pattern.search(source),
+                    f"{unit_path.name} entrypoint {relative_path} matches {pattern.pattern}",
+                )
 
     def test_register_peer_parses_current_response_and_registers_wireguard_key(self):
         response = FakeResponse(

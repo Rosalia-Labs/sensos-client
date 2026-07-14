@@ -31,14 +31,14 @@ UTILS_SPEC.loader.exec_module(UTILS_MODULE)
 
 read_kv_config = UTILS_MODULE.read_kv_config
 setup_logging = UTILS_MODULE.setup_logging
-create_dir = UTILS_MODULE.create_dir
+ensure_runtime_dir = UTILS_MODULE.ensure_runtime_dir
 
 CONFIG_PATH = CLIENT_ROOT / "etc" / "i2c-sensors.conf"
 config = read_kv_config(str(CONFIG_PATH))
 if not config:
     print(f"Config file missing or empty: {CONFIG_PATH}", file=sys.stderr)
     sys.exit(1)
-create_dir(str((CLIENT_ROOT / "data" / "microenv")), "sensos-admin", "sensos-data", 0o2775)
+ensure_runtime_dir(CLIENT_ROOT / "data" / "microenv")
 
 MAX_ATTEMPTS = 3
 BACKOFF_MULTIPLIER = 2

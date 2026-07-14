@@ -17,7 +17,6 @@ SCRIPT_FILE = Path(__file__).resolve()
 OVERLAY_ROOT = Path(os.environ.get("SENSOS_CLIENT_ROOT", "/sensos"))
 UTILS_FILE = OVERLAY_ROOT / "libexec" / "utils.py"
 CONFIG_FILE = OVERLAY_ROOT / "etc" / "network.conf"
-API_PASS_FILE = OVERLAY_ROOT / "keys" / "api_password"
 
 if not UTILS_FILE.is_file():
     raise RuntimeError(f"Missing utils.py at {UTILS_FILE}")
@@ -30,15 +29,6 @@ UTILS_SPEC.loader.exec_module(UTILS_MODULE)
 for name in dir(UTILS_MODULE):
     if not name.startswith("_"):
         globals()[name] = getattr(UTILS_MODULE, name)
-
-
-def read_required_text(path: Path) -> str:
-    if not path.is_file():
-        raise SystemExit(f"[ERROR] {path} not found.")
-    value = path.read_text(encoding="utf-8").strip()
-    if not value:
-        raise SystemExit(f"[ERROR] {path} is empty.")
-    return value
 
 
 def read_uptime_seconds() -> int:
@@ -137,7 +127,7 @@ def post_status_update(server_ip: str, port: str, peer_uuid: str, api_password: 
 def main() -> int:
     version = read_client_version_text(str(OVERLAY_ROOT))
     config = read_network_conf()
-    api_password = read_required_text(API_PASS_FILE)
+    api_password = read_service_credential("api_password")
     payload, peer_uuid = collect_client_status_payload(config, version)
     server_ip = config["SERVER_WG_IP"]
     server_port = config["SERVER_PORT"]

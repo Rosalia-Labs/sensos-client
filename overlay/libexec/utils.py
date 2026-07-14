@@ -143,6 +143,71 @@ def create_dir(path, owner="root", group=None, mode=0o755):
         privileged_shell(f"chown {owner}:{group} {shlex.quote(str(path))}", silent=True)
 
 
+def ensure_runtime_dir(path, mode=0o2775):
+    """Create a service-owned directory without escalating or repairing ownership."""
+    path = os.path.abspath(os.fspath(path))
+    os.makedirs(path, mode=mode, exist_ok=True)
+    if os.access(path, os.W_OK | os.X_OK):
+        return path
+
+    st = os.stat(path)
+    try:
+        owner = pwd.getpwuid(st.st_uid).pw_name
+    except KeyError:
+        owner = str(st.st_uid)
+    try:
+        group = grp.getgrgid(st.st_gid).gr_name
+    except KeyError:
+        group = str(st.st_gid)
+    raise PermissionError(
+        f"Runtime directory is not writable: path={path} "
+        f"owner={owner} group={group} mode={stat.S_IMODE(st.st_mode):04o} "
+        f"euid={os.geteuid()} egid={os.getegid()} groups={os.getgroups()}"
+    )
+
+
+def read_service_credential(name):
+    """Read a credential supplied to a service by systemd LoadCredential=."""
+    if not name or os.path.basename(name) != name:
+        raise ValueError(f"Invalid service credential name: {name!r}")
+    credentials_dir = os.environ.get("CREDENTIALS_DIRECTORY", "").strip()
+    if not credentials_dir:
+        raise SystemExit(
+            "[ERROR] CREDENTIALS_DIRECTORY is not set; run this worker through its systemd service."
+        )
+    credential_path = os.path.join(credentials_dir, name)
+    try:
+        with open(credential_path, encoding="utf-8") as handle:
+            value = handle.read().strip()
+    except OSError as exc:
+        raise SystemExit(
+            f"[ERROR] Could not read systemd credential {name!r}: {exc}"
+        ) from exc
+    if not value:
+        raise SystemExit(f"[ERROR] Systemd credential {name!r} is empty.")
+    return value
+
+
+def write_runtime_file(filepath, content, mode=0o664):
+    """Atomically write service-owned runtime state without privilege escalation."""
+    filepath = os.path.abspath(os.fspath(filepath))
+    parent = os.path.dirname(filepath)
+    ensure_runtime_dir(parent)
+    fd, tmp_path = tempfile.mkstemp(prefix=f".{os.path.basename(filepath)}.", dir=parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.chmod(tmp_path, mode)
+        os.replace(tmp_path, filepath)
+        tmp_path = None
+    finally:
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
+
+
 def read_file(filepath):
     output, rc = privileged_shell(f"cat {shlex.quote(str(filepath))}", silent=True)
     return output.strip() if output else None
