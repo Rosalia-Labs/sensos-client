@@ -104,6 +104,33 @@ class ApiContractTests(unittest.TestCase):
         self.assertNotIn("sudo ", launcher)
         self.assertIn("-o sensos-runner -g sensos-data", config)
 
+    def test_storage_provisions_runtime_paths_without_recursive_repair(self):
+        config = (OVERLAY_ROOT / "bin" / "config-storage").read_text()
+        storage_ops = (OVERLAY_ROOT / "libexec" / "data-storage-ops.sh").read_text()
+
+        self.assertIn('"${CLIENT_ROOT}/data/microenv"', config)
+        self.assertIn("-o sensos-runner -g sensos-data", config)
+        self.assertNotIn("chown -R", config)
+        self.assertNotIn("chmod -R", config)
+        self.assertIn('"microenv"', storage_ops)
+        self.assertIn("-o sensos-runner -g sensos-data", storage_ops)
+        self.assertNotIn("chown -R", storage_ops)
+
+    def test_data_generators_reexec_as_runner_without_privileged_writes(self):
+        wav_generator = (REPO_ROOT / "test" / "generate-queued-wav").read_text()
+        i2c_generator = (REPO_ROOT / "test" / "generate-fake-i2c-readings").read_text()
+
+        for generator in (wav_generator, i2c_generator):
+            self.assertIn('"sudo"', generator)
+            self.assertIn('"-u"', generator)
+            self.assertIn('"sensos-runner"', generator)
+            self.assertIn('"-g"', generator)
+            self.assertIn('"sensos-data"', generator)
+            self.assertIn("os.umask(0o002)", generator)
+
+        self.assertNotIn("write_wav_privileged", wav_generator)
+        self.assertNotIn("ensure_root", i2c_generator)
+
     def test_audio_pipeline_workers_use_non_escalating_runtime_directories(self):
         worker_names = (
             "sensos-compress-audio",

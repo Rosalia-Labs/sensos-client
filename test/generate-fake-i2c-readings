@@ -18,23 +18,30 @@ def default_db_path() -> Path:
     return client_root / "data" / "microenv" / "i2c_readings.db"
 
 
-def ensure_root(argv: list[str] | None = None) -> None:
+def ensure_runner(argv: list[str] | None = None) -> None:
     argv = list(sys.argv[1:] if argv is None else argv)
-    if os.geteuid() == 0:
+    try:
+        import pwd
+
+        runner_uid = pwd.getpwnam("sensos-runner").pw_uid
+    except KeyError:
+        raise SystemExit("Required test user does not exist: sensos-runner") from None
+
+    if os.geteuid() == runner_uid:
         return
-    if os.environ.get("SENSOS_ROOT_REEXEC") == "1":
-        raise SystemExit("Error: failed to re-run as root.")
 
     script_path = os.path.realpath(sys.argv[0])
-    preserve_env = ["SENSOS_CLIENT_ROOT", "SENSOS_ROOT_REEXEC"]
-    print("Re-running as root...", file=sys.stderr)
+    print("Re-running as sensos-runner:sensos-data...", file=sys.stderr)
     os.execvp(
         "sudo",
         [
             "sudo",
-            f"--preserve-env={','.join(preserve_env)}",
+            "-u",
+            "sensos-runner",
+            "-g",
+            "sensos-data",
             "env",
-            "SENSOS_ROOT_REEXEC=1",
+            "SENSOS_CLIENT_ROOT=" + os.environ.get("SENSOS_CLIENT_ROOT", "/sensos"),
             script_path,
             *argv,
         ],
@@ -151,7 +158,8 @@ def gen_rowset(points: int, spacing_sec: int, start_at: datetime, rng: random.Ra
 
 
 def main() -> int:
-    ensure_root()
+    ensure_runner()
+    os.umask(0o002)
     args = parse_args()
     if args.points <= 0:
         raise SystemExit("--points must be > 0")
