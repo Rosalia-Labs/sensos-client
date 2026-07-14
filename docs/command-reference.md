@@ -187,6 +187,31 @@ Run this before commands that need:
 - `SERVER_PORT`
 - client API password
 
+### `set-server-auth-token`
+
+Stores a server-issued durable client UUID and access token without changing the
+client's current network enrollment. The credential is written to
+`/sensos/keys/server-auth.json` as `sensos-admin:sensos-admin` with mode `0600`.
+
+Interactive use is recommended so the token does not appear in shell history or
+the process list:
+
+```sh
+set-server-auth-token
+```
+
+For non-interactive provisioning, pass the UUID as an argument and the token on
+standard input:
+
+```sh
+printf '%s\n' "$SENSOS_SERVER_AUTH_TOKEN" | \
+  set-server-auth-token --client-uuid "$SENSOS_CLIENT_UUID" --token-stdin
+```
+
+This command only stores the durable identity credential. Existing clients keep
+using their current peer credentials until a later `config-network`
+reconfiguration explicitly uses the server token.
+
 ### Staged Provisioning And Network Cutover
 
 A practical field workflow is:

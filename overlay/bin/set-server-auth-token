@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+import argparse
+import getpass
+import importlib.util
+import json
+import os
+import sys
+import uuid
+
+OVERLAY_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", "/sensos")
+UTILS_FILE = os.path.join(OVERLAY_ROOT, "libexec", "utils.py")
+TOKEN_FILE = os.path.join(OVERLAY_ROOT, "keys", "server-auth.json")
+
+if not os.path.isfile(UTILS_FILE):
+    raise RuntimeError(f"Missing utils.py at {UTILS_FILE}")
+
+UTILS_SPEC = importlib.util.spec_from_file_location("sensos_overlay_utils", UTILS_FILE)
+UTILS_MODULE = importlib.util.module_from_spec(UTILS_SPEC)
+assert UTILS_SPEC.loader is not None
+UTILS_SPEC.loader.exec_module(UTILS_MODULE)
+
+ensure_sensos_admin = UTILS_MODULE.ensure_sensos_admin
+write_file = UTILS_MODULE.write_file
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Store the server-issued durable client identity token."
+    )
+    parser.add_argument(
+        "--client-uuid",
+        help="Durable client UUID shown with the server-issued token",
+    )
+    parser.add_argument(
+        "--token-stdin",
+        action="store_true",
+        help="Read the access token from one line on standard input instead of prompting",
+    )
+    return parser.parse_args(argv)
+
+
+def normalize_client_uuid(value: str) -> str:
+    try:
+        return str(uuid.UUID(value.strip()))
+    except (AttributeError, ValueError):
+        raise ValueError("client UUID must be a valid UUID") from None
+
+
+def collect_credentials(args) -> tuple[str, str]:
+    client_uuid = (args.client_uuid or "").strip()
+    if not client_uuid:
+        if not sys.stdin.isatty():
+            raise ValueError("--client-uuid is required when stdin is not interactive")
+        client_uuid = input("Client UUID: ").strip()
+
+    if args.token_stdin:
+        access_token = sys.stdin.readline().strip()
+        if not access_token:
+            raise ValueError("no access token received on stdin")
+    else:
+        if not sys.stdin.isatty():
+            raise ValueError("use --token-stdin when stdin is not interactive")
+        access_token = getpass.getpass("Server access token: ").strip()
+        confirmation = getpass.getpass("Confirm server access token: ").strip()
+        if access_token != confirmation:
+            raise ValueError("access token confirmation does not match")
+
+    if len(access_token) < 20:
+        raise ValueError("access token is unexpectedly short; check that it was copied completely")
+    return normalize_client_uuid(client_uuid), access_token
+
+
+def store_credentials(client_uuid: str, access_token: str) -> None:
+    content = json.dumps(
+        {"client_uuid": client_uuid, "access_token": access_token},
+        indent=2,
+        sort_keys=True,
+    ) + "\n"
+    write_file(
+        TOKEN_FILE,
+        content,
+        mode=0o600,
+        user="sensos-admin",
+        group="sensos-admin",
+    )
+
+
+def main(argv=None):
+    ensure_sensos_admin(argv=argv)
+    args = parse_args(argv)
+    try:
+        client_uuid, access_token = collect_credentials(args)
+        store_credentials(client_uuid, access_token)
+    except ValueError as exc:
+        raise SystemExit(f"ERROR: {exc}") from None
+    print(f"Server authentication token stored in {TOKEN_FILE} (mode 0600).")
+    print(f"Durable client UUID: {client_uuid}")
+
+
+if __name__ == "__main__":
+    main()

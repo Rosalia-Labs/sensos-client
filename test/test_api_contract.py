@@ -4,6 +4,7 @@ import getpass
 import importlib.machinery
 import importlib.util
 import io
+import json
 import os
 import random
 import re
@@ -37,6 +38,9 @@ send_status_update = load_module(
 )
 config_location = load_module("config_location_test", OVERLAY_ROOT / "bin" / "config-location")
 config_time = load_module("config_time_test", OVERLAY_ROOT / "bin" / "config-time")
+set_server_auth_token = load_module(
+    "set_server_auth_token_test", OVERLAY_ROOT / "bin" / "set-server-auth-token"
+)
 upload_hardware_profile = load_module(
     "upload_hardware_profile_test", OVERLAY_ROOT / "bin" / "upload-hardware-profile"
 )
@@ -81,6 +85,32 @@ class ApiContractTests(unittest.TestCase):
     def test_contract_harness_overrides_client_root_to_repo_overlay(self):
         self.assertEqual(os.environ.get("SENSOS_CLIENT_ROOT"), str(OVERLAY_ROOT))
         self.assertTrue(str(utils.NETWORK_CONF).startswith(str(OVERLAY_ROOT)))
+
+    def test_server_auth_token_is_stored_as_private_durable_identity(self):
+        client_uuid = "bd3f7ef4-dc1d-4a31-a76d-d34b586c82fa"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            token_file = Path(tmpdir) / "server-auth.json"
+            with mock.patch.object(set_server_auth_token, "TOKEN_FILE", str(token_file)):
+                with mock.patch.object(set_server_auth_token, "write_file") as write_mock:
+                    set_server_auth_token.store_credentials(client_uuid, "x" * 43)
+
+        args, kwargs = write_mock.call_args
+        stored = json.loads(args[1])
+        self.assertEqual(stored["client_uuid"], client_uuid)
+        self.assertEqual(stored["access_token"], "x" * 43)
+        self.assertEqual(kwargs["mode"], 0o600)
+        self.assertEqual(kwargs["user"], "sensos-admin")
+        self.assertEqual(kwargs["group"], "sensos-admin")
+
+    def test_server_auth_token_noninteractive_input_requires_uuid(self):
+        args = SimpleNamespace(client_uuid=None, token_stdin=True)
+        with mock.patch.object(set_server_auth_token.sys, "stdin", io.StringIO("x" * 43 + "\n")):
+            with self.assertRaisesRegex(ValueError, "--client-uuid is required"):
+                set_server_auth_token.collect_credentials(args)
+
+    def test_server_auth_token_rejects_invalid_uuid(self):
+        with self.assertRaisesRegex(ValueError, "valid UUID"):
+            set_server_auth_token.normalize_client_uuid("not-a-uuid")
 
     def test_network_capture_service_runs_as_runner_with_narrow_capabilities(self):
         unit = (OVERLAY_ROOT / "systemd" / "sensos-network-capture.service").read_text()
