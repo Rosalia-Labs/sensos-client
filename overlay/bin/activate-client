@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+
+CLIENT_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", "/sensos")
+TOKEN_FILE = os.path.join(CLIENT_ROOT, "keys", "server-auth.json")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Activate this client using its server-owned provisioning assignment."
+    )
+    parser.add_argument("--setup-server", required=True)
+    parser.add_argument("--setup-port", type=int, default=8765)
+    parser.add_argument("--api-port", type=int, default=8765)
+    parser.add_argument("--force", action="store_true")
+    args = parser.parse_args()
+
+    try:
+        with open(TOKEN_FILE, encoding="utf-8") as handle:
+            identity = json.load(handle)
+        client_uuid = identity["client_uuid"]
+        token = identity["access_token"]
+    except (OSError, ValueError, KeyError) as exc:
+        raise SystemExit(f"Error: invalid server identity credential: {exc}") from exc
+
+    import requests
+
+    base = f"http://{args.setup_server}:{args.setup_port}"
+    response = requests.get(
+        f"{base}/api/v1/client/provisioning",
+        auth=(client_uuid, token),
+        timeout=10,
+    )
+    if response.status_code != 200:
+        raise SystemExit(f"Error: provisioning lookup failed: {response.status_code} {response.text}")
+    assignment = response.json()
+    network = assignment["network_name"]
+    print(f"Activating server assignment: network={network} note={assignment.get('note') or '—'}")
+
+    command = [
+        "config-network", "--setup-server", args.setup_server,
+        "--setup-port", str(args.setup_port), "--api-port", str(args.api_port),
+        "--network", network, "--subnet", str(assignment.get("subnet_offset", 1)),
+    ]
+    if assignment.get("note"):
+        command += ["--note", assignment["note"]]
+    if args.force:
+        command.append("--force")
+    subprocess.run(command, check=True)
+
+    if assignment.get("latitude") is not None and assignment.get("longitude") is not None:
+        subprocess.run(
+            ["config-location", "--latitude", str(assignment["latitude"]),
+             "--longitude", str(assignment["longitude"])],
+            check=True,
+        )
+    print("Client activation complete.")
+
+
+if __name__ == "__main__":
+    main()

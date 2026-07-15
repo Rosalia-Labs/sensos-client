@@ -218,6 +218,18 @@ replaced. During rotation the server accepts the previous token until the new
 token is successfully used once, preventing a failed copy/update from locking
 the client out.
 
+### `activate-client`
+
+Activates a server-managed client identity. The server supplies the assigned
+network, subnet, note, and location; the client does not choose them.
+
+```sh
+activate-client --setup-server 10.0.2.2 --setup-port 18765 --api-port 8765
+```
+
+Use `--force` when intentionally replacing an existing client network setup.
+`config-network` remains available for legacy and manual provisioning.
+
 ### Staged Provisioning And Network Cutover
 
 A practical field workflow is:
