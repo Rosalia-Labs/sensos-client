@@ -12,6 +12,7 @@ libusb-1.0-0
 libftdi1-2
 lsof
 libsndfile1
+modemmanager
 nethogs
 network-manager
 nftables
@@ -33,4 +34,3 @@ vnstat
 wireguard
 wireguard-tools
 i2c-tools
-
