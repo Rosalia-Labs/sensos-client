@@ -33,7 +33,7 @@ parse_switches() {
     local script_name="$1"
     shift
 
-    local opt val varname safe_varname
+    local opt val safe_varname
     local -a remaining_args=()
 
     while [[ $# -gt 0 ]]; do
@@ -51,8 +51,7 @@ parse_switches() {
             --no-*)
                 opt="--${1#--no-}"
                 if [[ -v __cli_options_help["$opt"] && ${__cli_options_is_bool["$opt"]:-0} -eq 1 ]]; then
-                    varname="${opt#--}"
-                    safe_varname="${varname//-/_}"
+                    safe_varname="${__cli_options_varname[$opt]}"
                     printf -v "$safe_varname" '%s' "false"
                 else
                     echo "[ERROR] Unknown or non-boolean negated option: $1"
@@ -94,10 +93,8 @@ parse_switches() {
                 ;;
         esac
 
-        varname="${opt#--}"
-        safe_varname="${varname//-/_}"
-
         if [[ -v __cli_options_help["$opt"] ]]; then
+            safe_varname="${__cli_options_varname[$opt]}"
             printf -v "$safe_varname" '%s' "$val"
         else
             echo "[ERROR] Unknown option: $opt"

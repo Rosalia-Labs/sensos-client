@@ -111,7 +111,7 @@ register_vnstat_iface() {
 }
 
 register_option --service service "Cellular provider (e.g. 1nce, Soracom)" ""
-register_option --device device "NetworkManager control port (e.g. cdc-wdm0 or ttyUSB2)" "cdc-wdm0"
+register_option --device device "Optional NetworkManager modem device (e.g. cdc-wdm0 or ttyUSB2)" ""
 register_option --start start_now "Bring modem online after config" "false"
 register_option --limit-up-kbit limit_up_kbit "Optional egress cap in kbit" ""
 register_option --limit-down-kbit limit_down_kbit "Optional ingress cap in kbit" ""
@@ -141,26 +141,24 @@ esac
 
 NM_CON_NAME="sensos-${service,,}"
 
-if [[ "${device}" == wwan* ]]; then
-    echo "NOTE: '${device}' looks like a data interface. Using control port 'cdc-wdm0' instead."
-    device="cdc-wdm0"
-fi
-
-data_iface="${device}"
-if [[ "${device}" == cdc-wdm* || "${device}" == ttyUSB* ]]; then
-    data_iface="wwan0"
-fi
+data_iface="wwan0"
 
 if nmcli -t -f NAME con show | grep -Fxq "${NM_CON_NAME}"; then
-    echo "Updating modem connection '${NM_CON_NAME}' for device '${device}'..."
+    echo "Updating modem connection '${NM_CON_NAME}'..."
 else
-    echo "Creating modem connection '${NM_CON_NAME}' on device '${device}'..."
-    sudo nmcli con add type gsm ifname "${device}" con-name "${NM_CON_NAME}" apn "${apn}"
+    echo "Creating modem connection '${NM_CON_NAME}'..."
+    sudo nmcli con add type gsm ifname "*" con-name "${NM_CON_NAME}" apn "${apn}"
 fi
 
 sudo nmcli con mod "${NM_CON_NAME}" gsm.apn "${apn}" || true
 sudo nmcli con mod "${NM_CON_NAME}" connection.id "${NM_CON_NAME}" || true
-sudo nmcli con mod "${NM_CON_NAME}" connection.interface-name "${device}" || true
+if [[ -n "${device}" ]]; then
+    sudo nmcli con mod "${NM_CON_NAME}" connection.interface-name "${device}"
+else
+    # Do not pin the profile to a guessed control port. ModemManager tells
+    # NetworkManager which cellular device can activate the GSM connection.
+    sudo nmcli con mod "${NM_CON_NAME}" connection.interface-name ""
+fi
 sudo nmcli con mod "${NM_CON_NAME}" ipv4.method auto || true
 sudo nmcli con mod "${NM_CON_NAME}" ipv6.method ignore || true
 
@@ -203,9 +201,13 @@ fi
 register_vnstat_iface "${data_iface}"
 
 if [[ "${start_now}" == "true" ]]; then
-    echo "Bringing up modem connection '${NM_CON_NAME}' via '${device}'..."
-    if ! sudo nmcli -w 45 con up "${NM_CON_NAME}" ifname "${device}"; then
-        echo "WARNING: failed to start modem connection '${NM_CON_NAME}' (ifname=${device})." >&2
+    echo "Bringing up modem connection '${NM_CON_NAME}'..."
+    nmcli_up=(sudo nmcli -w 45 con up "${NM_CON_NAME}")
+    if [[ -n "${device}" ]]; then
+        nmcli_up+=(ifname "${device}")
+    fi
+    if ! "${nmcli_up[@]}"; then
+        echo "WARNING: failed to start modem connection '${NM_CON_NAME}'." >&2
     fi
 fi
 

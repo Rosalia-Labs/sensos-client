@@ -754,6 +754,7 @@ config-modem --service soracom --device cdc-wdm0
 Behavior:
 
 - currently supports `1nce` and `soracom`
+- leaves modem selection to NetworkManager/ModemManager unless `--device` is specified
 - can apply traffic caps
 - registers the modem interface with `vnstat`
 - applies a WireGuard MTU adjustment for 1NCE
