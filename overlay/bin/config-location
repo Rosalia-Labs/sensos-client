@@ -51,13 +51,14 @@ def send_location(server_host, port, peer_uuid, api_password, latitude, longitud
         response = http_requests().put(url, headers=headers, json=payload, timeout=5)
     except Exception as exc:
         print(f"❌ Request failed: {exc}", file=sys.stderr)
-        return
+        return False
 
     if response.status_code == 200:
         print(f"✅ Location updated to ({latitude}, {longitude}) for {peer_uuid}.")
-        return
+        return True
 
     print(f"❌ Server responded with {response.status_code}: {response.text}", file=sys.stderr)
+    return False
 
 
 def write_local_location_conf(latitude, longitude):
@@ -113,11 +114,16 @@ def main():
         (["--longitude"], {"type": float, "help": "Longitude"}),
         (["--setup-server"], {"help": "Override setup-time API server hostname or IP", "dest": "config_server"}),
         (["--setup-port"], {"help": "Override setup-time API port", "dest": "port"}),
+        (["--local-only"], {"action": "store_true", "help": "Write location.conf without sending the location to the server", "dest": "local_only"}),
     ]
     args = parse_args_with_defaults(arg_defs, ["global", "config_location"])
     args = fill_missing_location_args(args)
 
     write_local_location_conf(args.latitude, args.longitude)
+
+    if args.local_only:
+        print("ℹ️ Server-owned location applied locally; no location update was sent.")
+        return 0
 
     conf = read_network_conf()
     server_host = args.config_server or conf.get("SERVER_WG_IP")
@@ -137,8 +143,9 @@ def main():
         print("❌ Client API password required to sync location to the server.", file=sys.stderr)
         return 1
 
-    send_location(server_host, port, peer_uuid, api_password, args.latitude, args.longitude)
-    return 0
+    return 0 if send_location(
+        server_host, port, peer_uuid, api_password, args.latitude, args.longitude
+    ) else 1
 
 
 if __name__ == "__main__":

@@ -6,9 +6,48 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 CLIENT_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", "/sensos")
 TOKEN_FILE = os.path.join(CLIENT_ROOT, "keys", "server-auth.json")
+NETWORK_CONF = os.path.join(CLIENT_ROOT, "etc", "network.conf")
+
+
+def read_network_config():
+    values = {}
+    with open(NETWORK_CONF, encoding="utf-8") as handle:
+        for line in handle:
+            key, separator, value = line.strip().partition("=")
+            if separator:
+                values[key] = value
+    return values
+
+
+def wait_for_operational_api(requests, client_uuid, token, network, timeout):
+    config = read_network_config()
+    host = config.get("SERVER_WG_IP")
+    port = config.get("SERVER_PORT", "8765")
+    if not host:
+        raise SystemExit(f"Error: SERVER_WG_IP missing from {NETWORK_CONF}.")
+    url = f"http://{host}:{port}/api/v1/client/networks/{network}"
+    deadline = time.monotonic() + timeout
+    attempt = 0
+    while time.monotonic() < deadline:
+        attempt += 1
+        try:
+            response = requests.get(url, auth=(client_uuid, token), timeout=3)
+            if response.status_code == 200:
+                print(f"✅ Operational API reachable through WireGuard after {attempt} attempt(s).")
+                return
+        except requests.RequestException:
+            pass
+        remaining = max(0, int(deadline - time.monotonic()))
+        print(f"⏳ Waiting for WireGuard API readiness ({remaining}s remaining)...")
+        time.sleep(2)
+    raise SystemExit(
+        f"Error: operational API {url} did not become reachable within {timeout} seconds. "
+        "Local network configuration was saved; diagnose WireGuard, then rerun config-location."
+    )
 
 
 def main():
@@ -19,13 +58,25 @@ def main():
     parser.add_argument("--setup-port", type=int, default=8765)
     parser.add_argument("--api-port", type=int, default=8765)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--readiness-timeout", type=int, default=90)
     args = parser.parse_args()
+
+    if os.geteuid() != 0:
+        command = " ".join(["sudo", os.path.basename(sys.argv[0]), *sys.argv[1:]])
+        raise SystemExit(
+            "Error: activate-client must run as root because it reads the private "
+            f"client identity and configures networking. Run:\n  {command}"
+        )
 
     try:
         with open(TOKEN_FILE, encoding="utf-8") as handle:
             identity = json.load(handle)
         client_uuid = identity["client_uuid"]
         token = identity["access_token"]
+    except PermissionError as exc:
+        raise SystemExit(
+            f"Error: cannot read private client identity {TOKEN_FILE}: {exc}"
+        ) from exc
     except (OSError, ValueError, KeyError) as exc:
         raise SystemExit(f"Error: invalid server identity credential: {exc}") from exc
 
@@ -53,11 +104,14 @@ def main():
     if args.force:
         command.append("--force")
     subprocess.run(command, check=True)
+    wait_for_operational_api(
+        requests, client_uuid, token, network, max(1, args.readiness_timeout)
+    )
 
     if assignment.get("latitude") is not None and assignment.get("longitude") is not None:
         subprocess.run(
             ["config-location", "--latitude", str(assignment["latitude"]),
-             "--longitude", str(assignment["longitude"])],
+             "--longitude", str(assignment["longitude"]), "--local-only"],
             check=True,
         )
     print("Client activation complete.")
