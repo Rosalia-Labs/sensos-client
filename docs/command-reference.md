@@ -189,8 +189,9 @@ Run this before commands that need:
 
 ### `set-server-auth-token`
 
-Stores a server-issued durable client UUID and access token without changing the
-client's current network enrollment. The credential is written to
+Stores a server-issued durable client UUID and access token. Create the identity
+from the server admin dashboard before the client's first enrollment. The
+credential is written to
 `/sensos/keys/server-auth.json` as `sensos-admin:sensos-admin` with mode `0600`.
 
 Interactive use is recommended so the token does not appear in shell history or
@@ -208,9 +209,14 @@ printf '%s\n' "$SENSOS_SERVER_AUTH_TOKEN" | \
   set-server-auth-token --client-uuid "$SENSOS_CLIENT_UUID" --token-stdin
 ```
 
-This command only stores the durable identity credential. Existing clients keep
-using their current peer credentials until a later `config-network`
-reconfiguration explicitly uses the server token.
+`config-network` automatically uses this credential for initial enrollment and
+later reconfiguration. The client does not need the server's shared
+`CLIENT_API_PASSWORD`. If no server-issued credential exists, `config-network`
+retains the shared-password flow only as a legacy compatibility fallback.
+The UUID and token live in this single JSON credential, which is atomically
+replaced. During rotation the server accepts the previous token until the new
+token is successfully used once, preventing a failed copy/update from locking
+the client out.
 
 ### Staged Provisioning And Network Cutover
 

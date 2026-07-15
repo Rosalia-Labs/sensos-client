@@ -180,6 +180,10 @@ test/qemu/launch-qemu-vm run
 
 Then the client VM can enroll through the setup API with:
 
+First create a client identity at `http://127.0.0.1:18765/admin/peers` on the
+host, then run `set-server-auth-token` in this VM with the displayed UUID and
+one-time token. No shared client API password is required.
+
 ```bash
 config-network --setup-server 10.0.2.2 --setup-port 18765 --api-port 8765 --network testing
 ```

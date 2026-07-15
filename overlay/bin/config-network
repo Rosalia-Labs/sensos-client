@@ -35,6 +35,7 @@ SENSOS_ADMIN_HOME = "/home/sensos-admin"
 SENSOS_ETC_DIR = os.path.join(CLIENT_ROOT, "etc")
 SENSOS_KEYS_DIR = os.path.join(CLIENT_ROOT, "keys")
 SENSOS_NET_CONF = os.path.join(SENSOS_ETC_DIR, "network.conf")
+SERVER_AUTH_TOKEN_FILE = os.path.join(SENSOS_KEYS_DIR, "server-auth.json")
 REQUESTS = None
 STATUS_UPDATE_TIMER = "sensos-send-status-update.timer"
 WG_MANAGED_MARKER = "# Managed by SensOS config-network"
@@ -71,6 +72,30 @@ def format_response_for_log(response):
         redacted_text = SENSITIVE_JSON_VALUE_RE.sub(r"\1[redacted]\3", text)
         return f"Response Text: {redacted_text}"
     return f"Response JSON: {json.dumps(redact_sensitive_fields(data), sort_keys=True)}"
+
+
+def load_enrollment_credentials():
+    if os.path.exists(SERVER_AUTH_TOKEN_FILE):
+        try:
+            with open(SERVER_AUTH_TOKEN_FILE, encoding="utf-8") as token_stream:
+                payload = json.load(token_stream)
+        except (OSError, ValueError) as exc:
+            sys.exit(f"Error: cannot read server identity credential: {exc}")
+        client_uuid = str(payload.get("client_uuid") or "").strip()
+        access_token = str(payload.get("access_token") or "").strip()
+        if not client_uuid or not access_token:
+            sys.exit(f"Error: incomplete server identity credential in {SERVER_AUTH_TOKEN_FILE}.")
+        print(f"🔐 Using server-issued client identity {client_uuid}.")
+        return {"username": client_uuid, "password": access_token, "source": "token"}
+    return None
+
+
+def enrollment_auth_header(credentials):
+    if isinstance(credentials, str):
+        credentials = {"username": "sensos", "password": credentials}
+    return build_basic_auth_header(
+        credentials["password"], username=credentials["username"]
+    )
 
 
 def parse_args():
@@ -165,14 +190,16 @@ def generate_wireguard_keys(network_name, force):
     return public_key
 
 
-def register_peer(config_server, port, network_name, wg_public_key, api_password, subnet, note=""):
+def register_peer(config_server, port, network_name, wg_public_key, credentials, subnet, note=""):
+    if isinstance(credentials, str):
+        credentials = {"username": "sensos", "password": credentials, "source": "legacy"}
     require_nonempty(wg_public_key, "wg_public_key")
     require_nonempty(config_server, "--setup-server")
     require_nonempty(port, "--setup-port")
     server_url = f"http://{config_server}:{port}/api/v1/client/peers/enroll"
     print(f"📡 Registering device on network '{network_name}' with {server_url}...")
 
-    headers = build_basic_auth_header(api_password)
+    headers = enrollment_auth_header(credentials)
     response = http_requests().post(
         server_url,
         json={"network_name": network_name, "subnet_offset": subnet, "note": note if note else None},
@@ -204,10 +231,17 @@ def register_peer(config_server, port, network_name, wg_public_key, api_password
     peer_uuid = data.get("peer_uuid")
     peer_api_password = data.get("peer_api_password")
 
-    if not all([wg_ip, server_pubkey, wg_public_ip, wg_port, peer_uuid, peer_api_password]):
+    if credentials.get("source") == "token":
+        operational_uuid = credentials["username"]
+        operational_secret = credentials["password"]
+    else:
+        operational_uuid = peer_uuid
+        operational_secret = peer_api_password
+
+    if not all([wg_ip, server_pubkey, wg_public_ip, wg_port, peer_uuid, operational_secret]):
         sys.exit(
             "Error: incomplete register-peer response "
-            "(wg_ip/wg_public_key/wg_public_ip/wg_port/peer_uuid/peer_api_password)."
+            "(wg_ip/wg_public_key/wg_public_ip/wg_port/peer_uuid/operational credential)."
         )
 
     ip_parts = wg_ip.split(".")
@@ -216,12 +250,12 @@ def register_peer(config_server, port, network_name, wg_public_key, api_password
     register_wireguard_key(
         config_server,
         port,
-        peer_uuid,
+        operational_uuid,
         wg_ip,
         wg_public_key,
-        peer_api_password,
+        operational_secret,
     )
-    return wg_ip, hostname, server_pubkey, wg_public_ip, int(wg_port), peer_uuid, peer_api_password
+    return wg_ip, hostname, server_pubkey, wg_public_ip, int(wg_port), operational_uuid, operational_secret
 
 
 def register_wireguard_key(config_server, port, peer_uuid, wg_ip, wg_public_key, api_password):
@@ -426,7 +460,7 @@ def exchange_ssh_keys(config_server, port, peer_uuid, wg_ip, api_password):
     print(f"✅ Server public key added to {authorized_keys_file}.")
 
 
-def configure_wireguard(args, api_password):
+def configure_wireguard(args, credentials):
     print("Reconfiguring WireGuard...")
 
     wg_public_key = generate_wireguard_keys(args.network, args.force)
@@ -438,7 +472,7 @@ def configure_wireguard(args, api_password):
         args.port,
         args.network,
         wg_public_key,
-        api_password,
+        credentials,
         args.subnet,
         note=args.note,
     )
@@ -489,9 +523,13 @@ def write_client_settings(args, server_wg_ip, client_wg_ip, endpoint_ip, wg_port
     print(f"✅ Client network settings written to {settings_file}")
 
 
-def ensure_network_exists(config_server, port, api_password, network_name):
+def ensure_network_exists(config_server, port, credentials, network_name):
     print(f"🔎 Verifying network '{network_name}' exists before enrollment...")
-    response = fetch_network_info(config_server, port, api_password, network_name, timeout=5)
+    response = http_requests().get(
+        f"http://{config_server}:{port}/api/v1/client/networks/{network_name}",
+        headers=enrollment_auth_header(credentials),
+        timeout=5,
+    )
     if response.status_code == 200:
         data = response.json()
         print(
@@ -506,7 +544,7 @@ def ensure_network_exists(config_server, port, api_password, network_name):
             "The client no longer assumes the server will auto-create a default network."
         )
     if response.status_code in (401, 403):
-        sys.exit("Error: client API password was rejected by get-network-info.")
+        sys.exit("Error: server-issued client token was rejected by get-network-info.")
     sys.exit(f"Error: get-network-info failed: {response.status_code} {response.text}")
 
 
@@ -631,13 +669,16 @@ def main():
 
     print("🚀 Starting device configuration...")
 
-    api_password = get_api_password(args.config_server, args.port, network_name=args.network)
-    if not api_password:
-        sys.exit("Error: client API password not obtained (get_api_password).")
+    credentials = load_enrollment_credentials()
+    if credentials is None:
+        api_password = get_api_password(args.config_server, args.port, network_name=args.network)
+        if not api_password:
+            sys.exit("Error: client API password not obtained (legacy enrollment fallback).")
+        credentials = {"username": "sensos", "password": api_password, "source": "legacy"}
 
-    ensure_network_exists(args.config_server, args.port, api_password, args.network)
+    ensure_network_exists(args.config_server, args.port, credentials, args.network)
 
-    client_wg_ip, wg_public_ip, wg_port, peer_uuid, peer_api_password = configure_wireguard(args, api_password)
+    client_wg_ip, wg_public_ip, wg_port, peer_uuid, peer_api_password = configure_wireguard(args, credentials)
     if not client_wg_ip:
         sys.exit("Error: WireGuard configuration failed.")
 
@@ -651,8 +692,11 @@ def main():
 
     write_client_settings(args, server_wg_ip, client_wg_ip, endpoint_ip, wg_port, peer_uuid=peer_uuid)
 
-    write_api_password(peer_api_password)
-    print(f"✅ Peer API password saved securely in {API_PASSWORD_FILE}.")
+    if credentials["source"] == "legacy":
+        write_api_password(peer_api_password)
+        print(f"✅ Legacy peer API credential saved securely in {API_PASSWORD_FILE}.")
+    else:
+        print("✅ Server-issued identity activated as the sole API credential.")
 
     configure_ssh(args, peer_uuid, peer_api_password, client_wg_ip)
 

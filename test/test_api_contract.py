@@ -367,6 +367,24 @@ class ApiContractTests(unittest.TestCase):
             "peer-secret",
         )
 
+    def test_load_enrollment_credentials_prefers_server_issued_identity(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            token_file = Path(tmpdir) / "server-auth.json"
+            token_file.write_text(
+                json.dumps(
+                    {
+                        "client_uuid": "bd3f7ef4-dc1d-4a31-a76d-d34b586c82fa",
+                        "access_token": "server-issued-token-value",
+                    }
+                )
+            )
+            with mock.patch.object(config_network, "SERVER_AUTH_TOKEN_FILE", str(token_file)):
+                credentials = config_network.load_enrollment_credentials()
+
+        self.assertEqual(credentials["username"], "bd3f7ef4-dc1d-4a31-a76d-d34b586c82fa")
+        self.assertEqual(credentials["password"], "server-issued-token-value")
+        self.assertEqual(credentials["source"], "token")
+
     def test_register_wireguard_key_uses_peer_auth_and_server_assigned_identity(self):
         response = FakeResponse(200, {}, text="ok")
         fake_requests = SimpleNamespace(post=mock.Mock(return_value=response))
@@ -895,8 +913,9 @@ class ApiContractTests(unittest.TestCase):
                     with mock.patch.object(config_network, "setup_logging"):
                         with mock.patch.object(config_network, "parse_args", return_value=args):
                             with mock.patch.object(config_network, "sensos_config_files_exist", return_value=[]):
-                                with mock.patch.object(config_network, "get_api_password", return_value="client-password"):
-                                    with mock.patch.object(config_network, "ensure_network_exists"):
+                                with mock.patch.object(config_network, "load_enrollment_credentials", return_value=None), \
+                                     mock.patch.object(config_network, "get_api_password", return_value="client-password"), \
+                                     mock.patch.object(config_network, "ensure_network_exists"):
                                         with mock.patch.object(
                                             config_network,
                                             "configure_wireguard",

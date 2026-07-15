@@ -14,11 +14,13 @@ import stat
 import pwd
 import grp
 import time
+import json
 
 CLIENT_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", "/sensos")
 CLIENT_API_USERNAME = "sensos"
 
 API_PASSWORD_FILE = os.path.join(CLIENT_ROOT, "keys", "api_password")
+SERVER_AUTH_TOKEN_FILE = os.path.join(CLIENT_ROOT, "keys", "server-auth.json")
 DEFAULTS_CONF = os.path.join(CLIENT_ROOT, "etc", "defaults.conf")
 NETWORK_CONF = os.path.join(CLIENT_ROOT, "etc", "network.conf")
 INSTALL_STATE_FILE = os.path.join(CLIENT_ROOT, "etc", "install-state.env")
@@ -215,7 +217,9 @@ def read_file(filepath):
 
 def write_file(filepath, content, mode=0o644, user="root", group=None):
     group = group or user
-    with tempfile.NamedTemporaryFile("w", delete=False) as tmp:
+    parent = os.path.dirname(os.path.abspath(filepath))
+    temp_dir = parent if os.access(parent, os.W_OK | os.X_OK) else None
+    with tempfile.NamedTemporaryFile("w", delete=False, dir=temp_dir) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
     try:
@@ -385,6 +389,9 @@ def read_client_version_text(client_root=CLIENT_ROOT):
 
 
 def read_api_password():
+    identity = read_server_auth_identity()
+    if identity is not None:
+        return identity["access_token"]
     value = read_file(API_PASSWORD_FILE)
     if value is None:
         print("❌ Client API password file missing", file=sys.stderr)
@@ -402,7 +409,25 @@ def write_api_password(api_password: str):
 
 
 def require_peer_uuid(config: dict) -> str:
+    identity = read_server_auth_identity()
+    if identity is not None:
+        return identity["client_uuid"]
     return require_nonempty(config.get("PEER_UUID"), "PEER_UUID")
+
+
+def read_server_auth_identity():
+    if not os.path.isfile(SERVER_AUTH_TOKEN_FILE):
+        return None
+    try:
+        with open(SERVER_AUTH_TOKEN_FILE, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"[ERROR] Invalid server identity credential: {exc}") from exc
+    client_uuid = str(payload.get("client_uuid") or "").strip()
+    access_token = str(payload.get("access_token") or "").strip()
+    if not client_uuid or not access_token:
+        raise SystemExit("[ERROR] Server identity credential is incomplete.")
+    return {"client_uuid": client_uuid, "access_token": access_token}
 
 
 def validate_api_password(config_server, port, api_password, network_name=None):
