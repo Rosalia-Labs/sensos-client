@@ -880,6 +880,28 @@ install-birdnet-models --force
 
 ## Debug and Reporting Commands
 
+### `debug-modem`
+
+Prints a read-only, operator-friendly cellular modem diagnostic report.
+
+Typical use:
+
+```sh
+debug-modem
+debug-modem --verbose
+```
+
+Behavior:
+
+- summarizes modem hardware visibility, ModemManager registration, signal,
+  NetworkManager cellular profiles, activation state, IP addressing, and routes
+- gives a plain-language interpretation and concrete next commands
+- use `--verbose` to include redacted raw `mmcli`, `nmcli`, USB, systemd,
+  routing, and journal output for support
+- avoids NetworkManager secret fields and redacts common modem identifiers
+- does not activate connections, change profiles, restart services, or send
+  network traffic
+
 ### `debug-wifi`
 
 Prints a read-only, operator-friendly Wi-Fi diagnostic report for Raspberry Pi

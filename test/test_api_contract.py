@@ -82,6 +82,17 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(os.environ.get("SENSOS_CLIENT_ROOT"), str(OVERLAY_ROOT))
         self.assertTrue(str(utils.NETWORK_CONF).startswith(str(OVERLAY_ROOT)))
 
+    def test_debug_modem_is_read_only_and_redacts_identifiers(self):
+        script = (OVERLAY_ROOT / "bin" / "debug-modem").read_text()
+
+        self.assertIn("Print a read-only", script)
+        self.assertIn("redact_modem_output", script)
+        self.assertIn("equipment-identifier", script)
+        self.assertIn("gsm\\.password", script)
+        self.assertNotIn("nmcli connection modify", script)
+        self.assertNotIn("nmcli connection up", script)
+        self.assertNotIn("systemctl restart", script)
+
     def test_network_capture_service_runs_as_runner_with_narrow_capabilities(self):
         unit = (OVERLAY_ROOT / "systemd" / "sensos-network-capture.service").read_text()
         launcher = (OVERLAY_ROOT / "libexec" / "start-network-capture.sh").read_text()

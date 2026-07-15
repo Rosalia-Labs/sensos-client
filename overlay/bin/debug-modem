@@ -1,0 +1,292 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+set -euo pipefail
+
+VERBOSE=false
+
+have_cmd() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+print_usage() {
+    cat <<EOF
+Usage: debug-modem [options]
+
+Print a read-only, plain-language cellular modem status report.
+
+Options:
+  -v, --verbose  Include redacted raw hardware, service, network, and log output
+  -h, --help     Show this help and exit
+EOF
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -v|--verbose) VERBOSE=true ;;
+            -h|--help) print_usage; exit 0 ;;
+            *)
+                printf 'ERROR: unknown option: %s\n' "$1" >&2
+                print_usage >&2
+                exit 1
+                ;;
+        esac
+        shift
+    done
+}
+
+section() {
+    printf '\n%s\n' "$*"
+}
+
+current_time() {
+    date -Is 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z'
+}
+
+run_block() {
+    local label="$1"
+    shift
+
+    printf '\n$ %s\n' "${label}"
+    if "$@" 2>&1; then
+        return 0
+    fi
+    printf '[command failed or permission denied]\n'
+    return 0
+}
+
+redact_modem_output() {
+    sed -E \
+        -e 's/((equipment.identifier|equipment-identifier|device-identifier|device identifier|IMEI|IMSI|ICCID|own-numbers?)[^:=]*[:=])[[:space:]]*[^[:space:]]+/\1 [redacted]/Ig' \
+        -e 's/((gsm\.pin|gsm\.pin2|gsm\.password|password)[^:=]*[:=])[[:space:]]*[^[:space:]]+/\1 [redacted]/Ig'
+}
+
+systemctl_state() {
+    local unit="$1"
+    local state
+
+    have_cmd systemctl || { printf 'unavailable'; return 0; }
+    state="$(systemctl is-active "${unit}" 2>/dev/null)" || true
+    printf '%s' "${state:-not-found}"
+}
+
+mm_value() {
+    local key="$1"
+    local output="$2"
+
+    awk -F': ' -v wanted="${key}" '$1 == wanted {print $2; exit}' <<<"${output}"
+}
+
+list_ports() {
+    local found=false path
+
+    for path in /dev/cdc-wdm* /dev/ttyUSB* /dev/ttyACM*; do
+        [[ -e "${path}" ]] || continue
+        printf '%s\n' "${path}"
+        found=true
+    done
+    if [[ -d /sys/class/net ]]; then
+        for path in /sys/class/net/wwan*; do
+            [[ -e "${path}" ]] || continue
+            basename "${path}"
+            found=true
+        done
+    fi
+    [[ "${found}" == true ]]
+}
+
+list_gsm_profiles() {
+    have_cmd nmcli || return 0
+    nmcli -t -f NAME,TYPE connection show 2>/dev/null \
+        | awk -F: '$NF == "gsm" {sub(/:gsm$/, ""); print}'
+}
+
+connection_active() {
+    local profile="$1"
+
+    have_cmd nmcli || return 1
+    nmcli -t -f NAME connection show --active 2>/dev/null | grep -Fxq "${profile}"
+}
+
+print_operator_summary() {
+    local modem_list modem_info state signal access registration operator
+    local -a ports=() profiles=()
+    local profile apn iface active modem_count=0 active_count=0
+
+    mapfile -t ports < <(list_ports || true)
+    mapfile -t profiles < <(list_gsm_profiles)
+    modem_list=""
+    modem_info=""
+    if have_cmd mmcli; then
+        modem_list="$(mmcli -L 2>/dev/null || true)"
+        modem_count="$(grep -c '/Modem/' <<<"${modem_list}" || true)"
+        if ((modem_count > 0)); then
+            modem_info="$(mmcli -m any -K 2>/dev/null || true)"
+        fi
+    fi
+
+    state="$(mm_value modem.generic.state "${modem_info}")"
+    signal="$(mm_value modem.generic.signal-quality.value "${modem_info}")"
+    access="$(mm_value modem.generic.access-technologies "${modem_info}")"
+    registration="$(mm_value modem.3gpp.registration-state "${modem_info}")"
+    operator="$(mm_value modem.3gpp.operator-name "${modem_info}")"
+
+    printf 'SensOS Modem Check\n'
+    printf '  host: %s\n' "$(hostname 2>/dev/null || printf unknown)"
+    printf '  time: %s\n' "$(current_time)"
+    printf '  ModemManager: %s\n' "$(systemctl_state ModemManager.service)"
+    printf '  NetworkManager: %s\n' "$(systemctl_state NetworkManager.service)"
+    printf '  detected modems: %s\n' "${modem_count}"
+    if ((${#ports[@]} == 0)); then
+        printf '  modem ports/interfaces: none detected\n'
+    else
+        printf '  modem ports/interfaces: %s\n' "${ports[*]}"
+    fi
+
+    section "Cellular Registration"
+    if ((modem_count == 0)); then
+        printf '  No modem is currently managed by ModemManager.\n'
+    else
+        printf '  state: %s\n' "${state:-unknown}"
+        printf '  registration: %s\n' "${registration:-unknown}"
+        printf '  operator: %s\n' "${operator:-unknown}"
+        printf '  access technology: %s\n' "${access:-unknown}"
+        printf '  signal quality: %s%s\n' "${signal:-unknown}" "$([[ -n "${signal}" ]] && printf '%%' || true)"
+    fi
+
+    section "NetworkManager Profiles"
+    if ((${#profiles[@]} == 0)); then
+        printf '  No cellular connection profiles are configured.\n'
+    fi
+    for profile in "${profiles[@]}"; do
+        apn="$(nmcli -g gsm.apn connection show "${profile}" 2>/dev/null | head -n 1 || true)"
+        iface="$(nmcli -g connection.interface-name connection show "${profile}" 2>/dev/null | head -n 1 || true)"
+        active=no
+        if connection_active "${profile}"; then
+            active=yes
+            ((active_count += 1))
+        fi
+        printf '  %-24s active=%-3s apn=%-18s pinned-interface=%s\n' \
+            "${profile}" "${active}" "${apn:---}" "${iface:---}"
+    done
+
+    section "Data Connection"
+    if have_cmd nmcli; then
+        local gsm_devices=""
+        gsm_devices="$(nmcli -t -f DEVICE,TYPE device status 2>/dev/null \
+            | awk -F: '$2 == "gsm" {print $1}')"
+        if [[ -z "${gsm_devices}" ]]; then
+            printf '  No cellular device is exposed by NetworkManager.\n'
+        else
+            while IFS= read -r iface; do
+                [[ -n "${iface}" ]] || continue
+                printf '  device: %s\n' "${iface}"
+                printf '    state: %s\n' "$(nmcli -g GENERAL.STATE device show "${iface}" 2>/dev/null | head -n 1 || printf unknown)"
+                printf '    connection: %s\n' "$(nmcli -g GENERAL.CONNECTION device show "${iface}" 2>/dev/null | head -n 1 || printf -- '---')"
+                printf '    IPv4 address: %s\n' "$(nmcli -g IP4.ADDRESS device show "${iface}" 2>/dev/null | head -n 1 || printf -- '---')"
+            done <<<"${gsm_devices}"
+        fi
+    else
+        printf '  nmcli is unavailable.\n'
+    fi
+    if have_cmd ip; then
+        printf '  default route: %s\n' "$(ip route show default 2>/dev/null | head -n 1 || printf -- '---')"
+    fi
+
+    section "Interpretation"
+    if ! have_cmd mmcli; then
+        printf '  - mmcli is missing; install or repair ModemManager before checking cellular registration.\n'
+    elif [[ "$(systemctl_state ModemManager.service)" != "active" ]]; then
+        printf '  - ModemManager is not active, so NetworkManager cannot manage the modem normally.\n'
+    elif ((modem_count == 0)); then
+        if ((${#ports[@]} == 0)); then
+            printf '  - The OS exposes no common modem ports. Check modem power, USB seating, cable, and kernel detection.\n'
+        else
+            printf '  - Modem device nodes exist, but ModemManager has not claimed a modem. Check drivers and ModemManager logs.\n'
+        fi
+    elif [[ "${registration}" != "home" && "${registration}" != "roaming" ]]; then
+        printf '  - The modem is visible but is not registered on a cellular network. Check SIM activation, antenna, signal, and coverage.\n'
+    elif ((${#profiles[@]} == 0)); then
+        printf '  - The modem is registered, but no NetworkManager cellular profile exists.\n'
+    elif ((active_count == 0)); then
+        printf '  - A cellular profile exists but is not active. Bring it up and capture the exact NetworkManager error.\n'
+    else
+        printf '  - A cellular profile is active. If connectivity still fails, inspect its address, route, DNS, and verbose logs.\n'
+    fi
+
+    section "Next Steps"
+    if ((${#profiles[@]} == 0)); then
+        printf '  config-modem --service 1nce --start\n'
+        printf '  # For Soracom instead: config-modem --service soracom --start\n'
+    else
+        for profile in "${profiles[@]}"; do
+            if ! connection_active "${profile}"; then
+                printf '  sudo nmcli -w 60 connection up %q\n' "${profile}"
+            fi
+        done
+    fi
+    printf '  debug-modem --verbose   # include redacted raw details for support\n'
+}
+
+print_verbose_report() {
+    local profile
+    local -a profiles=()
+
+    mapfile -t profiles < <(list_gsm_profiles)
+    section "Raw Tool Output"
+    for profile in mmcli nmcli lsusb ip systemctl journalctl; do
+        if have_cmd "${profile}"; then
+            printf '%-12s present\n' "${profile}"
+        else
+            printf '%-12s missing\n' "${profile}"
+        fi
+    done
+
+    have_cmd lsusb && run_block "lsusb" lsusb
+    if have_cmd mmcli; then
+        run_block "mmcli -L" mmcli -L
+        printf '\n$ mmcli -m any -K (identifiers redacted)\n'
+        { mmcli -m any -K 2>&1 || true; } | redact_modem_output
+    fi
+    if have_cmd nmcli; then
+        run_block "nmcli general status" nmcli general status
+        run_block "nmcli device status" nmcli -f DEVICE,TYPE,STATE,CONNECTION device status
+        run_block "nmcli active connections" nmcli -f NAME,TYPE,DEVICE connection show --active
+        for profile in "${profiles[@]}"; do
+            run_block "nmcli safe fields for ${profile}" nmcli \
+                -f connection.id,connection.interface-name,connection.autoconnect,gsm.apn,gsm.mtu,ipv4.method,ipv6.method \
+                connection show "${profile}"
+        done
+    fi
+    if have_cmd ip; then
+        run_block "ip -br link" ip -br link
+        run_block "ip -br address" ip -br address
+        run_block "ip route" ip route
+        run_block "ip rule" ip rule
+    fi
+    if have_cmd systemctl; then
+        run_block "systemctl status ModemManager" systemctl --no-pager --full status ModemManager.service
+        run_block "systemctl status NetworkManager" systemctl --no-pager --full status NetworkManager.service
+    fi
+
+    section "Recent Logs"
+    printf 'Identifiers in logs are redacted where recognizable; review before sharing publicly.\n'
+    if have_cmd journalctl; then
+        printf '\n$ journalctl -b -u ModemManager -n 200\n'
+        { journalctl -b -u ModemManager.service -n 200 --no-pager 2>&1 || true; } | redact_modem_output
+        printf '\n$ journalctl -b -u NetworkManager -n 200\n'
+        { journalctl -b -u NetworkManager.service -n 200 --no-pager 2>&1 || true; } | redact_modem_output
+    fi
+}
+
+main() {
+    parse_args "$@"
+    print_operator_summary
+    if [[ "${VERBOSE}" == true ]]; then
+        print_verbose_report
+    fi
+}
+
+main "$@"
