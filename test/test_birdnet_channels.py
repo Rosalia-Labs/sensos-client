@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import importlib.util
+from importlib.machinery import SourceFileLoader
 import os
 import sys
 import tempfile
@@ -38,6 +39,19 @@ def load_process_birdnet():
     return module
 
 
+def load_audio_generator():
+    module_name = "generate_queued_wav_test"
+    script_path = REPO_ROOT / "test" / "generate-queued-wav"
+    spec = importlib.util.spec_from_loader(
+        module_name, SourceFileLoader(module_name, str(script_path))
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 class BirdNETChannelTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -57,6 +71,7 @@ class BirdNETChannelTests(unittest.TestCase):
             encoding="utf-8",
         )
         cls.module = load_process_birdnet()
+        cls.generator = load_audio_generator()
 
     @classmethod
     def tearDownClass(cls):
@@ -104,6 +119,38 @@ class BirdNETChannelTests(unittest.TestCase):
         north_rms = np.sqrt(np.mean(np.square(beams[0][100:-100])))
         south_rms = np.sqrt(np.mean(np.square(beams[2][100:-100])))
         self.assertGreater(north_rms, south_rms * 1.5)
+
+    def test_cardinal_cycle_generator_steers_each_three_second_segment(self):
+        sample_rate = 8_000
+        segment_frames = 3 * sample_rate
+        mono_samples = np.random.default_rng(11).normal(
+            scale=0.2, size=segment_frames * 4
+        ).tolist()
+        positions_text = "0,200;200,0;0,-200;-200,0"
+        frames, channel_count = self.generator.render_samples(
+            mono_samples,
+            sample_rate,
+            "cardinal-cycle",
+            self.generator.parse_mic_positions_cm(positions_text),
+        )
+        microphone_audio = np.frombuffer(frames, dtype="<i2").reshape(-1, 4)
+        positions = self.module.parse_mic_positions_cm(positions_text)
+
+        for expected_beam in range(4):
+            start = expected_beam * segment_frames
+            end = start + segment_frames
+            beams = dict(
+                self.module.beamform_cardinal(
+                    microphone_audio[start:end], sample_rate, positions
+                )
+            )
+            rms_by_beam = [
+                np.sqrt(np.mean(np.square(beams[index][100:-100])))
+                for index in range(4)
+            ]
+            self.assertEqual(int(np.argmax(rms_by_beam)), expected_beam)
+
+        self.assertEqual(channel_count, 4)
 
     def test_short_window_metadata_covers_padded_three_seconds(self):
         model = self.module.BirdNETModel(None, [], [], [])

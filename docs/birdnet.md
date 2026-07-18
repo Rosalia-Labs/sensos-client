@@ -185,6 +185,11 @@ Useful presets:
 - `mixed`
 - `noise`
 
+For a four-channel directional beamforming test, add `--spatial-mode
+cardinal-cycle`. The generated file cycles through north, east, south, and west
+plane-wave arrivals in consecutive 3-second segments. Pass the same
+`--mic-positions-cm` geometry used by `config-birdnet`.
+
 The normal runtime flow moves stable queued WAVs into:
 
 ```text

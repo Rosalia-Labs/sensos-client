@@ -13,6 +13,15 @@ DEFAULT_OUTPUT_ROOT = Path("/sensos/data/audio_recordings/queued")
 DEFAULT_SAMPLE_RATE = 48_000
 DEFAULT_OUTPUT_OWNER = "sensos-runner"
 DEFAULT_OUTPUT_GROUP = "sensos-data"
+DEFAULT_MIC_POSITIONS_CM = "0,200;200,0;0,-200;-200,0"
+SPEED_OF_SOUND_MPS = 343.0
+CARDINAL_DIRECTIONS = {
+    "north": (0.0, 1.0),
+    "east": (1.0, 0.0),
+    "south": (0.0, -1.0),
+    "west": (-1.0, 0.0),
+}
+CARDINAL_SEQUENCE = tuple(CARDINAL_DIRECTIONS)
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,6 +57,23 @@ def parse_args() -> argparse.Namespace:
         choices=["noise", "tone", "chirp", "birdish", "mixed"],
         default="birdish",
         help="Signal preset to synthesize (default: birdish)",
+    )
+    parser.add_argument(
+        "--spatial-mode",
+        choices=["mono", "north", "east", "south", "west", "cardinal-cycle"],
+        default="mono",
+        help=(
+            "Spatial rendering mode. Directional modes emit four channels; "
+            "cardinal-cycle changes direction every 3 seconds (default: mono)."
+        ),
+    )
+    parser.add_argument(
+        "--mic-positions-cm",
+        default=DEFAULT_MIC_POSITIONS_CM,
+        help=(
+            "Four microphone x,y positions in centimeters, formatted as "
+            "'x,y;x,y;x,y;x,y'."
+        ),
     )
     parser.add_argument(
         "--seed",
@@ -163,9 +189,11 @@ def sample_mixed(t: float, total: float, rng: random.Random) -> float:
     return bed + low + high + accent
 
 
-def generate_samples(preset: str, duration_sec: float, sample_rate: int, rng: random.Random) -> bytes:
+def generate_mono_samples(
+    preset: str, duration_sec: float, sample_rate: int, rng: random.Random
+) -> list[float]:
     total_frames = int(duration_sec * sample_rate)
-    frames = bytearray()
+    samples = []
 
     for frame in range(total_frames):
         t = frame / sample_rate
@@ -182,10 +210,73 @@ def generate_samples(preset: str, duration_sec: float, sample_rate: int, rng: ra
         else:
             sample = 0.55 * sample_mixed(t, duration_sec, rng)
 
-        pcm = clamp_pcm(sample * amp)
-        frames.extend(struct.pack("<h", pcm))
+        samples.append(sample * amp)
 
-    return bytes(frames)
+    return samples
+
+
+def parse_mic_positions_cm(value: str) -> list[tuple[float, float]]:
+    try:
+        positions = [
+            tuple(float(coordinate.strip()) / 100.0 for coordinate in pair.split(","))
+            for pair in value.split(";")
+        ]
+    except ValueError as exc:
+        raise SystemExit(
+            "--mic-positions-cm must use 'x,y;x,y;x,y;x,y' coordinates"
+        ) from exc
+    if (
+        len(positions) != 4
+        or any(len(position) != 2 for position in positions)
+        or any(not math.isfinite(value) for position in positions for value in position)
+    ):
+        raise SystemExit(
+            "--mic-positions-cm must contain exactly four finite x,y coordinate pairs"
+        )
+    center_x = sum(position[0] for position in positions) / len(positions)
+    center_y = sum(position[1] for position in positions) / len(positions)
+    return [(x - center_x, y - center_y) for x, y in positions]
+
+
+def interpolate_sample(samples: list[float], position: float) -> float:
+    lower = math.floor(position)
+    upper = lower + 1
+    if lower < 0 or upper >= len(samples):
+        return 0.0
+    fraction = position - lower
+    return samples[lower] * (1.0 - fraction) + samples[upper] * fraction
+
+
+def direction_at_frame(spatial_mode: str, frame: int, sample_rate: int) -> str:
+    if spatial_mode != "cardinal-cycle":
+        return spatial_mode
+    segment_index = int(frame / (3 * sample_rate))
+    return CARDINAL_SEQUENCE[segment_index % len(CARDINAL_SEQUENCE)]
+
+
+def render_samples(
+    mono_samples: list[float],
+    sample_rate: int,
+    spatial_mode: str,
+    mic_positions_m: list[tuple[float, float]],
+) -> tuple[bytes, int]:
+    frames = bytearray()
+    if spatial_mode == "mono":
+        for sample in mono_samples:
+            frames.extend(struct.pack("<h", clamp_pcm(sample)))
+        return bytes(frames), 1
+
+    for frame in range(len(mono_samples)):
+        direction = CARDINAL_DIRECTIONS[direction_at_frame(spatial_mode, frame, sample_rate)]
+        for x, y in mic_positions_m:
+            advance_samples = (
+                (x * direction[0] + y * direction[1])
+                * sample_rate
+                / SPEED_OF_SOUND_MPS
+            )
+            sample = interpolate_sample(mono_samples, frame - advance_samples)
+            frames.extend(struct.pack("<h", clamp_pcm(sample)))
+    return bytes(frames), 4
 
 
 def output_path(root: Path, timestamp: datetime, latitude: float | None, longitude: float | None) -> Path:
@@ -229,9 +320,9 @@ def ensure_parent_ready(path: Path) -> None:
         )
 
 
-def write_wav(path: Path, frames: bytes, sample_rate: int) -> None:
+def write_wav(path: Path, frames: bytes, sample_rate: int, channels: int) -> None:
     with wave.open(str(path), "wb") as wav_file:
-        wav_file.setnchannels(1)
+        wav_file.setnchannels(channels)
         wav_file.setsampwidth(2)
         wav_file.setframerate(sample_rate)
         wav_file.writeframes(frames)
@@ -254,14 +345,20 @@ def main() -> int:
 
     ensure_output_root_ready(args.output_root)
     print(f"seed={seed}")
+    mic_positions_m = parse_mic_positions_cm(args.mic_positions_cm)
 
     for index in range(args.count):
         timestamp = start + timedelta(seconds=index * args.spacing_sec)
         path = output_path(args.output_root, timestamp, args.latitude, args.longitude)
-        frames = generate_samples(args.preset, args.duration_sec, args.sample_rate, rng)
+        mono_samples = generate_mono_samples(
+            args.preset, args.duration_sec, args.sample_rate, rng
+        )
+        frames, channels = render_samples(
+            mono_samples, args.sample_rate, args.spatial_mode, mic_positions_m
+        )
         ensure_parent_ready(path)
-        write_wav(path, frames, args.sample_rate)
-        print(path)
+        write_wav(path, frames, args.sample_rate, channels)
+        print(f"{path} channels={channels} spatial_mode={args.spatial_mode}")
 
     return 0
 

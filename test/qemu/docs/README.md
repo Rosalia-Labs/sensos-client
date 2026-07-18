@@ -225,6 +225,22 @@ That writes files under:
 
 Use `--preset mixed` or `--preset noise` if you want simpler non-birdlike input.
 
+To exercise four-channel cardinal beamforming, generate a file that cycles
+through device-relative north, east, south, and west arrivals in consecutive
+3-second segments:
+
+```bash
+python3 /path/to/repo/test/generate-queued-wav \
+  --duration-sec 12 \
+  --preset birdish \
+  --spatial-mode cardinal-cycle \
+  --mic-positions-cm '0,200;200,0;0,-200;-200,0'
+```
+
+Configure BirdNET with the same channel-order geometry. Beam indices should
+follow `0=north`, `1=east`, `2=south`, and `3=west` as the generated file
+advances through its four segments.
+
 ## Installer display
 
 The launcher attaches a virtio GPU plus USB keyboard and tablet so the Debian installer appears in the QEMU window on macOS. If you ever land in the QEMU monitor instead of the guest display, try:
