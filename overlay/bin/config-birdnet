@@ -16,7 +16,7 @@ MODEL_ROOT = CLIENT_ROOT / "birdnet" / "BirdNET_v2.4_tflite"
 SERVICE_NAME = "sensos-birdnet.service"
 SETUP_HELPER = CLIENT_ROOT / "libexec" / "setup-birdnet.sh"
 DEFAULT_BACKEND = "litert"
-DEFAULT_INPUT_MODE = "mono"
+DEFAULT_INPUT_MODE = "split-channels"
 BACKEND_ALIASES = {
     "tensorflow": "tensorflow",
     "litert": "litert",
@@ -69,7 +69,7 @@ def parse_args() -> argparse.Namespace:
         "--input-mode",
         choices=INPUT_MODE_CHOICES,
         default=DEFAULT_INPUT_MODE,
-        help="How BirdNET should treat multichannel audio (default: mono).",
+        help="How BirdNET should treat multichannel audio (default: split-channels).",
     )
     return parser.parse_args()
 

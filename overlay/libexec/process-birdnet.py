@@ -87,7 +87,7 @@ def read_backend_preference(config_path: Path) -> str:
 
 def read_input_mode(config_path: Path) -> str:
     config = read_birdnet_config(config_path)
-    mode = config.get("BIRDNET_INPUT_MODE", "mono")
+    mode = config.get("BIRDNET_INPUT_MODE", "split-channels")
     if mode not in {"mono", "split-channels"}:
         raise RuntimeError(f"Unsupported BIRDNET_INPUT_MODE='{mode}' in {config_path}")
     return mode
@@ -453,7 +453,7 @@ def collect_detections(
                 channel_index,
                 0,
                 0,
-                frames,
+                WINDOW_FRAMES,
                 0,
                 volume,
                 label,
@@ -534,6 +534,10 @@ def write_detection_clips(
             chunk = audio[detection.start_frame : detection.end_frame]
         else:
             chunk = audio[detection.start_frame : detection.end_frame, detection.channel_index]
+        if len(chunk) < WINDOW_FRAMES:
+            padded = np.zeros(WINDOW_FRAMES, dtype=chunk.dtype)
+            padded[: len(chunk)] = chunk
+            chunk = padded
         sf.write(clip_path, chunk, sample_rate, format="FLAC")
         try:
             clip_path.chmod(0o664)
