@@ -76,6 +76,35 @@ class BirdNETChannelTests(unittest.TestCase):
         for channel_index, channel_audio in channels:
             np.testing.assert_array_equal(channel_audio, audio[:, channel_index])
 
+    def test_mock_microphone_geometry_uses_four_xy_positions(self):
+        positions = self.module.parse_mic_positions_cm("0,200;200,0;0,-200;-200,0")
+        self.assertEqual(positions.shape, (4, 2))
+        np.testing.assert_allclose(positions[0], [0.0, 2.0])
+        np.testing.assert_allclose(positions[3], [-2.0, 0.0])
+
+    def test_north_plane_wave_is_strongest_in_north_beam(self):
+        sample_rate = self.module.SAMPLE_RATE
+        positions = self.module.parse_mic_positions_cm("0,200;200,0;0,-200;-200,0")
+        centered = positions - positions.mean(axis=0)
+        north_direction = self.module.CARDINAL_BEAMS[0][1]
+        advances = (
+            centered @ north_direction * sample_rate / self.module.SPEED_OF_SOUND_MPS
+        )
+        source = np.random.default_rng(7).normal(size=sample_rate).astype(np.float32)
+        microphone_audio = np.column_stack(
+            [
+                self.module.shift_audio_fractional(source, -advance)
+                for advance in advances
+            ]
+        )
+
+        beams = dict(
+            self.module.beamform_cardinal(microphone_audio, sample_rate, positions)
+        )
+        north_rms = np.sqrt(np.mean(np.square(beams[0][100:-100])))
+        south_rms = np.sqrt(np.mean(np.square(beams[2][100:-100])))
+        self.assertGreater(north_rms, south_rms * 1.5)
+
     def test_short_window_metadata_covers_padded_three_seconds(self):
         model = self.module.BirdNETModel(None, [], [], [])
         with patch.object(
@@ -123,7 +152,10 @@ class BirdNETChannelTests(unittest.TestCase):
 
         with patch.object(self.module.sf, "write", side_effect=capture_write):
             self.module.write_detection_clips(
-                source_path, audio, self.module.SAMPLE_RATE, [detection]
+                source_path,
+                {3: audio[:, 3]},
+                self.module.SAMPLE_RATE,
+                [detection],
             )
 
         self.assertEqual(written_audio[0].ndim, 1)

@@ -56,6 +56,14 @@ MIN_FILE_AGE_SEC = int(os.environ.get("BIRDNET_MIN_FILE_AGE_SEC", "15"))
 FILE_STABLE_SEC = int(os.environ.get("BIRDNET_FILE_STABLE_SEC", "30"))
 IDLE_SLEEP_SEC = int(os.environ.get("BIRDNET_IDLE_SLEEP_SEC", "60"))
 ERROR_SLEEP_SEC = int(os.environ.get("BIRDNET_ERROR_SLEEP_SEC", "10"))
+SPEED_OF_SOUND_MPS = 343.0
+DEFAULT_MIC_POSITIONS_CM = "0,200;200,0;0,-200;-200,0"
+CARDINAL_BEAMS = (
+    ("north", np.array([0.0, 1.0], dtype=np.float64)),
+    ("east", np.array([1.0, 0.0], dtype=np.float64)),
+    ("south", np.array([0.0, -1.0], dtype=np.float64)),
+    ("west", np.array([-1.0, 0.0], dtype=np.float64)),
+)
 
 
 def read_birdnet_config(config_path: Path) -> dict[str, str]:
@@ -88,13 +96,41 @@ def read_backend_preference(config_path: Path) -> str:
 def read_input_mode(config_path: Path) -> str:
     config = read_birdnet_config(config_path)
     mode = config.get("BIRDNET_INPUT_MODE", "split-channels")
-    if mode not in {"mono", "split-channels"}:
+    if mode not in {"mono", "split-channels", "cardinal-beams"}:
         raise RuntimeError(f"Unsupported BIRDNET_INPUT_MODE='{mode}' in {config_path}")
     return mode
 
 
+def parse_mic_positions_cm(value: str) -> np.ndarray:
+    try:
+        positions = np.array(
+            [
+                [float(coordinate.strip()) for coordinate in pair.split(",")]
+                for pair in value.split(";")
+            ],
+            dtype=np.float64,
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "Microphone positions must use 'x,y;x,y;x,y;x,y' centimeter coordinates"
+        ) from exc
+    if positions.shape != (4, 2) or not np.isfinite(positions).all():
+        raise ValueError(
+            "Microphone positions must contain four finite x,y coordinate pairs"
+        )
+    return positions / 100.0
+
+
+def read_mic_positions(config_path: Path) -> np.ndarray:
+    config = read_birdnet_config(config_path)
+    return parse_mic_positions_cm(
+        config.get("BIRDNET_MIC_POSITIONS_CM", DEFAULT_MIC_POSITIONS_CM)
+    )
+
+
 BACKEND_PREFERENCE = read_backend_preference(BIRDNET_CONFIG)
 INPUT_MODE = read_input_mode(BIRDNET_CONFIG)
+MIC_POSITIONS_M = read_mic_positions(BIRDNET_CONFIG)
 if BACKEND_PREFERENCE == "litert":
     try:
         from ai_edge_litert.interpreter import Interpreter
@@ -410,9 +446,51 @@ def to_mono(audio: np.ndarray) -> np.ndarray:
     return audio.astype(np.float32).mean(axis=1)
 
 
-def audio_channels(audio: np.ndarray, input_mode: str) -> list[tuple[int, np.ndarray]]:
+def shift_audio_fractional(audio: np.ndarray, advance_samples: float) -> np.ndarray:
+    sample_positions = np.arange(len(audio), dtype=np.float64) + advance_samples
+    return np.interp(
+        sample_positions,
+        np.arange(len(audio), dtype=np.float64),
+        audio.astype(np.float64),
+        left=0.0,
+        right=0.0,
+    )
+
+
+def beamform_cardinal(
+    audio: np.ndarray, sample_rate: int, mic_positions_m: np.ndarray
+) -> list[tuple[int, np.ndarray]]:
+    if audio.ndim != 2 or audio.shape[1] != 4:
+        raise ValueError(
+            f"cardinal-beams requires four-channel audio; received shape {audio.shape}"
+        )
+    if mic_positions_m.shape != (4, 2):
+        raise ValueError("cardinal-beams requires four microphone x,y positions")
+
+    centered_positions = mic_positions_m - mic_positions_m.mean(axis=0)
+    beams = []
+    for beam_index, (_, direction) in enumerate(CARDINAL_BEAMS):
+        advances = centered_positions @ direction * sample_rate / SPEED_OF_SOUND_MPS
+        aligned = np.column_stack(
+            [
+                shift_audio_fractional(audio[:, channel_index], advances[channel_index])
+                for channel_index in range(4)
+            ]
+        )
+        beams.append((beam_index, aligned.mean(axis=1).astype(np.float32)))
+    return beams
+
+
+def audio_channels(
+    audio: np.ndarray,
+    input_mode: str,
+    sample_rate: int = SAMPLE_RATE,
+    mic_positions_m: np.ndarray = MIC_POSITIONS_M,
+) -> list[tuple[int, np.ndarray]]:
     if audio.ndim == 1:
         return [(0, audio.astype(np.float32))]
+    if input_mode == "cardinal-beams":
+        return beamform_cardinal(audio, sample_rate, mic_positions_m)
     if input_mode == "split-channels":
         return [(idx, audio[:, idx].astype(np.float32)) for idx in range(audio.shape[1])]
     return [(0, to_mono(audio))]
@@ -506,7 +584,7 @@ def collect_detections(
 
 def write_detection_clips(
     source_path: Path,
-    audio: np.ndarray,
+    analysis_audio: dict[int, np.ndarray],
     sample_rate: int,
     detections: List[Detection],
 ) -> dict[tuple[int, int], tuple[Path, int]]:
@@ -530,10 +608,8 @@ def write_detection_clips(
             f"{start_sec:09.3f}-{end_sec:09.3f}.flac"
         )
         clip_path = out_dir / filename
-        if audio.ndim == 1:
-            chunk = audio[detection.start_frame : detection.end_frame]
-        else:
-            chunk = audio[detection.start_frame : detection.end_frame, detection.channel_index]
+        channel_audio = analysis_audio[detection.channel_index]
+        chunk = channel_audio[detection.start_frame : detection.end_frame]
         if len(chunk) < WINDOW_FRAMES:
             padded = np.zeros(WINDOW_FRAMES, dtype=chunk.dtype)
             padded[: len(chunk)] = chunk
@@ -582,8 +658,11 @@ def process_audio(
 
     audio, sample_rate = sf.read(source_path, dtype="int32", always_2d=True)
     latitude, longitude = location_coordinates()
+    analysis_channels = audio_channels(
+        audio, INPUT_MODE, sample_rate, MIC_POSITIONS_M
+    )
     detections: List[Detection] = []
-    for channel_index, channel_audio in audio_channels(audio, INPUT_MODE):
+    for channel_index, channel_audio in analysis_channels:
         channel_detections = collect_detections(
             channel_index,
             channel_audio,
@@ -595,7 +674,9 @@ def process_audio(
             source_observation_date(source_path),
         )
         detections.extend(channel_detections)
-    written_clips = write_detection_clips(source_path, audio, sample_rate, detections)
+    written_clips = write_detection_clips(
+        source_path, dict(analysis_channels), sample_rate, detections
+    )
 
     conn.executemany(
         """

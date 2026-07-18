@@ -4,6 +4,7 @@
 
 import argparse
 import importlib.util
+import math
 import os
 import subprocess
 import sys
@@ -17,12 +18,13 @@ SERVICE_NAME = "sensos-birdnet.service"
 SETUP_HELPER = CLIENT_ROOT / "libexec" / "setup-birdnet.sh"
 DEFAULT_BACKEND = "litert"
 DEFAULT_INPUT_MODE = "split-channels"
+DEFAULT_MIC_POSITIONS_CM = "0,200;200,0;0,-200;-200,0"
 BACKEND_ALIASES = {
     "tensorflow": "tensorflow",
     "litert": "litert",
     "tflite": "litert",
 }
-INPUT_MODE_CHOICES = ("mono", "split-channels")
+INPUT_MODE_CHOICES = ("mono", "split-channels", "cardinal-beams")
 
 if not UTILS_FILE.is_file():
     raise RuntimeError(f"Missing utils.py at {UTILS_FILE}")
@@ -71,6 +73,14 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_INPUT_MODE,
         help="How BirdNET should treat multichannel audio (default: split-channels).",
     )
+    parser.add_argument(
+        "--mic-positions-cm",
+        default=None,
+        help=(
+            "Four device-relative microphone x,y positions in centimeters, "
+            "formatted as 'x,y;x,y;x,y;x,y'."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -101,7 +111,41 @@ def read_existing_input_mode() -> str:
     return DEFAULT_INPUT_MODE
 
 
-def write_config(enabled: bool, backend: str, input_mode: str) -> None:
+def read_existing_mic_positions() -> str:
+    if not CONFIG_FILE.exists():
+        return DEFAULT_MIC_POSITIONS_CM
+
+    for line in CONFIG_FILE.read_text(encoding="utf-8").splitlines():
+        if line.startswith("BIRDNET_MIC_POSITIONS_CM="):
+            return line.split("=", 1)[1].strip()
+
+    return DEFAULT_MIC_POSITIONS_CM
+
+
+def validate_mic_positions(value: str) -> str:
+    try:
+        positions = [
+            tuple(float(coordinate.strip()) for coordinate in pair.split(","))
+            for pair in value.split(";")
+        ]
+    except ValueError as exc:
+        raise SystemExit(
+            "ERROR: --mic-positions-cm must use 'x,y;x,y;x,y;x,y' coordinates."
+        ) from exc
+    if (
+        len(positions) != 4
+        or any(len(position) != 2 for position in positions)
+        or any(not math.isfinite(value) for position in positions for value in position)
+    ):
+        raise SystemExit(
+            "ERROR: --mic-positions-cm must contain exactly four finite x,y coordinate pairs."
+        )
+    return value
+
+
+def write_config(
+    enabled: bool, backend: str, input_mode: str, mic_positions_cm: str
+) -> None:
     backend = BACKEND_ALIASES[backend]
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(
@@ -109,6 +153,7 @@ def write_config(enabled: bool, backend: str, input_mode: str) -> None:
             f"BIRDNET_ENABLED={'1' if enabled else '0'}\n"
             f"BIRDNET_BACKEND={backend}\n"
             f"BIRDNET_INPUT_MODE={input_mode}\n"
+            f"BIRDNET_MIC_POSITIONS_CM={mic_positions_cm}\n"
         ),
         encoding="utf-8",
     )
@@ -152,14 +197,22 @@ def main() -> int:
     args = parse_args()
 
     if args.disable:
-        write_config(False, read_existing_backend(), read_existing_input_mode())
+        write_config(
+            False,
+            read_existing_backend(),
+            read_existing_input_mode(),
+            read_existing_mic_positions(),
+        )
         systemctl("disable", "--now", SERVICE_NAME)
         print("BirdNET disabled.")
         return 0
 
     ensure_models_present()
     selected_backend = BACKEND_ALIASES[args.backend]
-    write_config(True, selected_backend, args.input_mode)
+    mic_positions_cm = validate_mic_positions(
+        args.mic_positions_cm or read_existing_mic_positions()
+    )
+    write_config(True, selected_backend, args.input_mode, mic_positions_cm)
     run_setup_step()
 
     if args.enable_service:

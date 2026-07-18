@@ -117,6 +117,27 @@ Supported input modes:
 
 - `mono`: average all channels into one analysis stream
 - `split-channels` (default): run BirdNET separately on every channel and include the channel index in output filenames and downstream metadata
+- `cardinal-beams`: create device-relative north, east, south, and west delay-and-sum beams from exactly four synchronized microphones, then process each beam as a mono stream
+
+Cardinal beam indices are `0=north`, `1=east`, `2=south`, and `3=west`. These
+are device-relative directions until device heading is incorporated. Configure
+the physical microphone centers as x,y coordinates in centimeters, in capture
+channel order:
+
+```bash
+sudo -u sensos-admin config-birdnet \
+  --input-mode cardinal-beams \
+  --mic-positions-cm '0,200;200,0;0,-200;-200,0' \
+  --start-service
+```
+
+The provisional default above models a four-microphone cross with microphones
+two meters north, east, south, and west of array center. It is intended to
+represent installations where microphones are roughly one to three meters from
+center. Replace it with measured positions for each hardware layout.
+Measurements do not need survey precision, but channel order and device-relative
+axis orientation must be consistent. Cardinal beamforming assumes all four
+channels share a synchronized audio clock.
 
 To enable and start immediately:
 

@@ -857,7 +857,8 @@ Behavior:
 
 - writes `/sensos/etc/birdnet.env`
 - auto-downloads BirdNET models when required files are missing
-- supports `mono` and `split-channels` multichannel input handling; `split-channels` is the default and preserves a zero-based channel index downstream
+- supports `mono`, `split-channels`, and four-microphone `cardinal-beams` input handling; `split-channels` is the default and preserves a zero-based channel or beam index downstream
+- accepts `--mic-positions-cm 'x,y;x,y;x,y;x,y'` in capture channel order for delay-and-sum beam steering
 - enables `sensos-birdnet.service` for future boot by default
 - leaves the BirdNET service stopped unless `--start-service` is supplied
 - controls `sensos-birdnet.service`
