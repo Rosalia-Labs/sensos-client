@@ -93,6 +93,11 @@ def parse_args() -> argparse.Namespace:
         help="Drop intervals whose location/date likelihood is below this value.",
     )
     parser.add_argument(
+        "--min-volume",
+        type=probability,
+        help="Drop intervals whose normalized RMS volume is below this value.",
+    )
+    parser.add_argument(
         "--min-scoreXlikelihood",
         "--min-scorexlikelihood",
         dest="min_score_x_likelihood",
@@ -152,6 +157,7 @@ def write_config(
     input_mode: str,
     min_score: float,
     min_likelihood: float,
+    min_volume: float,
     min_score_x_likelihood: float,
 ) -> None:
     backend = BACKEND_ALIASES[backend]
@@ -163,6 +169,7 @@ def write_config(
             f"BIRDNET_INPUT_MODE={input_mode}\n"
             f"BIRDNET_MIN_SCORE={min_score}\n"
             f"BIRDNET_MIN_LIKELIHOOD={min_likelihood}\n"
+            f"BIRDNET_MIN_VOLUME={min_volume}\n"
             f"BIRDNET_MIN_SCORE_X_LIKELIHOOD={min_score_x_likelihood}\n"
         ),
         encoding="utf-8",
@@ -213,6 +220,7 @@ def main() -> int:
             read_existing_input_mode(),
             read_existing_threshold("BIRDNET_MIN_SCORE"),
             read_existing_threshold("BIRDNET_MIN_LIKELIHOOD"),
+            read_existing_threshold("BIRDNET_MIN_VOLUME"),
             read_existing_threshold("BIRDNET_MIN_SCORE_X_LIKELIHOOD"),
         )
         systemctl("disable", "--now", SERVICE_NAME)
@@ -231,6 +239,11 @@ def main() -> int:
         if args.min_likelihood is not None
         else read_existing_threshold("BIRDNET_MIN_LIKELIHOOD")
     )
+    min_volume = (
+        args.min_volume
+        if args.min_volume is not None
+        else read_existing_threshold("BIRDNET_MIN_VOLUME")
+    )
     min_score_x_likelihood = (
         args.min_score_x_likelihood
         if args.min_score_x_likelihood is not None
@@ -242,6 +255,7 @@ def main() -> int:
         args.input_mode,
         min_score,
         min_likelihood,
+        min_volume,
         min_score_x_likelihood,
     )
     run_setup_step()
@@ -255,6 +269,7 @@ def main() -> int:
         "BirdNET configured. "
         f"Backend: {selected_backend}. Input mode: {args.input_mode}. "
         f"Minimum score: {min_score}. Minimum likelihood: {min_likelihood}. "
+        f"Minimum volume: {min_volume}. "
         f"Minimum score×likelihood: {min_score_x_likelihood}. Service: {SERVICE_NAME}"
     )
     return 0

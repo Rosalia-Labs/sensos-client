@@ -845,6 +845,7 @@ Important flags:
 - `--input-mode`
 - `--min-score`
 - `--min-likelihood`
+- `--min-volume`
 - `--min-scoreXlikelihood`
 
 Typical use:
@@ -853,7 +854,7 @@ Typical use:
 config-birdnet --start-service
 config-birdnet --backend litert --start-service
 config-birdnet --input-mode split-channels --start-service
-config-birdnet --min-score 0.7 --min-likelihood 0.2 --min-scoreXlikelihood 0.18
+config-birdnet --min-score 0.7 --min-likelihood 0.2 --min-volume 0.01 --min-scoreXlikelihood 0.18
 config-birdnet --disable
 ```
 
@@ -862,7 +863,7 @@ Behavior:
 - writes `/sensos/etc/birdnet.env`
 - auto-downloads BirdNET models when required files are missing
 - supports `mono` and `split-channels` multichannel input handling; `split-channels` is the default and preserves a zero-based channel index downstream
-- drops three-second intervals before clip creation and database insertion when any configured score, likelihood, or score-times-likelihood minimum is missed
+- drops three-second intervals before clip creation and database insertion when any configured score, likelihood, normalized-volume, or score-times-likelihood minimum is missed
 - enables `sensos-birdnet.service` for future boot by default
 - leaves the BirdNET service stopped unless `--start-service` is supplied
 - controls `sensos-birdnet.service`

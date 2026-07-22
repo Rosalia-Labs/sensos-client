@@ -109,6 +109,7 @@ BACKEND_PREFERENCE = read_backend_preference(BIRDNET_CONFIG)
 INPUT_MODE = read_input_mode(BIRDNET_CONFIG)
 MIN_SCORE = read_min_threshold(BIRDNET_CONFIG, "BIRDNET_MIN_SCORE")
 MIN_LIKELIHOOD = read_min_threshold(BIRDNET_CONFIG, "BIRDNET_MIN_LIKELIHOOD")
+MIN_VOLUME = read_min_threshold(BIRDNET_CONFIG, "BIRDNET_MIN_VOLUME")
 MIN_SCORE_X_LIKELIHOOD = read_min_threshold(
     BIRDNET_CONFIG, "BIRDNET_MIN_SCORE_X_LIKELIHOOD"
 )
@@ -437,6 +438,8 @@ def audio_channels(audio: np.ndarray, input_mode: str) -> list[tuple[int, np.nda
 
 def passes_detection_filters(detection: Detection) -> bool:
     if detection.score < MIN_SCORE:
+        return False
+    if detection.volume < MIN_VOLUME:
         return False
     if MIN_LIKELIHOOD > 0 and (
         detection.likely_score is None or detection.likely_score < MIN_LIKELIHOOD

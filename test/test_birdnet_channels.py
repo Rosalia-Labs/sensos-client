@@ -152,12 +152,15 @@ class BirdNETChannelTests(unittest.TestCase):
             self.module,
             MIN_SCORE=0.7,
             MIN_LIKELIHOOD=0.4,
+            MIN_VOLUME=0.1,
             MIN_SCORE_X_LIKELIHOOD=0.4,
         ):
             self.assertTrue(self.module.passes_detection_filters(detection))
         with patch.object(self.module, "MIN_SCORE", 0.81):
             self.assertFalse(self.module.passes_detection_filters(detection))
         with patch.object(self.module, "MIN_LIKELIHOOD", 0.51):
+            self.assertFalse(self.module.passes_detection_filters(detection))
+        with patch.object(self.module, "MIN_VOLUME", 0.11):
             self.assertFalse(self.module.passes_detection_filters(detection))
         with patch.object(self.module, "MIN_SCORE_X_LIKELIHOOD", 0.41):
             self.assertFalse(self.module.passes_detection_filters(detection))
