@@ -95,13 +95,12 @@ Reference:
 - [Network capture](network-capture.md)
 - Full command list in [`Command Reference`](command-reference.md)
 
-## 6. Validate And Move To Field
+## 6. Validate Before Moving To Field
 
-For staged deployment and network cutover, follow:
-
-- [`Staged Provisioning And Network Cutover`](command-reference.md#staged-provisioning-and-network-cutover)
-- [`prep-for-deployment`](command-reference.md#prep-for-deployment)
-- [`field-deploy`](command-reference.md#field-deploy)
+Enroll directly on the destination network in step 3, then configure and test
+the complete device without changing its network identity before deployment.
+This may place test telemetry on the operational server, but avoids a
+last-minute enrollment cutover that could fail in the field.
 
 ## Optional: Upload Hardware Inventory
 

@@ -178,7 +178,7 @@ Main gotchas:
 - if a device is re-enrolled or otherwise gets a new WireGuard IP, keep the same `--note` so the server-side name stays continuous across IP changes
 - in the current server implementation, the server searches for the first available host IP starting at the requested subnet offset; with the normal default of `1`, allocation starts at `x.x.1.1`
 - subnet `0` is reserved for admin containers and computers, so normal device enrollments should start at subnet `1` or later
-- `config-network` does not upload the local hardware profile anymore; that upload is intentionally a separate step so you can enroll on one Pi in the lab, then move the image or storage to the actual field hardware and upload the final hardware profile there
+- `config-network` does not upload the local hardware profile anymore; upload it separately after enrollment, preferably from the final deployed hardware
 
 Run this before commands that need:
 
@@ -187,79 +187,21 @@ Run this before commands that need:
 - `SERVER_PORT`
 - client API password
 
-### Staged Provisioning And Network Cutover
+### Provision Directly On The Destination Network
 
-A practical field workflow is:
-
-1. enroll/configure on a temporary setup network (for example `testing`)
-2. finish full device configuration and validation while internet access is convenient
-3. clear test data and re-enroll on the operational network (for example `biosense`)
-
-This works, with two important notes:
-
-- some setup/config flows may require internet access depending on what you run
-  (for example package installs, Python dependency installs, model downloads, or
-  uploads/tests against external endpoints)
-- changing `--network` can leave old WireGuard artifacts unless you explicitly
-  retire the previous interface/unit
-
-Recommended cutover sequence:
+Enroll each device on its operational network from the beginning:
 
 ```sh
-# 1) Quiesce and clear data from the testing epoch
-archive-mode --enter
-archive-mode --exit --clear-data
-
-# 2) Re-enroll onto the operational network
-config-network --setup-server <server-host-or-ip> --setup-port <setup-port> --network biosense --force
+config-network \
+  --setup-server <server-host-or-ip> \
+  --setup-port <setup-port> \
+  --network biosense
 ```
 
-Why `--force` is required for cutover:
-
-- it fully removes existing managed enrollment artifacts before re-enrolling
-- this includes prior SensOS-managed WireGuard config/key files, prior
-  `wg-quick@<network>` units, `/sensos/etc/network.conf`, and the saved client
-  API password file
-
-### `prep-for-deployment`
-
-Prepares a fully configured lab/test client for field deployment cutover while
-avoiding lab data carryover.
-
-What it does:
-
-- requires that `config-network` has already completed successfully
-- reuses setup/API parameters from existing `/sensos/etc/network.conf`
-- asks for final confirmation that clock/time looks correct
-- asks for final confirmation that configured location is the field location
-- stops data collection/upload services
-- clears `/sensos/data` by default (use `--keep-data` to skip)
-- switches enrollment/network with `config-network --force`
-- leaves data services stopped so recording does not start until field activation
-
-Typical use:
-
-```sh
-prep-for-deployment \
-  --network biosense \
-  --yes
-```
-
-### `field-deploy`
-
-Final in-field activation step after `prep-for-deployment`.
-
-What it does:
-
-- starts data collection/upload services
-- starts periodic status updates by default
-- prints service status summary
-
-Typical use:
-
-```sh
-field-deploy
-```
+Configure and validate the device while it retains that enrollment. Test
+uploads may therefore reach the operational server, but deployment does not
+depend on a last-minute WireGuard identity and network cutover. The retired
+`prep-for-deployment` and `field-deploy` commands are removed during upgrade.
 
 ### `upload-hardware-profile`
 
