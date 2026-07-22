@@ -133,6 +133,55 @@ class BirdNETChannelTests(unittest.TestCase):
         )
         self.assertFalse(written_audio[0][self.module.SAMPLE_RATE :].any())
 
+    def test_detection_filters_require_all_configured_minimums(self):
+        detection = self.module.Detection(
+            channel_index=0,
+            window_index=0,
+            start_frame=0,
+            end_frame=self.module.WINDOW_FRAMES,
+            max_score_start_frame=0,
+            volume=0.1,
+            label="Test bird",
+            score=0.8,
+            likely_score=0.5,
+            weighted_label="Test bird",
+            weighted_score=0.8,
+            weighted_likely_score=0.5,
+        )
+        with patch.multiple(
+            self.module,
+            MIN_SCORE=0.7,
+            MIN_LIKELIHOOD=0.4,
+            MIN_SCORE_X_LIKELIHOOD=0.4,
+        ):
+            self.assertTrue(self.module.passes_detection_filters(detection))
+        with patch.object(self.module, "MIN_SCORE", 0.81):
+            self.assertFalse(self.module.passes_detection_filters(detection))
+        with patch.object(self.module, "MIN_LIKELIHOOD", 0.51):
+            self.assertFalse(self.module.passes_detection_filters(detection))
+        with patch.object(self.module, "MIN_SCORE_X_LIKELIHOOD", 0.41):
+            self.assertFalse(self.module.passes_detection_filters(detection))
+
+    def test_positive_likelihood_filter_rejects_missing_likelihood(self):
+        detection = self.module.Detection(
+            channel_index=0,
+            window_index=0,
+            start_frame=0,
+            end_frame=self.module.WINDOW_FRAMES,
+            max_score_start_frame=0,
+            volume=0.1,
+            label="Test bird",
+            score=0.9,
+            likely_score=None,
+            weighted_label="Test bird",
+            weighted_score=0.9,
+            weighted_likely_score=None,
+        )
+        with patch.object(self.module, "MIN_LIKELIHOOD", 0.1):
+            self.assertFalse(self.module.passes_detection_filters(detection))
+        with patch.object(self.module, "MIN_SCORE_X_LIKELIHOOD", 0.1):
+            self.assertFalse(self.module.passes_detection_filters(detection))
+
 
 if __name__ == "__main__":
     unittest.main()

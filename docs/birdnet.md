@@ -104,6 +104,20 @@ upload. To explicitly mix multichannel input down to one analysis stream:
 sudo -u sensos-admin config-birdnet --input-mode mono
 ```
 
+To discard three-second detections below any configured confidence threshold:
+
+```bash
+sudo -u sensos-admin config-birdnet \
+  --min-score 0.7 \
+  --min-likelihood 0.2 \
+  --min-scoreXlikelihood 0.18
+```
+
+All three thresholds range from `0` to `1` and default to `0` (disabled). A
+rejected interval produces no output clip and no database detection. Positive
+likelihood-based thresholds also reject intervals when location/date
+likelihood is unavailable.
+
 That will:
 
 - verify the model files exist

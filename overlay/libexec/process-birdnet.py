@@ -93,8 +93,25 @@ def read_input_mode(config_path: Path) -> str:
     return mode
 
 
+def read_min_threshold(config_path: Path, key: str) -> float:
+    config = read_birdnet_config(config_path)
+    raw_value = config.get(key, "0")
+    try:
+        value = float(raw_value)
+    except ValueError as exc:
+        raise RuntimeError(f"Invalid {key}='{raw_value}' in {config_path}") from exc
+    if not 0.0 <= value <= 1.0:
+        raise RuntimeError(f"Invalid {key}='{raw_value}' in {config_path}; expected 0..1")
+    return value
+
+
 BACKEND_PREFERENCE = read_backend_preference(BIRDNET_CONFIG)
 INPUT_MODE = read_input_mode(BIRDNET_CONFIG)
+MIN_SCORE = read_min_threshold(BIRDNET_CONFIG, "BIRDNET_MIN_SCORE")
+MIN_LIKELIHOOD = read_min_threshold(BIRDNET_CONFIG, "BIRDNET_MIN_LIKELIHOOD")
+MIN_SCORE_X_LIKELIHOOD = read_min_threshold(
+    BIRDNET_CONFIG, "BIRDNET_MIN_SCORE_X_LIKELIHOOD"
+)
 if BACKEND_PREFERENCE == "litert":
     try:
         from ai_edge_litert.interpreter import Interpreter
@@ -418,6 +435,21 @@ def audio_channels(audio: np.ndarray, input_mode: str) -> list[tuple[int, np.nda
     return [(0, to_mono(audio))]
 
 
+def passes_detection_filters(detection: Detection) -> bool:
+    if detection.score < MIN_SCORE:
+        return False
+    if MIN_LIKELIHOOD > 0 and (
+        detection.likely_score is None or detection.likely_score < MIN_LIKELIHOOD
+    ):
+        return False
+    if MIN_SCORE_X_LIKELIHOOD > 0 and (
+        detection.likely_score is None
+        or detection.score * detection.likely_score < MIN_SCORE_X_LIKELIHOOD
+    ):
+        return False
+    return True
+
+
 def collect_detections(
     channel_index: int,
     audio_mono: np.ndarray,
@@ -594,7 +626,11 @@ def process_audio(
             longitude,
             source_observation_date(source_path),
         )
-        detections.extend(channel_detections)
+        detections.extend(
+            detection
+            for detection in channel_detections
+            if passes_detection_filters(detection)
+        )
     written_clips = write_detection_clips(source_path, audio, sample_rate, detections)
 
     conn.executemany(

@@ -23,6 +23,7 @@ BACKEND_ALIASES = {
     "tflite": "litert",
 }
 INPUT_MODE_CHOICES = ("mono", "split-channels")
+DEFAULT_MIN_THRESHOLD = 0.0
 
 if not UTILS_FILE.is_file():
     raise RuntimeError(f"Missing utils.py at {UTILS_FILE}")
@@ -33,6 +34,16 @@ assert UTILS_SPEC.loader is not None
 UTILS_SPEC.loader.exec_module(UTILS_MODULE)
 
 ensure_sensos_admin = UTILS_MODULE.ensure_sensos_admin
+
+
+def probability(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a number between 0 and 1") from exc
+    if not 0.0 <= parsed <= 1.0:
+        raise argparse.ArgumentTypeError("must be between 0 and 1")
+    return parsed
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
@@ -71,6 +82,23 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_INPUT_MODE,
         help="How BirdNET should treat multichannel audio (default: split-channels).",
     )
+    parser.add_argument(
+        "--min-score",
+        type=probability,
+        help="Drop three-second intervals whose BirdNET score is below this value.",
+    )
+    parser.add_argument(
+        "--min-likelihood",
+        type=probability,
+        help="Drop intervals whose location/date likelihood is below this value.",
+    )
+    parser.add_argument(
+        "--min-scoreXlikelihood",
+        "--min-scorexlikelihood",
+        dest="min_score_x_likelihood",
+        type=probability,
+        help="Drop intervals whose score multiplied by likelihood is below this value.",
+    )
     return parser.parse_args()
 
 
@@ -101,7 +129,31 @@ def read_existing_input_mode() -> str:
     return DEFAULT_INPUT_MODE
 
 
-def write_config(enabled: bool, backend: str, input_mode: str) -> None:
+def read_existing_threshold(key: str) -> float:
+    if not CONFIG_FILE.exists():
+        return DEFAULT_MIN_THRESHOLD
+
+    prefix = f"{key}="
+    for line in CONFIG_FILE.read_text(encoding="utf-8").splitlines():
+        if line.startswith(prefix):
+            try:
+                value = float(line.split("=", 1)[1].strip())
+            except ValueError:
+                return DEFAULT_MIN_THRESHOLD
+            if 0.0 <= value <= 1.0:
+                return value
+            return DEFAULT_MIN_THRESHOLD
+    return DEFAULT_MIN_THRESHOLD
+
+
+def write_config(
+    enabled: bool,
+    backend: str,
+    input_mode: str,
+    min_score: float,
+    min_likelihood: float,
+    min_score_x_likelihood: float,
+) -> None:
     backend = BACKEND_ALIASES[backend]
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(
@@ -109,6 +161,9 @@ def write_config(enabled: bool, backend: str, input_mode: str) -> None:
             f"BIRDNET_ENABLED={'1' if enabled else '0'}\n"
             f"BIRDNET_BACKEND={backend}\n"
             f"BIRDNET_INPUT_MODE={input_mode}\n"
+            f"BIRDNET_MIN_SCORE={min_score}\n"
+            f"BIRDNET_MIN_LIKELIHOOD={min_likelihood}\n"
+            f"BIRDNET_MIN_SCORE_X_LIKELIHOOD={min_score_x_likelihood}\n"
         ),
         encoding="utf-8",
     )
@@ -152,14 +207,43 @@ def main() -> int:
     args = parse_args()
 
     if args.disable:
-        write_config(False, read_existing_backend(), read_existing_input_mode())
+        write_config(
+            False,
+            read_existing_backend(),
+            read_existing_input_mode(),
+            read_existing_threshold("BIRDNET_MIN_SCORE"),
+            read_existing_threshold("BIRDNET_MIN_LIKELIHOOD"),
+            read_existing_threshold("BIRDNET_MIN_SCORE_X_LIKELIHOOD"),
+        )
         systemctl("disable", "--now", SERVICE_NAME)
         print("BirdNET disabled.")
         return 0
 
     ensure_models_present()
     selected_backend = BACKEND_ALIASES[args.backend]
-    write_config(True, selected_backend, args.input_mode)
+    min_score = (
+        args.min_score
+        if args.min_score is not None
+        else read_existing_threshold("BIRDNET_MIN_SCORE")
+    )
+    min_likelihood = (
+        args.min_likelihood
+        if args.min_likelihood is not None
+        else read_existing_threshold("BIRDNET_MIN_LIKELIHOOD")
+    )
+    min_score_x_likelihood = (
+        args.min_score_x_likelihood
+        if args.min_score_x_likelihood is not None
+        else read_existing_threshold("BIRDNET_MIN_SCORE_X_LIKELIHOOD")
+    )
+    write_config(
+        True,
+        selected_backend,
+        args.input_mode,
+        min_score,
+        min_likelihood,
+        min_score_x_likelihood,
+    )
     run_setup_step()
 
     if args.enable_service:
@@ -169,7 +253,9 @@ def main() -> int:
 
     print(
         "BirdNET configured. "
-        f"Backend: {selected_backend}. Input mode: {args.input_mode}. Service: {SERVICE_NAME}"
+        f"Backend: {selected_backend}. Input mode: {args.input_mode}. "
+        f"Minimum score: {min_score}. Minimum likelihood: {min_likelihood}. "
+        f"Minimum score×likelihood: {min_score_x_likelihood}. Service: {SERVICE_NAME}"
     )
     return 0
 
