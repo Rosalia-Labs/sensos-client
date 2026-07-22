@@ -25,6 +25,7 @@ python3-requests
 python3-setuptools
 python3-psutil
 python3-wheel
+rsync
 sox
 sqlite3
 sudo
