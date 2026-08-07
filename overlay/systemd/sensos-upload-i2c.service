@@ -1,6 +1,5 @@
 [Unit]
 Description=Upload I2C readings to server
-After=multi-user.target
 
 [Service]
 Type=simple

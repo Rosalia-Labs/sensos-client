@@ -1,6 +1,5 @@
 [Unit]
 Description=Compress queued WAV files into archival FLAC
-After=multi-user.target
 StartLimitIntervalSec=300
 StartLimitBurst=5
 

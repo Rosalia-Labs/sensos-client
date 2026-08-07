@@ -1,6 +1,5 @@
 [Unit]
 Description=Read GPS fix data and update device time/location
-After=multi-user.target
 StartLimitIntervalSec=300
 StartLimitBurst=5
 

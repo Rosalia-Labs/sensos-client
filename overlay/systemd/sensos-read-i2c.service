@@ -1,6 +1,5 @@
 [Unit]
 Description=Read I2C sensors and store readings
-After=multi-user.target
 
 [Service]
 Type=simple

@@ -168,6 +168,31 @@ class ApiContractTests(unittest.TestCase):
             self.assertIn("ensure_runtime_dir", launcher)
             self.assertNotIn("UTILS_MODULE.create_dir", launcher)
 
+    def test_multi_user_services_do_not_order_themselves_after_target(self):
+        systemd_dir = OVERLAY_ROOT / "systemd"
+
+        for unit_path in systemd_dir.glob("*.service"):
+            unit = unit_path.read_text()
+            if "WantedBy=multi-user.target" not in unit:
+                continue
+            after_lines = (
+                line for line in unit.splitlines() if line.startswith("After=")
+            )
+            for after_line in after_lines:
+                self.assertNotIn(
+                    "multi-user.target",
+                    after_line.split("=", 1)[1].split(),
+                    f"{unit_path.name} creates an ordering cycle with multi-user.target",
+                )
+
+    def test_timer_driven_data_space_monitor_can_return_to_inactive(self):
+        unit = (
+            OVERLAY_ROOT / "systemd" / "sensos-monitor-data-space.service"
+        ).read_text()
+
+        self.assertIn("Type=oneshot", unit)
+        self.assertNotIn("RemainAfterExit=yes", unit)
+
     def test_runtime_directory_helper_creates_writable_directory_without_sudo(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             target = Path(tmpdir) / "nested" / "runtime"

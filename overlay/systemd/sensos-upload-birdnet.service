@@ -1,6 +1,5 @@
 [Unit]
 Description=Upload BirdNET results to server
-After=multi-user.target
 
 [Service]
 Type=simple
