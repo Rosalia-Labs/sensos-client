@@ -748,9 +748,9 @@ Configures the optional GPS integration service.
 Important flags:
 
 - `--disable`
-- `--backend`
-- `--i2c-addr`
-- `--i2c-bus`
+- `--backend` (`i2c` for a wired u-blox GPS, `serial` for a USB/UART NMEA GPS)
+- `--i2c-addr`, `--i2c-bus` (i2c backend)
+- `--serial-port`, `--serial-baud` (serial backend)
 - `--interval`
 - `--sync-time`
 - `--update-location`
@@ -762,7 +762,15 @@ Important flags:
 Typical use:
 
 ```sh
+# Wired u-blox GPS on the I2C bus (default backend):
 config-gps --start-service
+
+# USB GPS dongle (serial NMEA); port autodetected:
+config-gps --backend serial --start-service
+
+# USB GPS with an explicit stable device path and baud:
+config-gps --backend serial --serial-port /dev/serial/by-id/usb-u-blox_... --serial-baud 9600 --start-service
+
 config-gps --interval 60 --location-drift-m 50
 config-gps --time-conflict-sec 300
 ```
@@ -770,7 +778,9 @@ config-gps --time-conflict-sec 300
 Behavior:
 
 - writes `/sensos/etc/gps.conf`
-- installs optional GPS Python dependencies on demand before enabling the GPS service
+- installs optional GPS Python dependencies on demand before enabling the GPS service. The `serial` backend needs `pyserial`; if it is not yet provisioned the command tells you to run `./upgrade` first
+- with `--backend serial` and no `--serial-port`, autodetects in order: `/dev/serial/by-id/*`, then `/dev/ttyACM*`, then `/dev/ttyUSB*`. Prefer a `/dev/serial/by-id/` path in `--serial-port` because it is stable across reboots and re-plugging
+- the GPS service runs as `sensos-runner`, which is already in the `dialout` group, so USB serial devices are readable without extra setup
 - can update time and location automatically from GPS
 - when NTP does not appear healthy, a valid GPS fix becomes the active time source
 - runs GPS polling as `sensos-runner:sensos-data`; clock adjustment receives only `CAP_SYS_TIME`, and GPS runtime files are written without sudo or ownership repair
@@ -894,6 +904,8 @@ Behavior:
 - reports whether `sensos-gps.service` is enabled and active
 - shows whether the latest worker state has a current fix
 - shows the latest state message and timestamps
+- runs a live probe against the configured backend: for `i2c` it reads the u-blox DDC registers, for `serial` it opens the resolved serial port and reports raw/parsed NMEA, fix status, and a sample sentence
+- for the `serial` backend, lists the candidate devices (`/dev/serial/by-id/*`, `/dev/ttyACM*`, `/dev/ttyUSB*`) and which one was resolved
 - dumps `/sensos/etc/gps.conf`, `/sensos/data/microenv/gps-state.env`, and recent GPS logs
 
 ### `packet-tracing`

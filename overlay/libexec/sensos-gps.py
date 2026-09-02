@@ -37,6 +37,9 @@ STATE_PATH = STATE_DIR / "gps-state.env"
 DEFAULT_INTERVAL_SEC = 60
 DEFAULT_ADDR = "0x10"
 DEFAULT_BUS = 1
+DEFAULT_SERIAL_BAUD = 9600
+DEFAULT_SERIAL_COLLECT_SEC = 5.0
+SERIAL_PORT_GLOBS = ("/dev/serial/by-id/*", "/dev/ttyACM*", "/dev/ttyUSB*")
 DEFAULT_LOCATION_DRIFT_M = 50.0
 DEFAULT_TIME_CONFLICT_SEC = 300.0
 ERROR_SLEEP_SEC = 15
@@ -211,7 +214,7 @@ def extract_nmea_lines(buffer: str) -> tuple[list[str], str]:
     return complete, remainder
 
 
-def parse_nmea_fix(lines: list[str], addr_str: str) -> dict[str, object] | None:
+def parse_nmea_fix(lines: list[str], source_label: str) -> dict[str, object] | None:
     import pynmea2
     last_rmc = None
     last_gga = None
@@ -256,7 +259,7 @@ def parse_nmea_fix(lines: list[str], addr_str: str) -> dict[str, object] | None:
         "altitude": float(altitude) if altitude not in (None, "") else None,
         "fix": fix,
         "gps_time": gps_time,
-        "source": f"i2c:{addr_str}",
+        "source": source_label,
     }
 
 
@@ -267,7 +270,81 @@ def parse_i2c_gps(bus_num: int, addr_str: str, buffer: str) -> tuple[dict[str, o
     lines, remainder = extract_nmea_lines(buffer)
     if not lines:
         return None, remainder
-    return parse_nmea_fix(lines, addr_str), remainder
+    return parse_nmea_fix(lines, f"i2c:{addr_str}"), remainder
+
+
+def autodetect_serial_port() -> str | None:
+    import glob
+
+    for pattern in SERIAL_PORT_GLOBS:
+        matches = sorted(glob.glob(pattern))
+        if matches:
+            return matches[0]
+    return None
+
+
+class SerialGps:
+    """Reads NMEA from a USB/UART GPS exposed as a serial character device."""
+
+    def __init__(self, port_hint: str, baud: int) -> None:
+        self.port_hint = port_hint
+        self.baud = baud
+        self.handle = None
+        self.port: str | None = None
+
+    def _resolve_port(self) -> str | None:
+        if self.port_hint:
+            return self.port_hint if os.path.exists(self.port_hint) else None
+        return autodetect_serial_port()
+
+    def close(self) -> None:
+        if self.handle is not None:
+            try:
+                self.handle.close()
+            except Exception:
+                pass
+        self.handle = None
+        self.port = None
+
+    def _ensure_open(self) -> None:
+        if self.handle is not None:
+            return
+        import serial
+
+        port = self._resolve_port()
+        if not port:
+            hint = self.port_hint or " or ".join(SERIAL_PORT_GLOBS)
+            raise RuntimeError(f"no GPS serial device found ({hint})")
+        self.handle = serial.Serial(port, baudrate=self.baud, timeout=1)
+        self.port = port
+        print(f"Opened GPS serial port {port} @ {self.baud} baud")
+
+    def read_fix(self, collect_seconds: float = DEFAULT_SERIAL_COLLECT_SEC) -> dict[str, object] | None:
+        self._ensure_open()
+        assert self.handle is not None
+
+        deadline = time.monotonic() + collect_seconds
+        lines: list[str] = []
+        have_rmc = have_gga = False
+        while time.monotonic() < deadline:
+            raw = self.handle.readline()
+            if not raw:
+                continue
+            line = raw.decode("ascii", errors="ignore").strip()
+            if not line.startswith("$"):
+                continue
+            lines.append(line)
+            tag = line[3:6].upper()
+            if tag == "RMC":
+                have_rmc = True
+            elif tag == "GGA":
+                have_gga = True
+            if have_rmc and have_gga:
+                break
+
+        if not lines:
+            return None
+        return parse_nmea_fix(lines, f"serial:{self.port}")
 
 
 def maybe_update_time(fix: dict[str, object], allow_sync: bool) -> None:
@@ -330,32 +407,46 @@ def main() -> int:
     interval_sec = max(5, config_int(config, "GPS_INTERVAL_SEC", DEFAULT_INTERVAL_SEC))
     bus_num = config_int(config, "GPS_I2C_BUS", DEFAULT_BUS)
     addr_str = config_value(config, "GPS_I2C_ADDR", DEFAULT_ADDR)
+    serial_port = config_value(config, "GPS_SERIAL_PORT", "")
+    serial_baud = config_int(config, "GPS_SERIAL_BAUD", DEFAULT_SERIAL_BAUD)
     allow_sync = config_bool(config, "GPS_SYNC_TIME", True)
     allow_location = config_bool(config, "GPS_UPDATE_LOCATION", True)
     location_threshold_m = max(0.0, config_float(config, "GPS_LOCATION_DRIFT_M", DEFAULT_LOCATION_DRIFT_M))
     conflict_threshold_sec = max(0.0, config_float(config, "GPS_TIME_CONFLICT_SEC", DEFAULT_TIME_CONFLICT_SEC))
     nmea_buffer = ""
 
+    if backend not in ("i2c", "serial"):
+        message = f"Unsupported GPS backend '{backend}' (expected 'i2c' or 'serial')"
+        print(message, file=sys.stderr)
+        write_state("error", message)
+        return 1
+
+    serial_gps = SerialGps(serial_port, serial_baud) if backend == "serial" else None
+
+    if backend == "serial":
+        source_desc = f"port={serial_port or 'autodetect'} baud={serial_baud}"
+    else:
+        source_desc = f"i2c_bus={bus_num} i2c_addr={addr_str}"
+
     print(
-        f"sensos-gps starting: backend={backend} interval={interval_sec}s "
+        f"sensos-gps starting: backend={backend} {source_desc} interval={interval_sec}s "
         f"sync_time={'yes' if allow_sync else 'no'} "
         f"update_location={'yes' if allow_location else 'no'}"
     )
     write_state(
         "starting",
-        f"backend={backend} interval={interval_sec}s sync_time={'yes' if allow_sync else 'no'} "
+        f"backend={backend} {source_desc} interval={interval_sec}s "
+        f"sync_time={'yes' if allow_sync else 'no'} "
         f"update_location={'yes' if allow_location else 'no'}",
     )
 
     while True:
         try:
-            if backend != "i2c":
-                message = f"Unsupported GPS backend '{backend}'"
-                print(message, file=sys.stderr)
-                write_state("error", message)
-                time.sleep(ERROR_SLEEP_SEC)
-                continue
-            fix, nmea_buffer = parse_i2c_gps(bus_num, addr_str, nmea_buffer)
+            if backend == "i2c":
+                fix, nmea_buffer = parse_i2c_gps(bus_num, addr_str, nmea_buffer)
+            else:
+                assert serial_gps is not None
+                fix = serial_gps.read_fix()
             if fix is None:
                 message = "No valid GPS fix available."
                 print(message)
@@ -378,6 +469,8 @@ def main() -> int:
             message = f"GPS service failure: {exc}"
             print(message, file=sys.stderr)
             write_state("error", message)
+            if serial_gps is not None:
+                serial_gps.close()
             time.sleep(ERROR_SLEEP_SEC)
 
 
