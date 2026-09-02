@@ -54,9 +54,11 @@ def main() -> int:
     ensure_sensos_admin()
     arg_defs = [
         (["--disable"], {"action": "store_true", "help": "Disable GPS service and stop updates."}),
-        (["--backend"], {"default": "i2c", "choices": ["i2c"], "help": "GPS backend type."}),
-        (["--i2c-addr"], {"dest": "i2c_addr", "default": "0x10", "help": "I2C GPS address."}),
-        (["--i2c-bus"], {"dest": "i2c_bus", "type": int, "default": 1, "help": "I2C bus number."}),
+        (["--backend"], {"default": "i2c", "choices": ["i2c", "serial"], "help": "GPS backend type: 'i2c' for a wired u-blox GPS, 'serial' for a USB/UART NMEA GPS."}),
+        (["--i2c-addr"], {"dest": "i2c_addr", "default": "0x10", "help": "I2C GPS address (i2c backend)."}),
+        (["--i2c-bus"], {"dest": "i2c_bus", "type": int, "default": 1, "help": "I2C bus number (i2c backend)."}),
+        (["--serial-port"], {"dest": "serial_port", "default": "", "help": "Serial device for the USB/UART GPS (serial backend); empty means autodetect /dev/serial/by-id, then /dev/ttyACM*, then /dev/ttyUSB*."}),
+        (["--serial-baud"], {"dest": "serial_baud", "type": int, "default": 9600, "help": "Serial baud rate for the USB/UART GPS (serial backend)."}),
         (["--interval"], {"dest": "interval", "type": int, "default": 60, "help": "Polling interval in seconds."}),
         (["--sync-time"], {"dest": "sync_time", "action": argparse.BooleanOptionalAction, "default": True, "help": "Update system time from GPS if needed."}),
         (["--update-location"], {"dest": "update_location", "action": argparse.BooleanOptionalAction, "default": True, "help": "Update location.conf from GPS if needed."}),
@@ -86,6 +88,8 @@ def main() -> int:
         f"GPS_BACKEND={args.backend}\n"
         f"GPS_I2C_ADDR={args.i2c_addr}\n"
         f"GPS_I2C_BUS={args.i2c_bus}\n"
+        f"GPS_SERIAL_PORT={args.serial_port}\n"
+        f"GPS_SERIAL_BAUD={args.serial_baud}\n"
         f"GPS_INTERVAL_SEC={args.interval}\n"
         f"GPS_SYNC_TIME={bool_text(args.sync_time)}\n"
         f"GPS_UPDATE_LOCATION={bool_text(args.update_location)}\n"

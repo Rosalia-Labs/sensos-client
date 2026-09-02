@@ -15,6 +15,16 @@ STATE_FILE="${CLIENT_ROOT}/data/microenv/gps-state.env"
 GPS_PYTHON="${CLIENT_ROOT}/python/venv/bin/python"
 DEFAULT_I2C_BUS="1"
 DEFAULT_I2C_ADDR="0x10"
+DEFAULT_BACKEND="i2c"
+DEFAULT_SERIAL_BAUD="9600"
+SERIAL_PORT_GLOBS=(/dev/serial/by-id/* /dev/ttyACM* /dev/ttyUSB*)
+
+configured_backend() {
+    local backend
+    backend="$(read_kv_value "${CONFIG_FILE}" "GPS_BACKEND" 2>/dev/null || true)"
+    [[ -n "${backend}" ]] || backend="${DEFAULT_BACKEND}"
+    printf '%s\n' "${backend,,}"
+}
 
 configured_bus() {
     local bus_num
@@ -28,6 +38,35 @@ configured_addr() {
     addr="$(read_kv_value "${CONFIG_FILE}" "GPS_I2C_ADDR" 2>/dev/null || true)"
     [[ -n "${addr}" ]] || addr="${DEFAULT_I2C_ADDR}"
     printf '%s\n' "${addr}"
+}
+
+configured_serial_port() {
+    read_kv_value "${CONFIG_FILE}" "GPS_SERIAL_PORT" 2>/dev/null || true
+}
+
+configured_serial_baud() {
+    local baud
+    baud="$(read_kv_value "${CONFIG_FILE}" "GPS_SERIAL_BAUD" 2>/dev/null || true)"
+    [[ -n "${baud}" ]] || baud="${DEFAULT_SERIAL_BAUD}"
+    printf '%s\n' "${baud}"
+}
+
+list_serial_candidates() {
+    local path
+    for path in "${SERIAL_PORT_GLOBS[@]}"; do
+        [[ -e "${path}" ]] || continue
+        printf '%s\n' "${path}"
+    done
+}
+
+resolve_serial_port() {
+    local configured
+    configured="$(configured_serial_port)"
+    if [[ -n "${configured}" ]]; then
+        printf '%s\n' "${configured}"
+        return 0
+    fi
+    list_serial_candidates | head -n 1
 }
 
 section() {
@@ -56,6 +95,46 @@ read_kv_value() {
 }
 
 probe_gps_hardware() {
+    local backend
+    backend="$(configured_backend)"
+    printf 'backend=%s\n' "${backend}"
+    case "${backend}" in
+        serial) probe_serial_hardware ;;
+        i2c) probe_i2c_hardware ;;
+        *)
+            printf 'hardware_present=unknown\n'
+            printf 'hardware_probe=unsupported backend: %s\n' "${backend}"
+            ;;
+    esac
+}
+
+probe_serial_hardware() {
+    local configured resolved candidates
+    configured="$(configured_serial_port)"
+    resolved="$(resolve_serial_port)"
+    candidates="$(list_serial_candidates | paste -sd' ' - 2>/dev/null || true)"
+
+    printf 'configured_port=%s\n' "${configured:-<autodetect>}"
+    printf 'candidates=%s\n' "${candidates:-none}"
+
+    if [[ -z "${resolved}" ]]; then
+        printf 'hardware_present=no\n'
+        printf 'hardware_probe=no serial GPS device found\n'
+        return 0
+    fi
+
+    printf 'resolved_port=%s\n' "${resolved}"
+    if [[ -r "${resolved}" ]]; then
+        printf 'hardware_present=yes\n'
+        printf 'hardware_probe=%s is present and readable\n' "${resolved}"
+    else
+        printf 'hardware_present=unknown\n'
+        printf 'hardware_probe=%s exists but is not readable by %s (check dialout group membership)\n' \
+            "${resolved}" "$(id -un)"
+    fi
+}
+
+probe_i2c_hardware() {
     local bus_num addr device_node probe_output
 
     bus_num="$(configured_bus)"
@@ -115,6 +194,118 @@ PY
 }
 
 show_live_probe() {
+    local backend
+    backend="$(configured_backend)"
+    case "${backend}" in
+        serial) show_serial_live_probe ;;
+        i2c) show_i2c_live_probe ;;
+        *)
+            printf 'backend=%s\n' "${backend}"
+            printf 'live_status=unsupported_backend\n'
+            ;;
+    esac
+}
+
+show_serial_live_probe() {
+    local resolved baud python_cmd probe_output
+    resolved="$(resolve_serial_port)"
+    baud="$(configured_serial_baud)"
+
+    printf 'backend=serial\n'
+    printf 'resolved_port=%s\n' "${resolved:-<none>}"
+    printf 'baud=%s\n' "${baud}"
+
+    if [[ -z "${resolved}" ]]; then
+        printf 'live_status=device_missing\n'
+        return 0
+    fi
+
+    python_cmd="$(gps_python_cmd 2>/dev/null || true)"
+    if [[ -z "${python_cmd}" ]]; then
+        printf 'live_status=python_missing\n'
+        return 0
+    fi
+
+    probe_output="$("${python_cmd}" - "${resolved}" "${baud}" <<'PY' 2>&1
+import sys
+import time
+
+port = sys.argv[1]
+baud = int(sys.argv[2])
+
+try:
+    import pynmea2
+    import serial
+except Exception as exc:
+    print("live_status=dependency_error")
+    print(f"error={exc}")
+    raise SystemExit(0)
+
+try:
+    handle = serial.Serial(port, baudrate=baud, timeout=1)
+except Exception as exc:
+    print("live_status=open_error")
+    print(f"error={exc}")
+    raise SystemExit(0)
+
+lines = []
+deadline = time.monotonic() + 5.0
+try:
+    while time.monotonic() < deadline:
+        raw = handle.readline()
+        if not raw:
+            continue
+        line = raw.decode("ascii", errors="ignore").strip()
+        if line.startswith("$"):
+            lines.append(line)
+finally:
+    handle.close()
+
+last_rmc = last_gga = None
+parsed = []
+for line in lines:
+    try:
+        msg = pynmea2.parse(line)
+    except Exception:
+        continue
+    parsed.append(line)
+    sentence = getattr(msg, "sentence_type", "")
+    if sentence == "RMC":
+        last_rmc = msg
+    elif sentence == "GGA":
+        last_gga = msg
+
+rmc_status = getattr(last_rmc, "status", "") if last_rmc is not None else ""
+gga_quality = getattr(last_gga, "gps_qual", "") if last_gga is not None else ""
+latitude = getattr(last_rmc, "latitude", None) or getattr(last_gga, "latitude", None)
+longitude = getattr(last_rmc, "longitude", None) or getattr(last_gga, "longitude", None)
+
+status = "no_data"
+if lines and not parsed:
+    status = "unparsed_data"
+elif latitude not in (None, "") and longitude not in (None, "") and (
+    rmc_status == "A" or (str(gga_quality).isdigit() and int(gga_quality) > 0)
+):
+    status = "fix"
+elif parsed:
+    status = "parsed_no_fix"
+
+print(f"live_status={status}")
+print(f"raw_line_count={len(lines)}")
+print(f"parsed_sentence_count={len(parsed)}")
+print(f"rmc_status={rmc_status or 'unknown'}")
+print(f"gga_fix_quality={gga_quality or 'unknown'}")
+print(f"latitude={latitude if latitude not in (None, '') else 'unknown'}")
+print(f"longitude={longitude if longitude not in (None, '') else 'unknown'}")
+print(f"sample_nmea={lines[0][:120] if lines else 'none'}")
+for index, line in enumerate(parsed[-3:], start=1):
+    print(f"parsed_nmea_{index}={line[:120]}")
+PY
+)"
+    printf '%s\n' "${probe_output}"
+}
+
+show_i2c_live_probe() {
     local bus_num addr device_node probe_output
 
     bus_num="$(configured_bus)"
