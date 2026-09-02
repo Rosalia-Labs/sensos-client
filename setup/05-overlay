@@ -52,6 +52,9 @@ RETIRED_SYSTEMD_UNITS=(
 RETIRED_HOST_COMMANDS=(
     field-deploy
     prep-for-deployment
+    packet-tracing
+    package-tracing
+    report-network-capture
 )
 
 log() {

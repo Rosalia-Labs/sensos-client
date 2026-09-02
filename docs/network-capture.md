@@ -15,54 +15,54 @@ This is enough to identify sustained traffic sources and destinations, common po
 Start a debug session on the device:
 
 ```sh
-packet-tracing start
+network-capture start
 ```
 
 That creates a session under `/sensos/log/network_capture/sessions/<timestamp>` and starts [sensos-network-capture.service](../overlay/systemd/sensos-network-capture.service) manually for that session only. The service is not enabled during normal install.
 
 Privilege model:
 
-- use `packet-tracing` for normal operations
-- `packet-tracing start`, `status`, and `stop` handle `sudo` internally for service control
+- use `network-capture` for normal operations
+- `network-capture start`, `status`, and `stop` handle `sudo` internally for service control
 - packet capture itself runs as `sensos-runner:sensos-data`, not root
 - the service receives only `CAP_NET_ADMIN` and `CAP_NET_RAW` for packet capture
-- `report-network-capture` is read-only and does not self-elevate
-- saved reports and retained session data are kept writable for the shared admin/data group so `packet-tracing report --save`, `packet-tracing report --cleanup`, and `packet-tracing cleanup` do not require you to guess which helper needs `sudo`
+- `network-capture report` is read-only and does not self-elevate
+- saved reports and retained session data are kept writable for the shared admin/data group so `network-capture report --save`, `network-capture report --cleanup`, and `network-capture cleanup` do not require you to guess which helper needs `sudo`
 
 The capture keeps running until you stop it:
 
 ```sh
-packet-tracing stop
+network-capture stop
 ```
 
 Check status:
 
 ```sh
-packet-tracing status
+network-capture status
 ```
 
 Generate reports from the latest session and remove the raw packet captures after reporting:
 
 ```sh
-packet-tracing report --latest --cleanup
+network-capture report --latest --cleanup
 ```
 
 If you also want to save text and JSON report files under the session directory:
 
 ```sh
-packet-tracing report --latest --save
+network-capture report --latest --save
 ```
 
 If you want to remove the generated summary reports too:
 
 ```sh
-packet-tracing cleanup --latest --remove-reports
+network-capture cleanup --latest --remove-reports
 ```
 
-If you want to clear all retained tracing sessions and start fresh:
+If you want to clear all retained capture sessions and start fresh:
 
 ```sh
-packet-tracing cleanup --all
+network-capture cleanup --all
 ```
 
 ## Storage bounds
@@ -71,7 +71,7 @@ packet-tracing cleanup --all
 - default file count: 48
 - default maximum retained raw capture: about 384 MiB
 
-The capture ring is bounded inside the session directory. Sessions are no longer time-limited by default; `packet-tracing stop` is the normal way to end a capture.
+The capture ring is bounded inside the session directory. Sessions are no longer time-limited by default; `network-capture stop` is the normal way to end a capture.
 
 The service runs `/sensos/libexec/start-network-capture.sh`, which starts a rotating `tcpdump` session similar to:
 
@@ -79,7 +79,7 @@ The service runs `/sensos/libexec/start-network-capture.sh`, which starts a rota
 tcpdump -i any -nn -p -U -s 128 -y LINUX_SLL -C 8 -W 48 -w /sensos/log/network_capture/sessions/<timestamp>/pcap/capture.pcap
 ```
 
-The exact values can be overridden through `packet-tracing start` or by setting environment values before starting the service:
+The exact values can be overridden through `network-capture start` or by setting environment values before starting the service:
 
 - `SENSOS_NETWORK_CAPTURE_ROOT`
 - `SENSOS_NETWORK_CAPTURE_IFACE`
@@ -90,10 +90,11 @@ The exact values can be overridden through `packet-tracing start` or by setting 
 
 ## Reports
 
-Use [packet-tracing](../overlay/bin/packet-tracing) for the full session workflow, or call [report-network-capture](../overlay/bin/report-network-capture) directly against a session root:
+`network-capture report` drives the analyzer. Point it at the latest session
+with `--latest`, or at a specific one with `--session-root`:
 
 ```sh
-report-network-capture --capture-root /sensos/log/network_capture/sessions/<timestamp> --hours 0 --top 20
+network-capture report --session-root /sensos/log/network_capture/sessions/<timestamp> --hours 0 --top 20
 ```
 
 The report summarizes retained traffic by:
@@ -114,5 +115,5 @@ This is intended to answer questions like:
 For machine-readable output:
 
 ```sh
-report-network-capture --capture-root /sensos/log/network_capture/sessions/<timestamp> --hours 0 --json
+network-capture report --session-root /sensos/log/network_capture/sessions/<timestamp> --hours 0 --json
 ```
