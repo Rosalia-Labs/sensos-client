@@ -1,5 +1,6 @@
 [Unit]
 Description=Run BirdNET over compressed FLAC inputs and emit FLAC label runs
+OnFailure=sensos-report-failure@%n.service
 After=sensos-compress-audio.service
 StartLimitIntervalSec=300
 StartLimitBurst=5

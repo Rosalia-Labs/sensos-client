@@ -1,5 +1,6 @@
 [Unit]
 Description=Stop data-producing services when /sensos/data is critically full
+OnFailure=sensos-report-failure@%n.service
 
 [Service]
 Type=oneshot

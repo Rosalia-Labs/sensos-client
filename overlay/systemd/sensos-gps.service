@@ -1,5 +1,6 @@
 [Unit]
 Description=Read GPS fix data and update device time/location
+OnFailure=sensos-report-failure@%n.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
 

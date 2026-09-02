@@ -21,6 +21,10 @@ NFTABLES_CONF_FILE="/etc/nftables.conf"
 TIMEZONE_NAME="Etc/UTC"
 TIMEZONE_FILE="/usr/share/zoneinfo/${TIMEZONE_NAME}"
 
+LOGIN_EVENT_HOOK="${DEPLOY_ROOT}/libexec/report-login-event"
+LOGIN_EVENT_PAM_LINE="session optional pam_exec.so quiet ${LOGIN_EVENT_HOOK}"
+LOGIN_EVENT_PAM_FILES=(/etc/pam.d/sshd /etc/pam.d/login)
+
 log() {
     printf '[setup/06-system-config] %s\n' "$*"
 }
@@ -209,6 +213,24 @@ configure_nftables() {
     fi
 }
 
+configure_login_event_hook() {
+    local pam_file
+
+    for pam_file in "${LOGIN_EVENT_PAM_FILES[@]}"; do
+        if [[ ! -f "${pam_file}" ]]; then
+            log "PAM file ${pam_file} not present; skipped login-event hook"
+            continue
+        fi
+        if grep -Fq "report-login-event" "${pam_file}"; then
+            continue
+        fi
+        # Append only: never truncate a PAM stack.
+        printf '\n# SensOS: record interactive logins as client events\n%s\n' \
+            "${LOGIN_EVENT_PAM_LINE}" >>"${pam_file}"
+        log "added SensOS login-event hook to ${pam_file}"
+    done
+}
+
 configure_timezone() {
     [[ -f "${TIMEZONE_FILE}" ]] || die "timezone data not found at ${TIMEZONE_FILE}"
 
@@ -231,6 +253,7 @@ main() {
     configure_journald
     configure_chrony
     configure_nftables
+    configure_login_event_hook
     configure_timezone
 }
 

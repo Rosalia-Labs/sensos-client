@@ -1,5 +1,6 @@
 [Unit]
 Description=Upload I2C readings to server
+OnFailure=sensos-report-failure@%n.service
 
 [Service]
 Type=simple

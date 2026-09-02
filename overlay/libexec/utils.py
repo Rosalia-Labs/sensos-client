@@ -266,8 +266,13 @@ def report_event(event_type, *, severity="info", details=None, dedupe_window=0, 
     Shells out to the ``sensos-report-event`` CLI (which only touches the local
     spool). Never raises: event reporting must not break the calling command.
     """
+    report_bin = (
+        os.environ.get("SENSOS_REPORT_EVENT_BIN")
+        or shutil.which("sensos-report-event")
+        or "/usr/local/bin/sensos-report-event"
+    )
     command = [
-        os.path.join(CLIENT_ROOT, "bin", "sensos-report-event"),
+        report_bin,
         str(event_type),
         "--severity",
         str(severity),

@@ -203,6 +203,11 @@ main() {
     sudo_run "${SETUP_SCRIPT}"
     verify_install_state
 
+    if [[ "${new_version}" != "${old_version}" ]] && command -v sensos-report-event >/dev/null 2>&1; then
+        sensos-report-event upgrade --severity notice \
+            --detail from="${old_version}" --detail to="${new_version}" || true
+    fi
+
     log "upgrade complete at version ${new_version}"
     if [[ "$(read_install_flag REBOOT_REQUIRED)" == "1" ]]; then
         log "REBOOT REQUIRED: Raspberry Pi hardware changes were applied but are not fully active yet"

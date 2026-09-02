@@ -873,11 +873,17 @@ Behavior:
 - recorded events are uploaded by `sensos-upload-events.timer`
   (`OnBootSec=3min`, then every ~45 min); nothing is lost while the tunnel is down
 
-Events emitted automatically: `boot` (every boot), `network_config`
-(`config-network`), `deployment` / `storage_wipe` / `archive_mode`
-(`prep-for-deployment`, `config-storage --wipe`, `archive-mode`), `user_login`
-(interactive SSH / console sessions), `service_failure` (`OnFailure=` on the
-main SensOS units), and `upgrade` (`./upgrade` version change).
+Events emitted automatically:
+
+| event | source |
+| --- | --- |
+| `boot` | every boot (`sensos-report-boot.service`) |
+| `network_config` | `config-network` enrollment / cutover |
+| `storage_wipe` | `config-storage --wipe` |
+| `archive_enter` / `archive_exit` | `archive-mode --enter` / `--exit` (with `cleared_data`) |
+| `upgrade` | `./upgrade` when the version changes |
+| `service_failure` | `OnFailure=` on the main SensOS units (sustained failure only) |
+| `user_login` | interactive SSH / console session open, rate-limited to one per user per 15 min |
 
 ### `debug-events`
 

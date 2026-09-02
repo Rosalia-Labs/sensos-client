@@ -34,6 +34,24 @@ data_ops_require_cmd() {
     }
 }
 
+# report_client_event <event_type> <severity> [key=value ...]
+# Best-effort: queues a major device event for later delivery. Never fails the
+# caller and never blocks on the network (the CLI only touches a local spool).
+report_client_event() {
+    local event_type="$1"
+    local severity="$2"
+    shift 2 || return 0
+
+    command -v sensos-report-event >/dev/null 2>&1 || return 0
+
+    local -a args=("${event_type}" --severity "${severity}")
+    local kv
+    for kv in "$@"; do
+        args+=(--detail "${kv}")
+    done
+    sensos-report-event "${args[@]}" >/dev/null 2>&1 || true
+}
+
 data_ops_run_systemctl() {
     sudo systemctl "$@"
 }
