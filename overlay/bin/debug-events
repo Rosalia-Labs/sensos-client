@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+set -euo pipefail
+
+CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-/sensos}"
+SERVICE_NAME="sensos-upload-events.service"
+TIMER_NAME="sensos-upload-events.timer"
+DB_PATH="${CLIENT_ROOT}/data/microenv/events.db"
+PY="${CLIENT_ROOT}/python/venv/bin/python"
+
+section() {
+    printf '\n== %s ==\n' "$1"
+}
+
+have_cmd() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+py_cmd() {
+    [[ -x "${PY}" ]] && { printf '%s\n' "${PY}"; return 0; }
+    command -v python3
+}
+
+section "Spool"
+printf 'db_path=%s\n' "${DB_PATH}"
+if [[ -f "${DB_PATH}" ]]; then
+    "$(py_cmd)" - "${DB_PATH}" <<'PY'
+import sqlite3, sys
+path = sys.argv[1]
+try:
+    conn = sqlite3.connect(path, timeout=5)
+    conn.row_factory = sqlite3.Row
+except Exception as exc:
+    print(f"open_error={exc}")
+    raise SystemExit(0)
+try:
+    pending = conn.execute("SELECT COUNT(*) FROM events WHERE sent_to_server=0").fetchone()[0]
+    sent = conn.execute("SELECT COUNT(*) FROM events WHERE sent_to_server=1").fetchone()[0]
+    print(f"pending={pending}")
+    print(f"sent={sent}")
+    rows = conn.execute(
+        "SELECT occurred_at, event_type, severity, sent_to_server, details_json "
+        "FROM events ORDER BY id DESC LIMIT 15"
+    ).fetchall()
+    print("recent (newest first):")
+    for r in rows:
+        flag = "sent" if r["sent_to_server"] else "queued"
+        print(f"  {r['occurred_at']}  {r['severity']:<7} {r['event_type']:<18} [{flag}] {r['details_json']}")
+except Exception as exc:
+    print(f"query_error={exc}")
+PY
+else
+    printf 'status=no spool yet (no events recorded)\n'
+fi
+
+section "Service State"
+if have_cmd systemctl; then
+    systemctl is-enabled "${TIMER_NAME}" 2>/dev/null || true
+    systemctl is-active "${TIMER_NAME}" 2>/dev/null || true
+    systemctl list-timers "${TIMER_NAME}" --all --no-pager 2>/dev/null || true
+    systemctl status "${SERVICE_NAME}" --no-pager -n 15 2>/dev/null || true
+else
+    printf 'systemctl not found\n'
+fi
+
+section "Recent Logs"
+if have_cmd journalctl; then
+    { sudo -n journalctl -u "${SERVICE_NAME}" -n 40 --no-pager -o short-iso 2>/dev/null \
+        || journalctl -u "${SERVICE_NAME}" -n 40 --no-pager -o short-iso 2>/dev/null \
+        || true; }
+else
+    printf 'journalctl not found\n'
+fi

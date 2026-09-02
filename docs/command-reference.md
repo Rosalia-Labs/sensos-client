@@ -842,6 +842,52 @@ install-birdnet-models
 install-birdnet-models --force
 ```
 
+## Event Reporting
+
+Clients send a full status snapshot to the server once per day
+(`sensos-send-status-update.timer`). In addition, major one-off events are
+recorded to a small local spool and delivered on their own schedule so they
+survive reboots and network reconfiguration.
+
+### `sensos-report-event`
+
+Appends one event to the local spool at
+`/sensos/data/microenv/events.db`. No network access — delivery is handled
+separately — so it is cheap and safe to call from boot units, PAM login hooks,
+config commands, and `OnFailure=` handlers.
+
+```sh
+sensos-report-event boot --severity notice --detail kernel=6.6.0
+sensos-report-event network_config --detail network=sensos
+sensos-report-event user_login --detail user=alice --dedupe-window 900 --dedupe-key user
+```
+
+Behavior:
+
+- `event_type` is a short slug (`[a-z0-9_.-]`, max 64)
+- `--severity` is `info` (default), `notice`, or `warning`
+- `--detail KEY=VALUE` is repeatable and stored as JSON
+- `--dedupe-window SECONDS` (with optional `--dedupe-key`) skips the event when a
+  matching one was recorded recently — used to keep chatty sources such as SSH
+  logins infrequent
+- recorded events are uploaded by `sensos-upload-events.timer`
+  (`OnBootSec=3min`, then every ~45 min); nothing is lost while the tunnel is down
+
+Events emitted automatically: `boot` (every boot), `network_config`
+(`config-network`), `deployment` / `storage_wipe` / `archive_mode`
+(`prep-for-deployment`, `config-storage --wipe`, `archive-mode`), `user_login`
+(interactive SSH / console sessions), `service_failure` (`OnFailure=` on the
+main SensOS units), and `upgrade` (`./upgrade` version change).
+
+### `debug-events`
+
+Read-only report: spool contents (pending vs sent, most recent events),
+uploader timer and service state, and recent upload logs.
+
+```sh
+debug-events
+```
+
 ## Debug and Reporting Commands
 
 ### `debug-modem`

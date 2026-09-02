@@ -1,0 +1,11 @@
+[Unit]
+Description=Report the failure of %i to the SensOS event log
+
+[Service]
+Type=oneshot
+User=sensos-runner
+Group=sensos-data
+UMask=0002
+ExecStart=/bin/sh -c '/sensos/bin/sensos-report-event service_failure --severity warning --detail unit="%i" --detail result="$(systemctl show -p Result --value -- %i 2>/dev/null || true)" --detail active_state="$(systemctl show -p ActiveState --value -- %i 2>/dev/null || true)" --dedupe-window 600 --dedupe-key unit'
+StandardOutput=journal
+StandardError=journal

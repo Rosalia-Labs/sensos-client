@@ -1,0 +1,18 @@
+[Unit]
+Description=Upload the SensOS client event log to the server
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=oneshot
+User=sensos-runner
+Group=sensos-data
+UMask=0002
+LoadCredential=api_password:/sensos/keys/api_password
+ExecStart=/sensos/python/venv/bin/python /sensos/libexec/upload-events.py
+WorkingDirectory=/sensos/data
+StandardOutput=journal
+StandardError=journal
+# Triggered by sensos-upload-events.timer; no [Install] section.

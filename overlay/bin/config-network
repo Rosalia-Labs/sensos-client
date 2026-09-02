@@ -682,6 +682,16 @@ def main():
     restart_wireguard_service(args.network)
     enable_status_update_timer()
 
+    report_event(
+        "network_config",
+        severity="notice",
+        details={
+            "network": args.network,
+            "setup_server": args.config_server,
+            "server_wg_ip": server_wg_ip,
+        },
+    )
+
     print("✅ Configuration complete. Reboot now and check connectivity.")
 
 

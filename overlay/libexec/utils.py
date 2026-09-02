@@ -260,6 +260,30 @@ def build_basic_auth_header(api_password, username=CLIENT_API_USERNAME):
     return {"Authorization": f"Basic {get_basic_auth(api_password, username=username)}"}
 
 
+def report_event(event_type, *, severity="info", details=None, dedupe_window=0, dedupe_key=None):
+    """Best-effort: queue a major device event for later delivery to the server.
+
+    Shells out to the ``sensos-report-event`` CLI (which only touches the local
+    spool). Never raises: event reporting must not break the calling command.
+    """
+    command = [
+        os.path.join(CLIENT_ROOT, "bin", "sensos-report-event"),
+        str(event_type),
+        "--severity",
+        str(severity),
+    ]
+    for key, value in (details or {}).items():
+        command += ["--detail", f"{key}={value}"]
+    if dedupe_window:
+        command += ["--dedupe-window", str(int(dedupe_window))]
+        if dedupe_key:
+            command += ["--dedupe-key", str(dedupe_key)]
+    try:
+        subprocess.run(command, check=False, capture_output=True, timeout=15)
+    except Exception as exc:  # noqa: BLE001 - reporting is strictly best-effort
+        print(f"[warn] could not record '{event_type}' event: {exc}", file=sys.stderr)
+
+
 def healthz_url(config_server, port):
     return f"http://{config_server}:{port}{HEALTHZ_PATH}"
 
