@@ -1,5 +1,6 @@
 [Unit]
 Description=Upload BirdNET results to server
+OnFailure=sensos-report-failure@%n.service
 
 [Service]
 Type=simple

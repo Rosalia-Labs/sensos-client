@@ -1,5 +1,6 @@
 [Unit]
 Description=Thin retained data when disk space is low
+OnFailure=sensos-report-failure@%n.service
 After=sensos-record-audio.service sensos-compress-audio.service
 StartLimitIntervalSec=300
 StartLimitBurst=5

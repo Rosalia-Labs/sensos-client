@@ -1,5 +1,6 @@
 [Unit]
 Description=Send device status update
+OnFailure=sensos-report-failure@%n.service
 
 [Service]
 Type=oneshot

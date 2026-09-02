@@ -1,5 +1,6 @@
 [Unit]
 Description=Read I2C sensors and store readings
+OnFailure=sensos-report-failure@%n.service
 
 [Service]
 Type=simple

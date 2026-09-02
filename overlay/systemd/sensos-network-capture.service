@@ -1,5 +1,6 @@
 [Unit]
 Description=Capture rotating packet headers for network traffic analysis
+OnFailure=sensos-report-failure@%n.service
 After=multi-user.target
 StartLimitIntervalSec=300
 StartLimitBurst=5

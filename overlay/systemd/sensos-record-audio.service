@@ -1,5 +1,6 @@
 [Unit]
 Description=Continuous Audio Recording Service
+OnFailure=sensos-report-failure@%n.service
 After=network.target
 Wants=sensos-compress-audio.service
 

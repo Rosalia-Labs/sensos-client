@@ -1,0 +1,42 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+#
+# Invoked by pam_exec.so during the PAM session phase (runs as root). PAM passes:
+#   PAM_TYPE    open_session | close_session
+#   PAM_USER    the account being logged into
+#   PAM_RHOST   remote host (empty for local console)
+#   PAM_SERVICE pam service name (sshd, login, ...)
+#
+# Records one user_login event per user per 15 minutes so routine access does
+# not flood the event log. Fire-and-forget via systemd-run so login is never
+# blocked on the spool.
+
+set -eu
+
+[[ "${PAM_TYPE:-}" == "open_session" ]] || exit 0
+
+REPORT="${SENSOS_REPORT_EVENT_BIN:-/usr/local/bin/sensos-report-event}"
+[[ -x "${REPORT}" ]] || REPORT="$(command -v sensos-report-event || true)"
+[[ -n "${REPORT}" && -x "${REPORT}" ]] || exit 0
+
+RUN="$(command -v systemd-run || true)"
+
+ARGS=(
+    user_login
+    --severity notice
+    --detail "user=${PAM_USER:-unknown}"
+    --detail "service=${PAM_SERVICE:-unknown}"
+    --detail "rhost=${PAM_RHOST:-local}"
+    --dedupe-window 900
+    --dedupe-key user
+)
+
+if [[ -n "${RUN}" ]]; then
+    # Transient service: systemd-run returns immediately, login is not blocked.
+    exec "${RUN}" --quiet --collect "${REPORT}" "${ARGS[@]}"
+fi
+
+# Fallback when systemd-run is unavailable: detach so PAM does not wait on it.
+setsid "${REPORT}" "${ARGS[@]}" >/dev/null 2>&1 &
+exit 0

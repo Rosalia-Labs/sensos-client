@@ -583,6 +583,10 @@ main() {
     finalize_mount_permissions
     maybe_exit_archive_mode_after_storage_changes
 
+    if [[ "${wipe}" == "true" ]]; then
+        report_client_event storage_wipe notice "device=${device}" "mount=${DATA_MOUNT}"
+    fi
+
     echo "✅ Storage configured at ${DATA_MOUNT}"
 }
 
