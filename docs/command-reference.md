@@ -682,26 +682,30 @@ Creates or updates a cellular modem connection using NetworkManager.
 
 Important flags:
 
-- `--service`
-- `--device`
+- `--service` (required; `1nce` or `soracom`)
 - `--start`
 - `--limit-up-kbit`
 - `--limit-down-kbit`
+- `--device` (rarely needed; see below)
 
 Typical use:
 
 ```sh
 config-modem --service 1nce --start
-config-modem --service soracom --device cdc-wdm0
+config-modem --service soracom --start
 ```
 
 Behavior:
 
+- requires ModemManager (`mmcli`); if it is missing, the command stops and tells you to run `./upgrade`. ModemManager is what lets NetworkManager find and activate the modem
 - currently supports `1nce` and `soracom`
-- leaves modem selection to NetworkManager/ModemManager unless `--device` is specified
-- can apply traffic caps
+- leaves modem selection to ModemManager; you normally do **not** pass `--device`. Only use `--device` to force one specific modem control port (for example `cdc-wdm0`) when more than one modem is present. Passing a data interface such as `wwan0` is wrong and will be rejected with a warning
+- sets `gsm.home-only no` and unlimited autoconnect retries so roaming IoT SIMs stay connected unattended
+- with `--start`, brings the connection up with up to two attempts; on failure it points you at `debug-modem`
+- traffic caps (`--limit-*-kbit`, positive integers) are applied to the resolved cellular interface; if the link is not up yet they are retried automatically after `--start`
 - registers the modem interface with `vnstat`
 - applies a WireGuard MTU adjustment for 1NCE
+- run `debug-modem` (or `debug-modem --verbose`) for a read-only diagnosis when the modem will not connect
 
 ### `config-hotspot`
 
