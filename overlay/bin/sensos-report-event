@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+"""Append one event to the local SensOS event spool.
+
+No network access: the event is queued and delivered later by
+sensos-upload-events.service. Safe and cheap to call from boot units, PAM login
+hooks, config commands, and systemd OnFailure= handlers.
+
+    sensos-report-event boot --severity notice --detail kernel=6.6.0
+    sensos-report-event user_login --detail user=alice --dedupe-window 900 --dedupe-key user
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import sys
+from pathlib import Path
+
+OVERLAY_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", "/sensos")
+sys.path.insert(0, str(Path(OVERLAY_ROOT) / "libexec"))
+
+from events_data import (  # noqa: E402
+    VALID_SEVERITIES,
+    connect_db,
+    insert_event,
+    recent_event_exists,
+)
+
+EVENT_TYPE_RE = re.compile(r"^[a-z0-9_.-]{1,64}$")
+
+
+def parse_details(items: list[str] | None) -> dict:
+    details: dict[str, str] = {}
+    for item in items or []:
+        if "=" not in item:
+            raise SystemExit(f"[sensos-report-event] --detail must be KEY=VALUE, got {item!r}")
+        key, value = item.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise SystemExit(f"[sensos-report-event] --detail key is empty in {item!r}")
+        details[key] = value.strip()
+    return details
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="sensos-report-event")
+    parser.add_argument("event_type", help="short type slug, [a-z0-9_.-], e.g. boot, network_config")
+    parser.add_argument("--severity", choices=VALID_SEVERITIES, default="info")
+    parser.add_argument(
+        "--detail",
+        action="append",
+        metavar="KEY=VALUE",
+        help="structured detail; repeatable",
+    )
+    parser.add_argument(
+        "--dedupe-window",
+        type=int,
+        default=0,
+        metavar="SECONDS",
+        help="skip if a matching event was recorded within this many seconds",
+    )
+    parser.add_argument(
+        "--dedupe-key",
+        metavar="KEY",
+        help="detail key whose value must also match for --dedupe-window",
+    )
+    args = parser.parse_args()
+
+    if not EVENT_TYPE_RE.match(args.event_type):
+        raise SystemExit(
+            f"[sensos-report-event] invalid event_type {args.event_type!r}; "
+            "use lowercase letters, digits, '_', '.', '-'"
+        )
+
+    details = parse_details(args.detail)
+
+    try:
+        conn = connect_db()
+    except Exception as exc:  # spool must never break the caller
+        print(f"[sensos-report-event] could not open event spool: {exc}", file=sys.stderr)
+        return 1
+
+    with conn:
+        if args.dedupe_window > 0:
+            detail_value = details.get(args.dedupe_key) if args.dedupe_key else None
+            if recent_event_exists(
+                conn,
+                args.event_type,
+                args.dedupe_window,
+                detail_key=args.dedupe_key,
+                detail_value=detail_value,
+            ):
+                print(
+                    f"[sensos-report-event] skipped {args.event_type}: "
+                    f"matching event within last {args.dedupe_window}s"
+                )
+                return 0
+        event_uuid = insert_event(conn, args.event_type, args.severity, details)
+
+    print(f"[sensos-report-event] recorded {args.event_type} ({event_uuid})")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -51,6 +51,15 @@ ALWAYS_ON_SENSOS_UNITS=(
     sensos-thin-data.service
 )
 
+# Event reporting: the boot recorder is enable-only (starting it would log a
+# spurious boot event during setup); the uploader timer is enabled and started.
+EVENT_ENABLE_ONLY_UNITS=(
+    sensos-report-boot.service
+)
+EVENT_TIMER_UNITS=(
+    sensos-upload-events.timer
+)
+
 RESTART_SAFE_SENSOS_UNITS=(
     sensos-record-audio.service
     sensos-compress-audio.service
@@ -177,6 +186,30 @@ reconcile_always_on_sensos_units() {
     done
 }
 
+enable_sensos_unit_if_present() {
+    local unit_name="$1"
+
+    if ! systemctl list-unit-files --type=service --type=timer 2>/dev/null | awk '{print $1}' | grep -Fxq "${unit_name}"; then
+        log "host unit not present; skipped ${unit_name}"
+        return 0
+    fi
+
+    systemctl enable "${unit_name}"
+    log "enabled SensOS unit ${unit_name}"
+}
+
+reconcile_event_reporting_units() {
+    local unit_name
+
+    log "ensuring event reporting units are enabled"
+    for unit_name in "${EVENT_ENABLE_ONLY_UNITS[@]}"; do
+        enable_sensos_unit_if_present "${unit_name}"
+    done
+    for unit_name in "${EVENT_TIMER_UNITS[@]}"; do
+        ensure_enabled_sensos_unit_if_present "${unit_name}"
+    done
+}
+
 reconcile_optional_audio_units() {
     local unit_name
 
@@ -247,10 +280,12 @@ main() {
         reconcile_always_on_sensos_units
         reconcile_optional_audio_units
         reconcile_restart_safe_sensos_units
+        reconcile_event_reporting_units
     else
         log "fresh install detected; reconciling optional audio unit state"
         reconcile_always_on_sensos_units
         reconcile_optional_audio_units
+        reconcile_event_reporting_units
         for unit_name in "${HOST_BASELINE_UNITS[@]}"; do
             enable_host_unit_if_present "${unit_name}"
         done

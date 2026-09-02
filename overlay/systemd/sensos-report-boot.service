@@ -1,0 +1,15 @@
+[Unit]
+Description=Record a SensOS boot event
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=sensos-runner
+Group=sensos-data
+UMask=0002
+ExecStart=/bin/sh -c '/sensos/bin/sensos-report-event boot --severity notice --detail kernel="$(uname -r)" --detail boot_id="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown)"'
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
