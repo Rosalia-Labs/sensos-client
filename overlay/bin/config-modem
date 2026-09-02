@@ -36,6 +36,125 @@ require_command() {
     }
 }
 
+# Cellular modems are driven by ModemManager, which tells NetworkManager which
+# device can activate a gsm profile. Devices imaged before modemmanager was added
+# to the package list have NetworkManager but no ModemManager, so config-modem
+# would write a profile that can never come up. Fail early with a clear fix.
+ensure_modemmanager_ready() {
+    if ! command -v mmcli >/dev/null 2>&1; then
+        echo "ERROR: ModemManager (mmcli) is not installed on this device." >&2
+        echo "       Install it, then rerun this command:" >&2
+        echo "         cd \"${OVERLAY_ROOT}\" && ./upgrade      # preferred: pulls it in via the package list" >&2
+        echo "         # or, offline: sudo apt-get install -y modemmanager" >&2
+        exit 1
+    fi
+
+    if command -v systemctl >/dev/null 2>&1 &&
+        ! systemctl is-active --quiet ModemManager.service; then
+        echo "ModemManager.service is not active; enabling and starting it..."
+        sudo systemctl enable --now ModemManager.service || {
+            echo "ERROR: could not start ModemManager.service." >&2
+            echo "       Run 'debug-modem --verbose' and review the ModemManager logs." >&2
+            exit 1
+        }
+    fi
+
+    local tries=0
+    while ((tries < 10)); do
+        if mmcli -L 2>/dev/null | grep -q '/Modem/'; then
+            return 0
+        fi
+        sleep 1
+        ((tries += 1))
+    done
+
+    echo "WARNING: ModemManager is running but has not detected a modem yet." >&2
+    echo "         Writing the NetworkManager profile anyway. If activation fails," >&2
+    echo "         check the hardware with: debug-modem --verbose" >&2
+}
+
+# Best-effort discovery of the interface that actually carries cellular traffic.
+# Prefer NetworkManager's and ModemManager's view; fall back to a present wwan/wwx
+# netdev. Prints nothing and returns non-zero when it cannot tell yet.
+detect_gsm_data_iface() {
+    local iface=""
+
+    if command -v nmcli >/dev/null 2>&1; then
+        iface="$(nmcli -t -f DEVICE,TYPE device status 2>/dev/null |
+            awk -F: '$2 == "gsm" {print $1; exit}')"
+    fi
+
+    if [[ -z "${iface}" ]] && command -v mmcli >/dev/null 2>&1; then
+        iface="$(mmcli -m any -K 2>/dev/null |
+            sed -n 's/.*ports\.value\[[0-9]*\] *: *\([^ ]*\) (net)/\1/p' | head -n 1)"
+    fi
+
+    if [[ -z "${iface}" ]]; then
+        local cand
+        for cand in /sys/class/net/wwan* /sys/class/net/wwx*; do
+            [[ -e "${cand}" ]] || continue
+            iface="$(basename "${cand}")"
+            break
+        done
+    fi
+
+    [[ -n "${iface}" ]] || return 1
+    printf '%s\n' "${iface}"
+}
+
+# Empty, or a bare positive integer (kbit). Anything else is a user error.
+validate_kbit() {
+    local label="$1" value="$2"
+    [[ -z "${value}" ]] && return 0
+    if [[ ! "${value}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "ERROR: ${label} must be a positive integer number of kbit (got '${value}')." >&2
+        exit 1
+    fi
+}
+
+# Read-only look at whether the modem can realistically connect. Never fatal:
+# it just surfaces common blockers before nmcli spends its timeout.
+report_modem_readiness() {
+    command -v mmcli >/dev/null 2>&1 || return 0
+
+    local keys state reg
+    keys="$(mmcli -m any -K 2>/dev/null || true)"
+    if [[ -z "${keys}" ]]; then
+        echo "NOTE: ModemManager still reports no modem; activation may need a retry." >&2
+        return 0
+    fi
+
+    state="$(awk -F': +' '/^modem\.generic\.state /{print $2; exit}' <<<"${keys}")"
+    reg="$(awk -F': +' '/^modem\.3gpp\.registration-state/{print $2; exit}' <<<"${keys}")"
+
+    if [[ "${state}" == *locked* ]]; then
+        echo "WARNING: SIM appears locked (modem state='${state}'). A PIN-locked SIM" >&2
+        echo "         must be unlocked before the modem can connect." >&2
+    fi
+    if [[ -n "${reg}" && "${reg}" != "home" && "${reg}" != "roaming" ]]; then
+        echo "NOTE: modem not registered on a network yet (registration='${reg}')." >&2
+        echo "      Normal for a short while after power-on; otherwise check antenna/coverage." >&2
+    fi
+}
+
+# Bring a NetworkManager connection up, retrying once for a cold modem.
+nm_connection_up() {
+    local con_name="$1"
+    shift
+    local attempt
+
+    for attempt in 1 2; do
+        if sudo nmcli -w 90 con up "${con_name}" "$@"; then
+            return 0
+        fi
+        if ((attempt == 1)); then
+            echo "Activation attempt 1 failed; waiting 10s and retrying once..." >&2
+            sleep 10
+        fi
+    done
+    return 1
+}
+
 clear_tc_limits() {
     local dev="$1"
     sudo tc qdisc del dev "${dev}" root 2>/dev/null || true
@@ -47,18 +166,32 @@ apply_tc_limits() {
     local up_kbit="${2:-}"
     local down_kbit="${3:-}"
 
+    if ! ip link show "${dev}" >/dev/null 2>&1; then
+        echo "WARNING: interface ${dev} is not present; traffic caps not applied." >&2
+        return 1
+    fi
+
     if [[ -n "${up_kbit}" ]]; then
         echo "Applying egress cap ${up_kbit} kbit on ${dev}..."
         sudo tc qdisc del dev "${dev}" root 2>/dev/null || true
-        sudo tc qdisc add dev "${dev}" root tbf rate "${up_kbit}kbit" burst 32kbit latency 400ms
+        if ! sudo tc qdisc add dev "${dev}" root tbf rate "${up_kbit}kbit" burst 32kbit latency 400ms; then
+            echo "WARNING: failed to apply egress cap on ${dev}." >&2
+            return 1
+        fi
     fi
 
     if [[ -n "${down_kbit}" ]]; then
         echo "Applying ingress cap ${down_kbit} kbit on ${dev}..."
         sudo tc qdisc del dev "${dev}" handle ffff: ingress 2>/dev/null || true
-        sudo tc qdisc add dev "${dev}" handle ffff: ingress
-        sudo tc filter add dev "${dev}" parent ffff: protocol all u32 \
-            match u32 0 0 police rate "${down_kbit}kbit" burst 32k drop flowid :1
+        if ! sudo tc qdisc add dev "${dev}" handle ffff: ingress; then
+            echo "WARNING: could not add ingress qdisc on ${dev}." >&2
+            return 1
+        fi
+        if ! sudo tc filter add dev "${dev}" parent ffff: protocol all u32 \
+            match u32 0 0 police rate "${down_kbit}kbit" burst 32k drop flowid :1; then
+            echo "WARNING: failed to apply ingress cap on ${dev}." >&2
+            return 1
+        fi
     fi
 }
 
@@ -75,6 +208,15 @@ set_wireguard_mtu_for_1nce() {
         sudo sed -i -E 's/^[[:space:]]*MTU[[:space:]]*=.*/MTU = 1120/' "${wg_conf}"
     else
         sudo sed -i '/^\[Interface\]/a MTU = 1120' "${wg_conf}"
+    fi
+
+    if command -v systemctl >/dev/null 2>&1 &&
+        systemctl is-enabled --quiet "wg-quick@${wg_iface}" 2>/dev/null; then
+        if sudo systemctl restart "wg-quick@${wg_iface}"; then
+            echo "Set WireGuard MTU=1120 in ${wg_conf} and restarted wg-quick@${wg_iface} for 1NCE."
+            return
+        fi
+        echo "WARNING: restart of wg-quick@${wg_iface} failed; falling back to manual reload." >&2
     fi
 
     sudo wg-quick down "${wg_iface}" >/dev/null 2>&1 || true
@@ -128,7 +270,21 @@ parse_switches "${SCRIPT_NAME}" "$@"
     exit 1
 }
 
+validate_kbit --limit-up-kbit "${limit_up_kbit}"
+validate_kbit --limit-down-kbit "${limit_down_kbit}"
+
+if [[ -n "${device}" ]]; then
+    case "${device}" in
+        wwan* | wwx* | usb* | ppp* | eth* | en*)
+            echo "WARNING: --device '${device}' looks like a data interface, not a modem" >&2
+            echo "         control port. For ModemManager-managed modems, omit --device" >&2
+            echo "         and let ModemManager pick the modem." >&2
+            ;;
+    esac
+fi
+
 require_command nmcli
+ensure_modemmanager_ready
 
 case "${service,,}" in
     1nce) apn="iot.1nce.net" ;;
@@ -141,13 +297,21 @@ esac
 
 NM_CON_NAME="sensos-${service,,}"
 
-data_iface="wwan0"
+data_iface="$(detect_gsm_data_iface || true)"
+if [[ -z "${data_iface}" ]]; then
+    echo "NOTE: cellular data interface not identifiable yet; assuming 'wwan0' for now." >&2
+    data_iface="wwan0"
+fi
 
 if nmcli -t -f NAME con show | grep -Fxq "${NM_CON_NAME}"; then
     echo "Updating modem connection '${NM_CON_NAME}'..."
 else
     echo "Creating modem connection '${NM_CON_NAME}'..."
-    sudo nmcli con add type gsm ifname "*" con-name "${NM_CON_NAME}" apn "${apn}"
+    if ! sudo nmcli con add type gsm ifname '*' con-name "${NM_CON_NAME}" apn "${apn}"; then
+        echo "ERROR: failed to create NetworkManager gsm profile '${NM_CON_NAME}'." >&2
+        echo "       Check NetworkManager health: systemctl status NetworkManager" >&2
+        exit 1
+    fi
 fi
 
 sudo nmcli con mod "${NM_CON_NAME}" gsm.apn "${apn}" || true
@@ -162,19 +326,25 @@ fi
 sudo nmcli con mod "${NM_CON_NAME}" ipv4.method auto || true
 sudo nmcli con mod "${NM_CON_NAME}" ipv6.method ignore || true
 
-sudo nmcli con mod "${NM_CON_NAME}" connection.autoconnect yes
-echo "Autoconnect enabled."
+# 1NCE and Soracom SIMs always roam onto local carriers; a home-only profile
+# would refuse to register.
+sudo nmcli con mod "${NM_CON_NAME}" gsm.home-only no || true
 
+sudo nmcli con mod "${NM_CON_NAME}" connection.autoconnect yes
+sudo nmcli con mod "${NM_CON_NAME}" connection.autoconnect-retries 0 || true
+echo "Autoconnect enabled (unlimited retries)."
+
+caps_pending=false
 if [[ -z "${limit_up_kbit}" && -z "${limit_down_kbit}" ]]; then
-    echo "No traffic caps requested; clearing any existing traffic caps on ${data_iface}"
+    echo "No traffic caps requested; clearing any existing traffic caps on ${data_iface}."
     clear_tc_limits "${data_iface}"
 else
-    echo "Applying CLI traffic caps (up='${limit_up_kbit}', down='${limit_down_kbit}')."
-fi
-
-if [[ -n "${limit_up_kbit}" || -n "${limit_down_kbit}" ]]; then
     require_command tc
-    apply_tc_limits "${data_iface}" "${limit_up_kbit}" "${limit_down_kbit}"
+    echo "Applying traffic caps (up='${limit_up_kbit:-none}', down='${limit_down_kbit:-none}') on ${data_iface}..."
+    if ! apply_tc_limits "${data_iface}" "${limit_up_kbit}" "${limit_down_kbit}"; then
+        caps_pending=true
+        echo "NOTE: traffic caps will be retried after the modem link is up (needs --start)." >&2
+    fi
 fi
 
 if [[ "${service,,}" == "1nce" ]]; then
@@ -201,13 +371,31 @@ fi
 register_vnstat_iface "${data_iface}"
 
 if [[ "${start_now}" == "true" ]]; then
-    echo "Bringing up modem connection '${NM_CON_NAME}'..."
-    nmcli_up=(sudo nmcli -w 45 con up "${NM_CON_NAME}")
+    report_modem_readiness
+    echo "Bringing up modem connection '${NM_CON_NAME}' (up to 2 attempts)..."
+    up_args=()
     if [[ -n "${device}" ]]; then
-        nmcli_up+=(ifname "${device}")
+        up_args=(ifname "${device}")
     fi
-    if ! "${nmcli_up[@]}"; then
+    if nm_connection_up "${NM_CON_NAME}" "${up_args[@]}"; then
+        echo "Modem connection '${NM_CON_NAME}' is up."
+        resolved_iface="$(detect_gsm_data_iface || true)"
+        if [[ -n "${resolved_iface}" && "${resolved_iface}" != "${data_iface}" ]]; then
+            echo "Cellular data interface is '${resolved_iface}'."
+            data_iface="${resolved_iface}"
+        fi
+        if [[ "${caps_pending}" == "true" ]]; then
+            echo "Retrying traffic caps on ${data_iface}..."
+            apply_tc_limits "${data_iface}" "${limit_up_kbit}" "${limit_down_kbit}" ||
+                echo "WARNING: traffic caps still could not be applied on ${data_iface}." >&2
+        fi
+        register_vnstat_iface "${data_iface}"
+    else
         echo "WARNING: failed to start modem connection '${NM_CON_NAME}'." >&2
+        echo "         Diagnose with 'debug-modem' (or 'debug-modem --verbose'). Common causes:" >&2
+        echo "           - no modem detected by ModemManager (power, USB, antenna)" >&2
+        echo "           - SIM not registered on a network (activation, coverage)" >&2
+        echo "           - wrong APN for this SIM (using '${apn}' for service '${service}')" >&2
     fi
 fi
 
