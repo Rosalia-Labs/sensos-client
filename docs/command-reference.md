@@ -200,8 +200,11 @@ config-network \
 
 Configure and validate the device while it retains that enrollment. Test
 uploads may therefore reach the operational server, but deployment does not
-depend on a last-minute WireGuard identity and network cutover. The retired
-`prep-for-deployment` and `field-deploy` commands are removed during upgrade.
+depend on a last-minute WireGuard identity and network cutover.
+
+(Earlier releases had `prep-for-deployment` and `field-deploy` for a
+test-network-then-cutover flow. Those are gone; `./upgrade` removes them from
+devices that still have them.)
 
 ### `upload-hardware-profile`
 

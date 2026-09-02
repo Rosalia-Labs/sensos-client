@@ -96,18 +96,6 @@ data_ops_stop_data_units() {
     done
 }
 
-data_ops_start_data_units() {
-    local unit_name
-
-    for unit_name in "${DATA_SERVICES[@]}"; do
-        data_ops_start_unit_if_present "${unit_name}"
-    done
-
-    for unit_name in "${DATA_TIMERS[@]}"; do
-        data_ops_start_unit_if_present "${unit_name}"
-    done
-}
-
 data_ops_start_selected_units() {
     local unit_name
 
@@ -170,23 +158,6 @@ data_ops_uses_root_filesystem() {
 
 data_ops_storage_is_available() {
     mountpoint -q "${DATA_MOUNT}" || data_ops_uses_root_filesystem
-}
-
-data_ops_backing_device_for_source() {
-    local source_path="$1"
-    local pkname
-
-    [[ -n "${source_path}" ]] || return 0
-
-    if [[ -b "${source_path}" ]]; then
-        pkname="$(lsblk -no PKNAME "${source_path}" 2>/dev/null | head -n 1)"
-        if [[ -n "${pkname}" ]]; then
-            printf '/dev/%s\n' "${pkname}"
-            return 0
-        fi
-    fi
-
-    printf '%s\n' "${source_path}"
 }
 
 data_ops_checkpoint_sqlite_db() {
