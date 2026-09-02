@@ -960,11 +960,14 @@ Behavior:
 - for the `serial` backend, lists the candidate devices (`/dev/serial/by-id/*`, `/dev/ttyACM*`, `/dev/ttyUSB*`) and which one was resolved
 - dumps `/sensos/etc/gps.conf`, `/sensos/data/microenv/gps-state.env`, and recent GPS logs
 
-### `packet-tracing`
+### `network-capture`
 
-Runs a packet-capture session for debugging until you stop it.
+Runs an on-demand packet-capture session for debugging network traffic (for
+example, to see what a device is talking to and how much data it moves on a
+metered link). Runs until you stop it.
 
-This command was previously documented as `package-tracing`. The installed command name is `packet-tracing`.
+Formerly `packet-tracing` (and `package-tracing` before that). `./upgrade`
+removes the old command names.
 
 Subcommands:
 
@@ -977,23 +980,23 @@ Subcommands:
 Typical use:
 
 ```sh
-packet-tracing start
-packet-tracing status
-packet-tracing stop
-packet-tracing report --latest --cleanup
-packet-tracing report --latest --save
-packet-tracing cleanup --all
+network-capture start
+network-capture status
+network-capture stop
+network-capture report --latest --cleanup
+network-capture report --latest --save
+network-capture report --session-root /sensos/log/network_capture/sessions/<timestamp> --hours 0 --top 20
+network-capture cleanup --all
 ```
 
 Behavior:
 
 - stores temporary capture sessions under `/sensos/log/network_capture/sessions`
-- uses bounded rotating `pcap` files
-- keeps the active capture running until `packet-tracing stop`
-- owns the privilege boundary for tracing; start/status/stop use `sudo` internally for service control, while report generation stays read-only
-- prints reports to stdout by default
-- only writes `report-*.txt` and `report-*.json` files when `--save` is used
-- keeps session directories and saved reports writable for the shared admin/data group so post-capture report saving and cleanup do not need manual `sudo`
+- uses bounded rotating `pcap` files; the underlying `sensos-network-capture.service` is not enabled at install and only runs for the session you start
+- keeps the active capture running until `network-capture stop`
+- owns the privilege boundary: start/status/stop use `sudo` internally for service control, while `report` is read-only and never elevates
+- `report` prints a text summary to stdout (traffic by direction, protocol, remote IP, local/remote port, full flow tuple); `--json` emits JSON; `--save` also writes `report-*.txt` / `report-*.json` under the session's `reports/` directory
+- keeps session directories and saved reports writable for the shared admin/data group so saving and cleanup do not need manual `sudo`
 - is intended for debugging, not permanent collection
 
 ### `debug-i2c`
@@ -1014,23 +1017,6 @@ Behavior:
 - shows `sensos-read-i2c.service` status and recent logs
 - runs `i2cdetect -y 1` when the I2C device node is present
 - is intended for field debugging on deployed clients
-
-### `report-network-capture`
-
-Generates a report from a capture session.
-
-Typical use:
-
-```sh
-report-network-capture --hours 0 --top 20
-report-network-capture --capture-root /sensos/log/network_capture/sessions/<timestamp> --json
-```
-
-Behavior:
-
-- summarizes traffic by direction, protocol, remote IP, local port, remote port, and full flow tuple
-- is read-only and does not call `sudo`
-- useful when you need to identify persistent talkers or unexpected inbound sources
 
 ## Recommended Bring-Up Example
 

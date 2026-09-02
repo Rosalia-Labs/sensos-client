@@ -30,9 +30,9 @@ usage() {
 Usage: $(basename "$0") <command> [options]
 
 Commands:
-  start    Start a packet tracing session
-  status   Show active packet tracing session state
-  stop     Stop the active packet tracing session
+  start    Start a network capture session
+  status   Show active network capture session state
+  stop     Stop the active network capture session
   report   Generate reports for a session
   cleanup  Remove retained capture data for a session
 EOF
@@ -120,7 +120,7 @@ latest_session_root() {
 
     latest="$(find "${SESSIONS_ROOT}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -n 1)"
     [[ -n "${latest}" ]] || {
-        echo "ERROR: no tracing sessions found under ${SESSIONS_ROOT}" >&2
+        echo "ERROR: no capture sessions found under ${SESSIONS_ROOT}" >&2
         exit 1
     }
     printf '%s\n' "${latest}"
@@ -213,7 +213,7 @@ cmd_start() {
     if [[ "${state}" == "active" ]]; then
         echo "ERROR: ${SERVICE_NAME} is already active. Stop the current capture before starting a new one." >&2
         echo "Inspect with:" >&2
-        echo "  packet-tracing status" >&2
+        echo "  network-capture status" >&2
         echo "  sudo systemctl status ${SERVICE_NAME}" >&2
         exit 1
     fi
@@ -244,7 +244,7 @@ cmd_start() {
         exit 1
     fi
 
-    echo "Started packet tracing session"
+    echo "Started network capture session"
     echo "  session_root=${session_root}"
     echo "  interface=${interface}"
     echo "  rotation=${file_count}x${file_mb}MiB"
@@ -375,7 +375,7 @@ cmd_cleanup() {
     register_option --session-root session_root "Session root directory to clean" ""
     register_option --latest latest "Use the latest session when --session-root is omitted" "true"
     register_option --remove-reports remove_reports "Also remove generated report files" "false"
-    register_option --all all "Remove all retained tracing sessions, including reports" "false"
+    register_option --all all "Remove all retained capture sessions, including reports" "false"
     parse_switches "$(basename "$0") cleanup" "$@"
 
     if [[ "${all}" == "true" ]]; then
@@ -384,7 +384,7 @@ cmd_cleanup() {
         rm -rf "${SESSIONS_ROOT}"
         install -d -m 2775 "${SESSIONS_ROOT}"
         set_shared_dir_policy "${SESSIONS_ROOT}"
-        echo "Cleaned all tracing sessions under ${SESSIONS_ROOT}"
+        echo "Cleaned all capture sessions under ${SESSIONS_ROOT}"
         echo "  removed=all-session-data"
         return 0
     fi
