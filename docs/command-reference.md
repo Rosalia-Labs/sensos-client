@@ -873,8 +873,11 @@ Behavior:
 - `--dedupe-window SECONDS` (with optional `--dedupe-key`) skips the event when a
   matching one was recorded recently — used to keep chatty sources such as SSH
   logins infrequent
-- recorded events are uploaded by `sensos-upload-events.timer`
-  (`OnBootSec=3min`, then every ~45 min); nothing is lost while the tunnel is down
+- an event that `events.conf` filters out is still recorded locally (marked
+  *suppressed*, visible in `debug-events`) but never uploaded; `--force` queues it
+  regardless
+- queued events are uploaded by `sensos-upload-events.timer` on the schedule set
+  by `config-events --flush` (default hourly); nothing is lost while the tunnel is down
 
 Events emitted automatically:
 
@@ -886,12 +889,41 @@ Events emitted automatically:
 | `archive_enter` / `archive_exit` | `archive-mode --enter` / `--exit` (with `cleared_data`) |
 | `upgrade` | `./upgrade` when the version changes |
 | `service_failure` | `OnFailure=` on the main SensOS units (sustained failure only) |
-| `user_login` | interactive SSH / console session open, rate-limited to one per user per 15 min |
+| `user_login` | interactive SSH / console session open, rate-limited per `EVENTS_LOGIN_DEDUPE_SEC` |
+
+### `config-events`
+
+Controls event reporting. Works with no config file (built-in defaults: enabled,
+`min_severity=info`, hourly flush). Writes `/sensos/etc/events.conf` and
+reconciles `sensos-upload-events.timer` / `sensos-report-boot.service`.
+
+```sh
+config-events --show
+config-events --flush daily                       # IoT / metered SIM: flush once a day
+config-events --min-severity warning              # only service_failure leaves the device
+config-events --suppress-types user_login,archive_enter,archive_exit
+config-events --flush manual                      # timer off; flush by hand
+config-events --no-enable                         # stop all uploads (still recorded locally)
+```
+
+Settings (`events.conf`):
+
+- `EVENTS_ENABLED` — `false` uploads nothing; events are still recorded locally
+- `EVENTS_MIN_SEVERITY` — `info` | `notice` | `warning` floor for what uploads
+- `EVENTS_SUPPRESS_TYPES` — comma list of event types kept local only
+- `EVENTS_FLUSH` — `frequent` (~15 min) | `hourly` | `daily` | `manual`
+- `EVENTS_LOGIN_DEDUPE_SEC` — min seconds between recorded logins per user (default 900)
+- `EVENTS_RETENTION_DAYS` — local spool retention after upload/suppression (default 30)
+
+`--no-enable` also marks any queued backlog suppressed so a later `--enable` does
+not flush stale events. `./upgrade` respects `events.conf` and will not re-enable
+units you turned off.
 
 ### `debug-events`
 
-Read-only report: spool contents (pending vs sent, most recent events),
-uploader timer and service state, and recent upload logs.
+Read-only report: `events.conf` (or "using defaults"), spool contents (queued /
+sent / suppressed counts and recent events), uploader timer and service state,
+and recent upload logs.
 
 ```sh
 debug-events

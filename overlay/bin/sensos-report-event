@@ -26,7 +26,9 @@ sys.path.insert(0, str(Path(OVERLAY_ROOT) / "libexec"))
 from events_data import (  # noqa: E402
     VALID_SEVERITIES,
     connect_db,
+    event_is_uploadable,
     insert_event,
+    read_events_config,
     recent_event_exists,
 )
 
@@ -68,6 +70,11 @@ def main() -> int:
         metavar="KEY",
         help="detail key whose value must also match for --dedupe-window",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="queue for upload even if events.conf would filter this event",
+    )
     args = parser.parse_args()
 
     if not EVENT_TYPE_RE.match(args.event_type):
@@ -99,9 +106,21 @@ def main() -> int:
                     f"matching event within last {args.dedupe_window}s"
                 )
                 return 0
-        event_uuid = insert_event(conn, args.event_type, args.severity, details)
 
-    print(f"[sensos-report-event] recorded {args.event_type} ({event_uuid})")
+        uploadable = args.force or event_is_uploadable(
+            read_events_config(), args.event_type, args.severity
+        )
+        event_uuid = insert_event(
+            conn, args.event_type, args.severity, details, suppressed=not uploadable
+        )
+
+    if uploadable:
+        print(f"[sensos-report-event] recorded {args.event_type} ({event_uuid})")
+    else:
+        print(
+            f"[sensos-report-event] recorded {args.event_type} ({event_uuid}); "
+            "local only, filtered by events.conf"
+        )
     return 0
 
 

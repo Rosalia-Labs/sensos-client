@@ -8,17 +8,25 @@
 #   PAM_RHOST   remote host (empty for local console)
 #   PAM_SERVICE pam service name (sshd, login, ...)
 #
-# Records one user_login event per user per 15 minutes so routine access does
-# not flood the event log. Fire-and-forget via systemd-run so login is never
-# blocked on the spool.
+# Records one user_login event per user per EVENTS_LOGIN_DEDUPE_SEC seconds
+# (default 900) so routine access does not flood the event log. Fire-and-forget
+# via systemd-run so login is never blocked on the spool. Whether the event is
+# uploaded or only kept locally is decided by sensos-report-event from
+# events.conf.
 
 set -eu
 
 [[ "${PAM_TYPE:-}" == "open_session" ]] || exit 0
 
+CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-/sensos}"
+EVENTS_CONF="${CLIENT_ROOT}/etc/events.conf"
+
 REPORT="${SENSOS_REPORT_EVENT_BIN:-/usr/local/bin/sensos-report-event}"
 [[ -x "${REPORT}" ]] || REPORT="$(command -v sensos-report-event || true)"
 [[ -n "${REPORT}" && -x "${REPORT}" ]] || exit 0
+
+DEDUPE_SEC="$(awk -F= '$1 == "EVENTS_LOGIN_DEDUPE_SEC" {sub(/^[^=]*=/, ""); gsub(/[[:space:]]/, ""); print; exit}' "${EVENTS_CONF}" 2>/dev/null || true)"
+[[ "${DEDUPE_SEC}" =~ ^[0-9]+$ ]] || DEDUPE_SEC=900
 
 RUN="$(command -v systemd-run || true)"
 
@@ -28,7 +36,7 @@ ARGS=(
     --detail "user=${PAM_USER:-unknown}"
     --detail "service=${PAM_SERVICE:-unknown}"
     --detail "rhost=${PAM_RHOST:-local}"
-    --dedupe-window 900
+    --dedupe-window "${DEDUPE_SEC}"
     --dedupe-key user
 )
 

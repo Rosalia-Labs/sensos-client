@@ -2,8 +2,10 @@
 Description=Flush the SensOS client event log on a schedule
 
 [Timer]
+# Default ("hourly") schedule. config-events --flush {frequent,daily,manual}
+# overrides this with a drop-in under sensos-upload-events.timer.d/.
 OnBootSec=3min
-OnUnitActiveSec=45min
+OnUnitActiveSec=1h
 RandomizedDelaySec=300
 Persistent=true
 

@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+"""Configure client event reporting.
+
+Event reporting works with no config file (built-in defaults). This command
+writes /sensos/etc/events.conf and reconciles the uploader timer so bandwidth-
+sensitive deployments (IoT / metered SIM) can slow or trim it.
+"""
+
+import argparse
+import importlib.util
+import os
+import shutil
+import subprocess
+import sys
+
+SCRIPT_FILE = os.path.realpath(__file__)
+OVERLAY_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", "/sensos")
+CLIENT_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", OVERLAY_ROOT)
+UTILS_FILE = os.path.join(OVERLAY_ROOT, "libexec", "utils.py")
+EVENTS_DATA_FILE = os.path.join(OVERLAY_ROOT, "libexec", "events_data.py")
+
+for _path in (UTILS_FILE, EVENTS_DATA_FILE):
+    if not os.path.isfile(_path):
+        raise RuntimeError(f"Missing dependency: {_path}")
+
+
+def _load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+UTILS = _load("sensos_overlay_utils", UTILS_FILE)
+sys.path.insert(0, os.path.join(OVERLAY_ROOT, "libexec"))
+ED = _load("sensos_events_data", EVENTS_DATA_FILE)
+
+parse_args_with_defaults = UTILS.parse_args_with_defaults
+create_dir = UTILS.create_dir
+write_file = UTILS.write_file
+ensure_sensos_admin = UTILS.ensure_sensos_admin
+
+CONFIG_PATH = os.path.join(CLIENT_ROOT, "etc", "events.conf")
+TIMER_NAME = "sensos-upload-events.timer"
+UPLOAD_SERVICE = "sensos-upload-events.service"
+BOOT_SERVICE = "sensos-report-boot.service"
+DROPIN_DIR = f"/etc/systemd/system/{TIMER_NAME}.d"
+DROPIN_PATH = f"{DROPIN_DIR}/10-sensos-flush.conf"
+
+# EVENTS_FLUSH mode -> systemd timer schedule. "hourly" matches the shipped
+# unit, so it needs no drop-in.
+FLUSH_SCHEDULES = {
+    "frequent": {"OnBootSec": "2min", "OnUnitActiveSec": "15min"},
+    "hourly": None,
+    "daily": {"OnBootSec": "5min", "OnUnitActiveSec": "1d", "RandomizedDelaySec": "1h"},
+    "manual": None,
+}
+
+
+def sudo(*args: str, check: bool = True) -> int:
+    result = subprocess.run(["sudo", *args], check=False)
+    if check and result.returncode != 0:
+        raise SystemExit(result.returncode)
+    return result.returncode
+
+
+def systemctl(*args: str, check: bool = True) -> int:
+    return sudo("systemctl", *args, check=check)
+
+
+def current_config() -> dict:
+    return ED.read_events_config()
+
+
+def render_config(values: dict) -> str:
+    return (
+        f"EVENTS_ENABLED={values['enabled']}\n"
+        f"EVENTS_MIN_SEVERITY={values['min_severity']}\n"
+        f"EVENTS_SUPPRESS_TYPES={values['suppress_types']}\n"
+        f"EVENTS_FLUSH={values['flush']}\n"
+        f"EVENTS_LOGIN_DEDUPE_SEC={values['login_dedupe_sec']}\n"
+        f"EVENTS_RETENTION_DAYS={values['retention_days']}\n"
+    )
+
+
+def apply_timer_dropin(flush: str) -> None:
+    schedule = FLUSH_SCHEDULES.get(flush)
+
+    if schedule is None:
+        if os.path.exists(DROPIN_PATH):
+            sudo("rm", "-f", DROPIN_PATH)
+            print(f"Removed {DROPIN_PATH}")
+    else:
+        body = "[Timer]\n" + "".join(f"{k}={v}\n" for k, v in schedule.items())
+        sudo("install", "-d", "-m", "0755", DROPIN_DIR)
+        write_file(DROPIN_PATH, body, mode=0o644, user="root")
+        print(f"Wrote {DROPIN_PATH} ({flush} schedule)")
+
+    systemctl("daemon-reload", check=False)
+
+    if flush == "manual":
+        systemctl("disable", "--now", TIMER_NAME, check=False)
+        print(f"{TIMER_NAME} disabled (flush=manual); run '{UPLOAD_SERVICE}' by hand to flush.")
+    else:
+        systemctl("enable", "--now", TIMER_NAME, check=False)
+        systemctl("restart", TIMER_NAME, check=False)
+
+
+def suppress_queued_backlog() -> None:
+    try:
+        conn = ED.connect_db()
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARNING: could not open the event spool to clear the backlog: {exc}", file=sys.stderr)
+        return
+    try:
+        with conn:
+            count = ED.suppress_queued(conn)
+        if count:
+            print(f"Marked {count} queued event(s) as suppressed.")
+    finally:
+        conn.close()
+
+
+def show_status() -> None:
+    cfg = current_config()
+    print(f"config file: {CONFIG_PATH}{'' if os.path.exists(CONFIG_PATH) else ' (absent; using defaults)'}")
+    print(f"  enabled           : {ED.events_enabled(cfg)}")
+    print(f"  min severity      : {cfg.get('EVENTS_MIN_SEVERITY', ED.DEFAULT_MIN_SEVERITY)}")
+    print(f"  suppressed types  : {cfg.get('EVENTS_SUPPRESS_TYPES', '') or '(none)'}")
+    print(f"  flush mode        : {ED.flush_mode(cfg)}")
+    print(f"  login dedupe sec  : {ED.login_dedupe_seconds(cfg)}")
+    print(f"  retention days    : {ED.retention_days(cfg)}")
+    print()
+    if shutil.which("systemctl"):
+        subprocess.run(
+            ["systemctl", "--no-pager", "list-timers", TIMER_NAME, "--all"], check=False
+        )
+        subprocess.run(["systemctl", "is-enabled", BOOT_SERVICE], check=False)
+
+
+def main() -> int:
+    ensure_sensos_admin()
+
+    cfg = current_config()
+    defaults = {
+        "enabled": ED.events_enabled(cfg),
+        "min_severity": cfg.get("EVENTS_MIN_SEVERITY", ED.DEFAULT_MIN_SEVERITY).strip().lower(),
+        "suppress_types": cfg.get("EVENTS_SUPPRESS_TYPES", "").strip(),
+        "flush": ED.flush_mode(cfg),
+        "login_dedupe_sec": ED.login_dedupe_seconds(cfg),
+        "retention_days": ED.retention_days(cfg),
+    }
+
+    arg_defs = [
+        (["--show"], {"action": "store_true", "help": "Print current settings and exit."}),
+        (["--enable"], {"dest": "enabled", "action": argparse.BooleanOptionalAction,
+                        "default": defaults["enabled"],
+                        "help": "Enable/disable uploading events to the server."}),
+        (["--min-severity"], {"dest": "min_severity", "choices": list(ED.SEVERITY_RANK),
+                              "default": defaults["min_severity"],
+                              "help": "Only upload events at or above this severity."}),
+        (["--suppress-types"], {"dest": "suppress_types", "default": defaults["suppress_types"],
+                                "help": "Comma list of event types to keep local only "
+                                        "(e.g. user_login,archive_enter). Empty clears the list."}),
+        (["--flush"], {"dest": "flush", "choices": list(ED.VALID_FLUSH_MODES),
+                       "default": defaults["flush"],
+                       "help": "Uploader cadence: frequent (~15m), hourly, daily, or manual."}),
+        (["--login-dedupe-sec"], {"dest": "login_dedupe_sec", "type": int,
+                                  "default": defaults["login_dedupe_sec"],
+                                  "help": "Minimum seconds between recorded logins for the same user."}),
+        (["--retention-days"], {"dest": "retention_days", "type": int,
+                                "default": defaults["retention_days"],
+                                "help": "Days to keep uploaded/suppressed events in the local spool."}),
+    ]
+    args = parse_args_with_defaults(arg_defs, ["global", "config_events"])
+
+    if args.show:
+        show_status()
+        return 0
+
+    values = {
+        "enabled": "true" if args.enabled else "false",
+        "min_severity": args.min_severity,
+        "suppress_types": ",".join(
+            t.strip() for t in args.suppress_types.split(",") if t.strip()
+        ),
+        "flush": args.flush,
+        "login_dedupe_sec": max(0, args.login_dedupe_sec),
+        "retention_days": max(1, args.retention_days),
+    }
+
+    create_dir(os.path.dirname(CONFIG_PATH), owner="sensos-admin", group="sensos-data", mode=0o2775)
+    write_file(CONFIG_PATH, render_config(values), mode=0o664, user="sensos-admin", group="sensos-data")
+    print(f"Wrote {CONFIG_PATH}")
+
+    if not args.enabled:
+        suppress_queued_backlog()
+        systemctl("disable", "--now", TIMER_NAME, check=False)
+        systemctl("disable", BOOT_SERVICE, check=False)
+        systemctl("daemon-reload", check=False)
+        print("Event uploading disabled. Events are still recorded locally (see debug-events).")
+        return 0
+
+    systemctl("enable", BOOT_SERVICE, check=False)
+    apply_timer_dropin(args.flush)
+    print("Event reporting configured.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

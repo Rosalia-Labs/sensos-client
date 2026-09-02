@@ -27,8 +27,11 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from events_data import (  # noqa: E402
     connect_db,
+    events_enabled,
     mark_sent,
     prune_sent,
+    read_events_config,
+    retention_days,
     select_pending,
     utcnow_text,
 )
@@ -65,6 +68,20 @@ def post_events(server_ip: str, port: str, peer_uuid: str, api_password: str, pa
 
 
 def main() -> int:
+    events_config = read_events_config()
+
+    if not events_enabled(events_config):
+        # Recorded events remain in the local spool (marked suppressed) but are
+        # never uploaded. Still prune old rows so the spool does not grow forever.
+        conn = connect_db()
+        try:
+            with conn:
+                prune_sent(conn, retention_days(events_config))
+        finally:
+            conn.close()
+        print("[INFO] event upload disabled in events.conf; nothing sent.")
+        return 0
+
     version = read_client_version_text(str(OVERLAY_ROOT))
     config = read_network_conf()
     if not config:
@@ -81,7 +98,7 @@ def main() -> int:
     total_sent = 0
     try:
         with conn:
-            prune_sent(conn)
+            prune_sent(conn, retention_days(events_config))
 
         for _ in range(MAX_BATCHES_PER_RUN):
             with conn:
