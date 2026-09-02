@@ -329,10 +329,52 @@ unmount_path_if_needed() {
     fi
 }
 
+# Unmount ${DATA_MOUNT} when it is currently backed by ${target_device} or one of
+# its partitions, so the device can be repartitioned. Writers are already stopped
+# by archive mode at this point.
+unmount_data_mount_if_backed_by() {
+    local target_device="$1"
+    local data_source=""
+
+    data_source="$(mount_source_for_path "${DATA_MOUNT}")"
+    [[ -n "${data_source}" ]] || return 0
+
+    case "${data_source}" in
+        "${target_device}" | "${target_device}"[0-9]* | "${target_device}"p[0-9]*)
+            echo "🔧 Unmounting ${DATA_MOUNT} (backed by ${data_source}) before reprovisioning ${target_device}..."
+            sudo umount "${DATA_MOUNT}" ||
+                die "Failed to unmount ${DATA_MOUNT}; stop anything using it and retry."
+            ;;
+    esac
+}
+
+# Drop any mounts on the target device or its partitions and clear stale
+# partition-table / filesystem signatures so a previous layout cannot survive.
+wipe_target_device() {
+    local target_device="$1"
+    local node=""
+
+    unmount_data_mount_if_backed_by "${target_device}"
+
+    while IFS= read -r node; do
+        [[ -n "${node}" && -b "${node}" ]] || continue
+        unmount_path_if_needed "${node}"
+        if [[ "${node}" != "${target_device}" ]] && command -v wipefs >/dev/null 2>&1; then
+            sudo wipefs -a "${node}" >/dev/null 2>&1 || true
+        fi
+    done < <(sudo lsblk -nrpo NAME "${target_device}" 2>/dev/null)
+
+    if command -v wipefs >/dev/null 2>&1; then
+        echo "🧽 Clearing existing partition/filesystem signatures on ${target_device}..."
+        sudo wipefs -a "${target_device}" >/dev/null 2>&1 || true
+    fi
+}
+
 prepare_disk_ext4() {
     local target_device="$1"
 
     require_storage_provisioning_tools
+    wipe_target_device "${target_device}"
 
     echo "🛠️  Creating GPT partition table and a single ext4 filesystem on ${target_device}..."
     sudo "${PARTED_BIN}" -s "${target_device}" mklabel gpt
@@ -348,7 +390,15 @@ prepare_disk_ext4() {
 
 select_partition() {
     PARTITION="$(get_first_partition "${device}")"
+
     if [[ -n "${PARTITION}" ]]; then
+        # A partition already exists. Only touch it when a wipe was requested
+        # (via --wipe or an interactive confirmation); otherwise keep it as-is.
+        if [[ "${wipe}" == "true" ]] ||
+            { is_interactive && confirm_yes_no "${device} already has a partition (${PARTITION}). Overwrite it with a new GPT table and ext4 filesystem? This erases all data on ${device}." false; }; then
+            wipe="true"
+            prepare_disk_ext4 "${device}"
+        fi
         return 0
     fi
 
@@ -370,6 +420,8 @@ ensure_partition_has_filesystem() {
     local fstype
     fstype="$(get_filesystem_type "${PARTITION}")"
 
+    # A wipe (if requested) already rebuilt the partition and filesystem in
+    # select_partition, so an existing filesystem here is expected and fine.
     if [[ -n "${fstype}" ]]; then
         return 0
     fi

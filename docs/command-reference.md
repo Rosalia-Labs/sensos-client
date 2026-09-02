@@ -277,8 +277,10 @@ Behavior:
 - when a storage change is requested and `/sensos/data` writer services are active, it enters archive mode automatically before proceeding
 - the normal external-disk path is: create one GPT table, create one ext4 partition, mount it at `/sensos/data`, and persist it in `/etc/fstab`
 - `--wipe` is the explicit non-interactive flag for destructive reprovisioning of a selected disk
+- `--wipe` reprovisions the disk even when it already carries a partition table, filesystem, or a live `/sensos/data` mount: it unmounts `/sensos/data` if that disk backs it, clears the old partition/filesystem signatures, then recreates the GPT table and ext4 filesystem
+- run `config-storage --wipe` after reusing an SSD from another device so stale contents (including any leftover databases) do not survive
 - `--yes` skips confirmations, but only when paired with an explicit destructive action such as `--wipe`
-- without `--wipe`, the command will mount an already prepared partition when possible, but it will not silently repartition a disk in non-interactive use
+- without `--wipe`, the command will mount an already prepared partition when possible, but it will not silently repartition a disk in non-interactive use; interactively it prompts before overwriting an existing partition
 - this is the provisioning step for data storage; it is not a replacement for `archive-mode`
 - provisions shared roots as `sensos-admin:sensos-data`; recursively repairs the known worker runtime trees as `sensos-runner:sensos-data`, using mode `2775` for directories and `0664` for files
 - use `config-storage` when you are setting up or changing where `/sensos/data` lives
