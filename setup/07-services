@@ -198,13 +198,33 @@ enable_sensos_unit_if_present() {
     log "enabled SensOS unit ${unit_name}"
 }
 
+events_conf_value() {
+    local key="$1"
+    local conf="${DEPLOY_ROOT}/etc/events.conf"
+    [[ -f "${conf}" ]] || return 0
+    awk -F= -v k="${key}" '$1 == k {sub(/^[^=]*=/, ""); gsub(/[[:space:]]/, ""); print; exit}' "${conf}"
+}
+
 reconcile_event_reporting_units() {
-    local unit_name
+    local unit_name enabled flush
+
+    enabled="$(events_conf_value EVENTS_ENABLED)"
+    flush="$(events_conf_value EVENTS_FLUSH)"
+
+    if [[ "${enabled,,}" == "false" || "${enabled,,}" == "0" || "${enabled,,}" == "no" ]]; then
+        log "events.conf disables event reporting; leaving its units as configured"
+        return 0
+    fi
 
     log "ensuring event reporting units are enabled"
     for unit_name in "${EVENT_ENABLE_ONLY_UNITS[@]}"; do
         enable_sensos_unit_if_present "${unit_name}"
     done
+
+    if [[ "${flush,,}" == "manual" ]]; then
+        log "events.conf sets flush=manual; leaving ${EVENT_TIMER_UNITS[*]} disabled"
+        return 0
+    fi
     for unit_name in "${EVENT_TIMER_UNITS[@]}"; do
         ensure_enabled_sensos_unit_if_present "${unit_name}"
     done

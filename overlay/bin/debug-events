@@ -8,6 +8,7 @@ CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-/sensos}"
 SERVICE_NAME="sensos-upload-events.service"
 TIMER_NAME="sensos-upload-events.timer"
 DB_PATH="${CLIENT_ROOT}/data/microenv/events.db"
+CONFIG_PATH="${CLIENT_ROOT}/etc/events.conf"
 PY="${CLIENT_ROOT}/python/venv/bin/python"
 
 section() {
@@ -23,6 +24,14 @@ py_cmd() {
     command -v python3
 }
 
+section "Config"
+if [[ -f "${CONFIG_PATH}" ]]; then
+    cat "${CONFIG_PATH}"
+else
+    printf '%s absent; using built-in defaults (enabled, min_severity=info, flush=hourly)\n' "${CONFIG_PATH}"
+    printf 'run "config-events --show" for the effective settings, or "config-events --flush daily" etc. to change them\n'
+fi
+
 section "Spool"
 printf 'db_path=%s\n' "${DB_PATH}"
 if [[ -f "${DB_PATH}" ]]; then
@@ -36,17 +45,19 @@ except Exception as exc:
     print(f"open_error={exc}")
     raise SystemExit(0)
 try:
-    pending = conn.execute("SELECT COUNT(*) FROM events WHERE sent_to_server=0").fetchone()[0]
-    sent = conn.execute("SELECT COUNT(*) FROM events WHERE sent_to_server=1").fetchone()[0]
-    print(f"pending={pending}")
-    print(f"sent={sent}")
+    counts = {row[0]: row[1] for row in conn.execute(
+        "SELECT sent_to_server, COUNT(*) FROM events GROUP BY sent_to_server")}
+    print(f"queued={counts.get(0, 0)}")
+    print(f"sent={counts.get(1, 0)}")
+    print(f"suppressed={counts.get(2, 0)}  (recorded locally, filtered by events.conf)")
     rows = conn.execute(
         "SELECT occurred_at, event_type, severity, sent_to_server, details_json "
         "FROM events ORDER BY id DESC LIMIT 15"
     ).fetchall()
+    labels = {0: "queued", 1: "sent", 2: "suppressed"}
     print("recent (newest first):")
     for r in rows:
-        flag = "sent" if r["sent_to_server"] else "queued"
+        flag = labels.get(r["sent_to_server"], str(r["sent_to_server"]))
         print(f"  {r['occurred_at']}  {r['severity']:<7} {r['event_type']:<18} [{flag}] {r['details_json']}")
 except Exception as exc:
     print(f"query_error={exc}")
