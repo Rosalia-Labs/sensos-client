@@ -265,41 +265,6 @@ def read_scd4x(addr_str: str = None):
         return None
 
 
-def read_i2c_gps(addr_str: str = None):
-    try:
-        import pynmea2
-        import smbus2
-
-        i2c_addr = int(addr_str, 16)
-        with smbus2.SMBus(1) as bus:
-            available = bus.read_byte_data(i2c_addr, 0xFD)
-            if available == 0:
-                return {"fix": 0}
-            raw_chars = [chr(bus.read_byte_data(i2c_addr, 0xFF)) for _ in range(available)]
-        nmea = "".join(raw_chars)
-        for line in nmea.splitlines():
-            if line.startswith("$GPGGA") or line.startswith("$GPRMC"):
-                try:
-                    msg = pynmea2.parse(line)
-                    fix_quality = getattr(msg, "gps_qual", None)
-                    fix = int(fix_quality) if fix_quality and str(fix_quality).isdigit() else 0
-                    if fix == 0:
-                        return {"fix": 0}
-                    return {
-                        "latitude": getattr(msg, "latitude", None),
-                        "longitude": getattr(msg, "longitude", None),
-                        "altitude": getattr(msg, "altitude", None),
-                        "timestamp": msg.timestamp.isoformat() if hasattr(msg, "timestamp") else None,
-                        "fix": fix,
-                    }
-                except pynmea2.ParseError:
-                    continue
-        return {"fix": 0}
-    except Exception as exc:
-        print(f"Error reading I2C GPS: {exc}", file=sys.stderr)
-        return None
-
-
 def read_lt150(addr_str: str = "0x49"):
     try:
         import adafruit_ads1x15.ads1015 as ADS
