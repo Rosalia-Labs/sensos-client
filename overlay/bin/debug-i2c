@@ -68,7 +68,7 @@ show_python_runtime() {
 
     "${VENV_PYTHON}" - <<'PY'
 import importlib
-modules = ["board", "busio", "smbus2", "adafruit_bme280", "adafruit_ads1x15", "adafruit_scd30", "adafruit_scd4x"]
+modules = ["board", "busio", "smbus2", "adafruit_bme280", "adafruit_ads1x15", "adafruit_scd30", "adafruit_scd4x", "serial"]
 for name in modules:
     try:
         importlib.import_module(name)

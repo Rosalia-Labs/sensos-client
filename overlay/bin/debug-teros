@@ -1,0 +1,69 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+#
+# debug-teros: ping the USB TEROS node and show which SDI-12 addresses are
+# occupied by which probe (model, firmware, serial) and the SensOS
+# device_address each one is registered under. Mirrors debug-i2c.
+#
+# Usage: debug-teros [--device /dev/ttyUSB0]
+# Default device comes from TEROS_DEVICE in /sensos/etc/i2c-sensors.conf.
+
+set -euo pipefail
+
+CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-/sensos}"
+SERVICE_NAME="sensos-read-i2c.service"
+CONFIG_FILE="${CLIENT_ROOT}/etc/i2c-sensors.conf"
+VENV_PYTHON="${CLIENT_ROOT}/python/venv/bin/python"
+TEROS_MODULE="${CLIENT_ROOT}/libexec/teros_serial.py"
+
+section() { printf '\n== %s ==\n' "$1"; }
+have_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+device=""
+if [[ "${1:-}" == "--device" && -n "${2:-}" ]]; then
+    device="$2"
+elif [[ -f "${CONFIG_FILE}" ]]; then
+    device="$(grep -E '^TEROS_DEVICE=' "${CONFIG_FILE}" | head -n1 | cut -d= -f2- | tr -d '[:space:]' || true)"
+fi
+
+section "TEROS Config"
+if [[ -f "${CONFIG_FILE}" ]]; then
+    grep -E '^(TEROS_|INTERVAL_SEC|SUBSAMPLES)' "${CONFIG_FILE}" || printf 'no TEROS_* keys in %s\n' "${CONFIG_FILE}"
+else
+    printf 'missing: %s\n' "${CONFIG_FILE}"
+fi
+
+section "Serial Devices"
+ls -l /dev/teros-node-* /dev/ttyUSB* 2>/dev/null || printf 'no /dev/ttyUSB* or /dev/teros-node-* present\n'
+
+section "Runner Access"
+id sensos-runner 2>/dev/null || printf 'missing user: sensos-runner\n'
+[[ -n "${device}" && -e "${device}" ]] && ls -l "${device}"
+
+section "Node Inventory"
+if [[ -z "${device}" ]]; then
+    printf 'no device: set TEROS_DEVICE via config-i2c-sensors --teros-device, or pass --device\n'
+elif [[ ! -e "${device}" ]]; then
+    printf 'device not present: %s\n' "${device}"
+elif [[ ! -x "${VENV_PYTHON}" ]]; then
+    printf 'missing venv python: %s\n' "${VENV_PYTHON}"
+else
+    printf 'pinging %s (node resets on open; ~8s)\n' "${device}"
+    # Run as sensos-runner when possible so permission problems surface here,
+    # the same way they would inside the service.
+    if have_cmd sudo && id sensos-runner >/dev/null 2>&1; then
+        sudo -u sensos-runner "${VENV_PYTHON}" "${TEROS_MODULE}" --device "${device}" inventory || true
+    else
+        "${VENV_PYTHON}" "${TEROS_MODULE}" --device "${device}" inventory || true
+    fi
+fi
+
+section "Service State"
+if have_cmd systemctl; then
+    systemctl is-active "${SERVICE_NAME}" 2>/dev/null || true
+fi
+
+section "Recent TEROS Log Lines"
+if have_cmd journalctl; then
+    journalctl -u "${SERVICE_NAME}" -n 200 --no-pager 2>/dev/null | grep -i 'teros' | tail -n 20 || true
+fi

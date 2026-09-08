@@ -80,6 +80,8 @@ register_option --bme280-0x77-interval bme280_0x77_interval "Interval for BME280
 register_option --scd30-interval scd30_interval "Interval for SCD30 (seconds)" ""
 register_option --scd4x-interval scd4x_interval "Interval for SCD4X (seconds)" ""
 register_option --ads1015-interval ads1015_interval "Interval for ADS1015 (seconds)" ""
+register_option --teros-device teros_device "Serial device of the TEROS 12 USB node (e.g. /dev/teros-node-0)" ""
+register_option --teros-interval teros_interval "Interval for TEROS 12 probes on the USB node (seconds)" ""
 register_option --enable-service enable_service "Enable systemd service" "true"
 register_option --start-service start_service "Start systemd service" "false"
 register_option --disable disable_service "Disable and stop systemd service" "false"
@@ -94,7 +96,13 @@ fi
 echo "Ensuring Linux I2C host state is configured..."
 sudo "${ENSURE_I2C_HOST_SCRIPT}"
 
-if [[ "$start_service" == "true" && ! -e /dev/i2c-1 ]]; then
+# Require the I2C bus only when an I2C sensor is being configured; a TEROS-only
+# box has no /dev/i2c-1 and must still be able to start the reader.
+needs_i2c_bus=""
+for v in "$bme280_0x76_interval" "$bme280_0x77_interval" "$scd30_interval" "$scd4x_interval" "$ads1015_interval"; do
+    [[ -n "$v" ]] && needs_i2c_bus=1
+done
+if [[ "$start_service" == "true" && -n "$needs_i2c_bus" && ! -e /dev/i2c-1 ]]; then
     echo "Cannot start sensos-read-i2c.service because /dev/i2c-1 is not present."
     echo "Linux I2C host configuration has been applied automatically. Expected host state:"
     echo "  - /boot/firmware/config.txt contains: dtparam=i2c_arm=on"
@@ -114,10 +122,21 @@ fi
     [[ -n "$scd30_interval" ]] && echo "SCD30_INTERVAL_SEC=$scd30_interval"
     [[ -n "$scd4x_interval" ]] && echo "SCD4X_INTERVAL_SEC=$scd4x_interval"
     [[ -n "$ads1015_interval" ]] && echo "ADS1015_INTERVAL_SEC=$ads1015_interval"
+    [[ -n "$teros_device" ]] && echo "TEROS_DEVICE=$teros_device"
+    [[ -n "$teros_interval" ]] && echo "TEROS_INTERVAL_SEC=$teros_interval"
 } >"$config_path"
 
 echo "Wrote config to $config_path:"
 cat "$config_path"
+
+if [[ -n "$teros_device" ]]; then
+    teros_rules_src="${CLIENT_ROOT}/etc/99-sensos-teros.rules"
+    if [[ -f "${teros_rules_src}" ]]; then
+        echo "Installing TEROS udev rule..."
+        sudo install -m 0644 "${teros_rules_src}" /etc/udev/rules.d/99-sensos-teros.rules
+        sudo udevadm control --reload-rules
+    fi
+fi
 
 output_dir="${CLIENT_ROOT}/data/microenv"
 sudo install -d -m 2775 -o sensos-runner -g sensos-data "${output_dir}"

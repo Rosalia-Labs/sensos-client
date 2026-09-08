@@ -334,6 +334,16 @@ def main():
         ("SCD4X", "0x62", "SCD4X", read_scd4x),
     ]
 
+    # TEROS 12 probes arrive over USB via the Nano SDI-12 front-end, not the
+    # I2C bus. Discover them at startup so each probe registers as its own
+    # sensor with a synthetic hex device_address the server accepts. All
+    # probes share the TEROS key, so one TEROS_INTERVAL_SEC governs the node.
+    teros_device = config.get("TEROS_DEVICE", "").strip()
+    if teros_device:
+        from teros_serial import discover_teros_sensors
+
+        sensors.extend(discover_teros_sensors(teros_device))
+
     polling_queue = []
     for key, addr, sensor_type, read_func in sensors:
         base_interval = get_interval(f"{key}_INTERVAL_SEC")

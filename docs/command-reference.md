@@ -462,6 +462,8 @@ Important flags:
 - `--scd30-interval`
 - `--scd4x-interval`
 - `--ads1015-interval`
+- `--teros-device`
+- `--teros-interval`
 - `--enable-service`
 - `--start-service`
 - `--disable`
@@ -472,6 +474,7 @@ Typical use:
 config-i2c-sensors
 config-i2c-sensors --interval 60 --scd30-interval 120 --start-service
 config-i2c-sensors --interval 60 --subsamples 4 --start-service
+config-i2c-sensors --teros-device /dev/teros-node-0 --teros-interval 300 --start-service
 config-i2c-sensors --disable
 ```
 
@@ -486,6 +489,9 @@ Behavior:
 - enables the reader service for future boot by default
 - leaves the reader service stopped unless `--start-service` is supplied
 - reports when a reboot is still required before `/dev/i2c-1` appears
+- with `--teros-device`, registers a USB-attached TEROS 12 node (see [TEROS USB node](teros-usb-node.md)): each probe on the node is polled as its own sensor with `sensor_type` `TEROS12` and a `device_address` of `0x101`, `0x102`, and so on
+- with `--teros-device`, installs a udev rule that names the node `/dev/teros-node-0` and restarts the reader when it is plugged in
+- requires `/dev/i2c-1` for `--start-service` only when an I2C sensor interval is configured, so a TEROS-only box can start the reader
 - warns if time sync or location is missing
 
 ### `config-i2c-uploads`
@@ -1052,6 +1058,26 @@ Behavior:
 - shows `sensos-read-i2c.service` status and recent logs
 - runs `i2cdetect -y 1` when the I2C device node is present
 - is intended for field debugging on deployed clients
+
+### `debug-teros`
+
+Pings a USB-attached TEROS 12 node and prints which SDI-12 addresses are occupied by which probe.
+
+Typical use:
+
+```sh
+debug-teros
+debug-teros --device /dev/ttyUSB0
+```
+
+Behavior:
+
+- reads `TEROS_DEVICE` from `/sensos/etc/i2c-sensors.conf` unless `--device` is given
+- lists `/dev/teros-node-*` and `/dev/ttyUSB*` and `sensos-runner` access to the device
+- queries the node inventory and prints, per probe, the SDI-12 address, the SensOS `device_address`, model, firmware, and METER serial number
+- runs the query as `sensos-runner` when possible so permission problems surface the same way they would in the service
+- shows `sensos-read-i2c.service` state and recent TEROS log lines
+- the node resets when the port opens, so the query takes about eight seconds
 
 ## Recommended Bring-Up Example
 

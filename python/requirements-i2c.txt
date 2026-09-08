@@ -4,3 +4,4 @@ adafruit-circuitpython-bme280
 adafruit-circuitpython-scd30
 adafruit-circuitpython-scd4x
 lgpio
+pyserial
