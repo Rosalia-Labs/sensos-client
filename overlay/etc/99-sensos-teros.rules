@@ -1,0 +1,10 @@
+# SensOS: TEROS 12 USB node (Arduino Nano clone, CH340 USB-serial, 1a86:7523).
+#
+# 1) Pin the node to a stable name so config never depends on ttyUSB order.
+# 2) Restart the I2C reader when the node is plugged in, so it re-runs
+#    discovery and registers the probes without anyone touching the Pi.
+#
+# For more than one node on a Pi, key each rule on the physical port instead
+# (KERNELS=="1-1.2") and give each its own SYMLINK (teros-node-1, ...).
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="teros-node-0", GROUP="dialout", MODE="0660"
+ACTION=="add", SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", RUN+="/bin/systemctl restart sensos-read-i2c.service"
