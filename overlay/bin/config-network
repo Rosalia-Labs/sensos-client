@@ -88,7 +88,7 @@ def parse_args():
         (["--network"], {"help": "Network name (required)", "dest": "network"}),
         (["--subnet"], {"help": "Subnet offset for WireGuard IP assignment (default: 1, i.e., x.x.1.1)", "dest": "subnet", "type": int, "default": 1}),
         (["--wg-endpoint"], {"help": "WireGuard endpoint as host, host:port, or [ipv6-literal]:port (optional override)", "dest": "wg_endpoint"}),
-        (["--wg-keepalive"], {"help": "WireGuard persistent keepalive interval (default: disabled=0)", "dest": "wg_keepalive", "type": int, "default": 0}),
+        (["--wg-keepalive"], {"help": "WireGuard persistent keepalive interval in seconds; 0 disables it (default: 25, recommended for clients behind NAT/carrier-grade NAT)", "dest": "wg_keepalive", "type": int, "default": 25}),
         (["--disable-ssh-passwords"], {"action": "store_true", "help": "Disable SSH password authentication (default: enabled)", "dest": "disable_ssh_passwords"}),
         (["--note"], {"help": "Optional note or description to register with the device (default: empty)", "dest": "note"}),
         (["--force"], {"action": "store_true", "help": "Force overwrite of existing files and settings", "dest": "force"}),
@@ -605,6 +605,24 @@ def enable_status_update_timer():
     privileged_shell(f"systemctl restart {STATUS_UPDATE_TIMER}")
 
 
+def enable_network_watchdog_timer():
+    unit_name = "sensos-network-watchdog.timer"
+    out, rc = privileged_shell(
+        f"systemctl list-unit-files --type=timer {unit_name}", silent=True
+    )
+    if rc != 0 or unit_name not in (out or ""):
+        print(
+            f"⚠️ {unit_name} is not installed on this system yet; skipping. "
+            "Update sensos-client and re-run setup/07-services to install it."
+        )
+        return
+    print(f"⏱️ Enabling WireGuard tunnel watchdog with {unit_name}...")
+    privileged_shell("systemctl daemon-reload")
+    privileged_shell(f"systemctl reset-failed {unit_name} sensos-network-watchdog.service || true")
+    privileged_shell(f"systemctl enable {unit_name}")
+    privileged_shell(f"systemctl restart {unit_name}")
+
+
 def main():
     ensure_sensos_admin()
     args = parse_args()
@@ -681,6 +699,7 @@ def main():
 
     restart_wireguard_service(args.network)
     enable_status_update_timer()
+    enable_network_watchdog_timer()
 
     report_event(
         "network_config",

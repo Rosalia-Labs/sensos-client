@@ -49,6 +49,7 @@ OPTIONAL_AUDIO_UNITS=(
 ALWAYS_ON_SENSOS_UNITS=(
     sensos-compress-audio.service
     sensos-thin-data.service
+    sensos-network-watchdog.timer
 )
 
 # Event reporting: the boot recorder is enable-only (starting it would log a
