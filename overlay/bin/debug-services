@@ -20,6 +20,8 @@ SENSOS_UNITS=(
     "sensos-monitor-data-space.service"
     "sensos-monitor-data-space.timer"
     "sensos-network-capture.service"
+    "sensos-network-watchdog.service"
+    "sensos-network-watchdog.timer"
     "sensos-read-i2c.service"
     "sensos-send-status-update.service"
     "sensos-send-status-update.timer"

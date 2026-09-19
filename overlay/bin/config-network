@@ -482,6 +482,7 @@ def write_client_settings(args, server_wg_ip, client_wg_ip, endpoint_ip, wg_port
         f"NETWORK_NAME={args.network}\n"
         f"WG_ENDPOINT_IP={endpoint_ip}\n"
         f"WG_ENDPOINT_PORT={wg_port}\n"
+        f"WG_KEEPALIVE={args.wg_keepalive}\n"
     )
     if peer_uuid:
         content += f"PEER_UUID={peer_uuid}\n"

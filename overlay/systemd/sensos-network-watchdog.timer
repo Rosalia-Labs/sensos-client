@@ -1,9 +1,9 @@
 [Unit]
-Description=Check WireGuard tunnel reachability every 2 minutes
+Description=Check WireGuard tunnel reachability every 10 minutes
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=2min
+OnBootSec=10min
+OnUnitActiveSec=10min
 
 [Install]
 WantedBy=timers.target
