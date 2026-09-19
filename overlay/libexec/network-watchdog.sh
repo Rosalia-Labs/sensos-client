@@ -122,6 +122,27 @@ default_route_device() {
         | awk '/^default/ {for (i = 1; i <= NF; i++) if ($i == "dev") {print $(i + 1); exit}}'
 }
 
+# The permanent local-access AP (config-hotspot always names it "sensosap")
+# is the last line of recovery when the uplink is down -- it needs to be
+# checked independently of tunnel health, every run, not just assumed to
+# still be there. Not every device has one (single-radio units dedicate their
+# only radio to the uplink instead) -- the "is it even configured" check
+# below is what makes this self-adapt to that without hardcoding radio count.
+check_ap() {
+    nmcli -t -f NAME connection show 2>/dev/null | grep -Fxq "sensosap" || return 0
+    nmcli -t -f NAME connection show --active 2>/dev/null | grep -Fxq "sensosap" && return 0
+
+    log "Local access point 'sensosap' is configured but not active; bringing it up."
+    report_event ap_down --severity warning \
+        --detail "network=${NETWORK_NAME}" --dedupe-window 1800 --dedupe-key network
+    if nmcli connection up sensosap >>"${LOG_FILE}" 2>&1; then
+        log "Local access point 'sensosap' restored."
+        report_event ap_recovered --severity info --detail "network=${NETWORK_NAME}"
+    else
+        log "Failed to bring 'sensosap' back up; will retry next cycle."
+    fi
+}
+
 escalate_restart_wg() {
     log "Restarting ${WG_UNIT} to force a fresh handshake."
     systemctl restart "${WG_UNIT}" >>"${LOG_FILE}" 2>&1 || true
@@ -136,12 +157,20 @@ escalate_reconnect_link() {
         return
     fi
     con="$(nmcli -t -f GENERAL.CONNECTION device show "${dev}" 2>/dev/null | cut -d: -f2)"
-    if [[ -n "${con}" && "${con}" != "--" ]]; then
-        log "Reconnecting ${dev} (${con}) to refresh the underlying link."
-        nmcli connection up "${con}" >>"${LOG_FILE}" 2>&1 || true
-    else
+    if [[ -z "${con}" || "${con}" == "--" ]]; then
         log "No active connection found on default route device ${dev}."
+        return
     fi
+    # Defense in depth: "sensosap" should never own the default route (it
+    # runs ipv4.method=shared, no upstream gateway), but never touch the
+    # local-access AP here regardless -- this step is strictly for the
+    # uplink radio, never the AP radio, on any topology.
+    if [[ "${con}" == "sensosap" ]]; then
+        log "Default route device ${dev} unexpectedly resolved to the local AP ('sensosap'); not reconnecting it."
+        return
+    fi
+    log "Reconnecting ${dev} (${con}) to refresh the underlying link."
+    nmcli connection up "${con}" >>"${LOG_FILE}" 2>&1 || true
 }
 
 escalate_restart_networkmanager() {
@@ -163,6 +192,7 @@ main() {
 
     read_state
     ensure_keepalive
+    check_ap
 
     if tunnel_reachable; then
         if (( FAIL_COUNT > 0 )); then
