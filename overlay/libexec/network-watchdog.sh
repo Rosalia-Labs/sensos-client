@@ -124,16 +124,27 @@ default_route_device() {
         | awk '/^default/ {for (i = 1; i <= NF; i++) if ($i == "dev") {print $(i + 1); exit}}'
 }
 
-# Find any wifi connection currently in AP mode, by ACTUAL MODE, not name.
-# config-hotspot's own connection-naming has not been perfectly stable across
-# the fleet's history, and a device that never successfully ran config-hotspot
-# may still be sitting on sensos-pigen's original bootstrap AP under a
-# different name entirely -- this is the same discovery technique
-# config-hotspot itself uses to find its own AP connection, reused here so
-# nothing in this script depends on a specific connection name ever again.
+# Find a wifi connection that's actually supposed to be an always-on AP, by
+# ACTUAL MODE, not name. config-hotspot's own connection-naming has not been
+# perfectly stable across the fleet's history, and a device that never
+# successfully ran config-hotspot may still be sitting on sensos-pigen's
+# original bootstrap AP under a different name entirely -- this is the same
+# discovery technique config-hotspot itself uses to find its own AP
+# connection, reused here so nothing in this script depends on a specific
+# connection name ever again.
+#
+# Critically, this only considers AP-mode profiles with autoconnect=yes.
+# config-wifi's disable_hotspot_reclaim_on_next_boot() deliberately retires an
+# AP profile (autoconnect=no, priority=-999) on single-radio devices when
+# that radio is being reclaimed for the client uplink instead -- it leaves
+# the profile in place, just parked. Without this filter, this watchdog would
+# find that parked profile, see it's inactive, and keep trying to bring it
+# back up every cycle -- fighting config-wifi's own decision and potentially
+# flipping a single-radio device's only radio back into AP mode, breaking the
+# very uplink it's supposed to be carrying.
 find_ap_connection() {
-    nmcli -t -f NAME,TYPE,802-11-wireless.mode connection show 2>/dev/null \
-        | awk -F: '$2 == "wifi" && $3 == "ap" {print $1; exit}'
+    nmcli -t -f NAME,TYPE,802-11-wireless.mode,connection.autoconnect connection show 2>/dev/null \
+        | awk -F: 'tolower($4) == "yes" && $2 == "wifi" && $3 == "ap" {print $1; exit}'
 }
 
 # The permanent local-access AP, if this device has one, is the last line of
