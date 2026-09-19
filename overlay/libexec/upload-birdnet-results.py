@@ -26,6 +26,7 @@ from birdnet_data import (
     connect_db,
     ensure_schema,
     mark_detections_sent,
+    mark_low_score_detections_skipped,
     select_pending_detections,
     utcnow_text,
 )
@@ -57,6 +58,25 @@ def require_int(config: dict, key: str, *, minimum: int = 1) -> int:
     return value
 
 
+def read_upload_threshold(config: dict, key: str) -> float:
+    """Optional upload-side filter threshold; missing = 0.0 = no filtering.
+
+    Unlike require_int, absence is not an error: devices provisioned before
+    UPLOAD_MIN_* existed won't have these keys in birdnet-uploads.conf, and
+    that must mean "upload everything, same as today", not a crash.
+    """
+    raw_value = config.get(key, "").strip()
+    if not raw_value:
+        return 0.0
+    try:
+        value = float(raw_value)
+    except ValueError as exc:
+        raise SystemExit(f"[ERROR] Invalid float for {key}: {raw_value}") from exc
+    if not 0.0 <= value <= 1.0:
+        raise SystemExit(f"[ERROR] {key} must be between 0 and 1, got {raw_value}.")
+    return value
+
+
 def read_upload_config() -> dict:
     config = read_kv_config(str(CONFIG_FILE))
     if not config:
@@ -66,6 +86,12 @@ def read_upload_config() -> dict:
         "batch_size": require_int(config, "BATCH_SIZE"),
         "connect_timeout_sec": require_int(config, "CONNECT_TIMEOUT_SEC"),
         "read_timeout_sec": require_int(config, "READ_TIMEOUT_SEC"),
+        "upload_min_score": read_upload_threshold(config, "UPLOAD_MIN_SCORE"),
+        "upload_min_likelihood": read_upload_threshold(config, "UPLOAD_MIN_LIKELIHOOD"),
+        "upload_min_volume": read_upload_threshold(config, "UPLOAD_MIN_VOLUME"),
+        "upload_min_score_x_likelihood": read_upload_threshold(
+            config, "UPLOAD_MIN_SCORE_X_LIKELIHOOD"
+        ),
     }
 
 
@@ -168,6 +194,19 @@ def run_upload_session(
 
     with connect_db() as conn:
         ensure_schema(conn)
+        # Local-only housekeeping, no network involved: reclassify anything
+        # that fails the upload thresholds as skipped so it stops being
+        # considered pending. The detection itself is untouched in the
+        # database either way -- this only decides what leaves the device.
+        skipped = mark_low_score_detections_skipped(
+            conn,
+            config["upload_min_score"],
+            config["upload_min_likelihood"],
+            config["upload_min_volume"],
+            config["upload_min_score_x_likelihood"],
+        )
+        if skipped:
+            print(f"[INFO] Skipped {skipped} low-score detection(s) below upload thresholds (kept locally).")
         rows = select_pending_detections(conn, config["batch_size"])
     if not rows:
         print("[INFO] No pending BirdNET detections to upload.")

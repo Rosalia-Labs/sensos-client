@@ -166,6 +166,10 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
                 clip_end_time TEXT NOT NULL,
                 clip_path TEXT,
                 clip_size_bytes INTEGER,
+                -- 0 = pending upload, 1 = uploaded, 2 = kept locally but
+                -- excluded from upload by an UPLOAD_MIN_* threshold (see
+                -- mark_low_score_detections_skipped) -- never deleted, only
+                -- ever removed from the upload queue.
                 sent_to_server INTEGER NOT NULL DEFAULT 0,
                 deleted_at TEXT,
                 FOREIGN KEY (source_file_id) REFERENCES source_files(id) ON DELETE RESTRICT,
@@ -312,3 +316,49 @@ def mark_detections_sent(conn: sqlite3.Connection, detection_ids: list[int]) -> 
         tuple(detection_ids),
     )
     conn.commit()
+
+
+def mark_low_score_detections_skipped(
+    conn: sqlite3.Connection,
+    min_score: float,
+    min_likelihood: float,
+    min_volume: float,
+    min_score_x_likelihood: float,
+) -> int:
+    """Reclassify pending detections that fail the UPLOAD_MIN_* thresholds as
+    skipped (sent_to_server=2) instead of ever attempting to upload them.
+
+    This is upload-side filtering only: rows stay in the local database
+    exactly as before, nothing is deleted or modified besides this status
+    flag. It mirrors process-birdnet.py's passes_detection_filters() logic
+    (score/volume checked unconditionally -- they're always >= 0, so a 0.0
+    threshold is naturally a no-op; likelihood-based checks only apply when
+    their threshold is > 0, since likely_score is not always populated and a
+    0.0 default must not reject detections that simply lack one).
+    """
+    if not any([min_score, min_likelihood, min_volume, min_score_x_likelihood]):
+        return 0
+    cursor = conn.execute(
+        """
+        UPDATE detections
+        SET sent_to_server = 2
+        WHERE deleted_at IS NULL
+          AND sent_to_server = 0
+          AND (
+              score < ?
+              OR volume < ?
+              OR (? > 0 AND (likely_score IS NULL OR likely_score < ?))
+              OR (? > 0 AND (likely_score IS NULL OR score * likely_score < ?))
+          )
+        """,
+        (
+            min_score,
+            min_volume,
+            min_likelihood,
+            min_likelihood,
+            min_score_x_likelihood,
+            min_score_x_likelihood,
+        ),
+    )
+    conn.commit()
+    return cursor.rowcount
