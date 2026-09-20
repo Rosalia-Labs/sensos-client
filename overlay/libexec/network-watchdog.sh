@@ -124,6 +124,25 @@ default_route_device() {
         | awk '/^default/ {for (i = 1; i <= NF; i++) if ($i == "dev") {print $(i + 1); exit}}'
 }
 
+# Read one property of one saved connection. Deliberately uses the
+# per-connection form of `nmcli -t -f` (the one config-hotspot already relies
+# on in the field) rather than list-mode field selection.
+nm_prop() {
+    nmcli -t -f "$2" connection show "$1" 2>/dev/null | cut -d: -f2- || true
+}
+
+nm_saved_connections() {
+    nmcli -t -f NAME connection show 2>/dev/null || true
+}
+
+nm_active_connections() {
+    nmcli -t -f NAME connection show --active 2>/dev/null || true
+}
+
+is_ap_profile() {
+    [[ "$(nm_prop "$1" 802-11-wireless.mode)" == "ap" ]]
+}
+
 # Find a wifi connection that's actually supposed to be an always-on AP, by
 # ACTUAL MODE, not name. config-hotspot's own connection-naming has not been
 # perfectly stable across the fleet's history, and a device that never
@@ -143,8 +162,15 @@ default_route_device() {
 # flipping a single-radio device's only radio back into AP mode, breaking the
 # very uplink it's supposed to be carrying.
 find_ap_connection() {
-    nmcli -t -f NAME,TYPE,802-11-wireless.mode,connection.autoconnect connection show 2>/dev/null \
-        | awk -F: 'tolower($4) == "yes" && $2 == "wifi" && $3 == "ap" {print $1; exit}'
+    local name
+    while IFS= read -r name; do
+        [[ -n "${name}" ]] || continue
+        is_ap_profile "${name}" || continue
+        [[ "$(nm_prop "${name}" connection.autoconnect)" == "yes" ]] || continue
+        printf '%s\n' "${name}"
+        return 0
+    done < <(nm_saved_connections)
+    return 0
 }
 
 # The permanent local-access AP, if this device has one, is the last line of
@@ -159,8 +185,15 @@ check_ap() {
     ap_con="$(find_ap_connection)"
     [[ -n "${ap_con}" ]] || return 0
 
-    active_ap="$(nmcli -t -f NAME,TYPE,802-11-wireless.mode connection show --active 2>/dev/null \
-        | awk -F: '$2 == "wifi" && $3 == "ap" {print $1; exit}')"
+    local name
+    active_ap=""
+    while IFS= read -r name; do
+        [[ -n "${name}" ]] || continue
+        if is_ap_profile "${name}"; then
+            active_ap="${name}"
+            break
+        fi
+    done < <(nm_active_connections)
     [[ -n "${active_ap}" ]] && return 0
 
     log "Local access point '${ap_con}' is configured but not active; bringing it up."
@@ -174,6 +207,85 @@ check_ap() {
     else
         log "Failed to bring '${ap_con}' back up; will retry next cycle."
     fi
+}
+
+# Link-layer recovery for the client uplink.
+#
+# On a headless box NetworkManager gives up on a client Wi-Fi profile after a
+# single failed handshake: it assumes the password may be wrong, asks for a
+# new one, finds no secret agent, fails the activation with 'no-secrets' and
+# stops autoconnecting that profile until something explicitly reactivates
+# it. (Seen in the field: "disconnected during association, asking for new
+# key" / "no secrets: No agents were available for this request".) With the
+# uplink down there is no default route at all, so the default-route based
+# escalate_reconnect_link has nothing to act on -- this is the step that
+# actually recovers it. It is purely local (no network traffic) and a no-op
+# whenever a default route exists.
+#
+# Only client profiles that are meant to autoconnect are touched (a profile
+# deliberately parked by config-wifi/config-hotspot stays parked), Wi-Fi
+# profiles are always activated with an explicit ifname taken from the
+# profile, and an interface currently hosting the AP is never used.
+ensure_uplink() {
+    UPLINK_REACTIVATED=0
+    [[ -z "$(default_route_device)" ]] || return 0
+
+    local name type prio ifname cur_con active_names tried=0
+    local -a candidates=() cmd_args=()
+
+    while IFS= read -r name; do
+        [[ -n "${name}" ]] || continue
+        [[ "$(nm_prop "${name}" connection.autoconnect)" == "yes" ]] || continue
+        type="$(nm_prop "${name}" connection.type)"
+        case "${type}" in
+            802-11-wireless)
+                is_ap_profile "${name}" && continue
+                ;;
+            gsm)
+                ;;
+            *)
+                continue
+                ;;
+        esac
+        prio="$(nm_prop "${name}" connection.autoconnect-priority)"
+        candidates+=("${prio:-0}"$'\t'"${name}"$'\t'"${type}")
+    done < <(nm_saved_connections)
+    (( ${#candidates[@]} > 0 )) || return 0
+
+    active_names="$(nm_active_connections)"
+    while IFS=$'\t' read -r prio name type; do
+        (( tried < 2 )) || break
+        if grep -Fxq -- "${name}" <<<"${active_names}"; then
+            continue
+        fi
+        ifname=""
+        cmd_args=(connection up "${name}")
+        if [[ "${type}" == "802-11-wireless" ]]; then
+            ifname="$(nm_prop "${name}" connection.interface-name)"
+            if [[ -z "${ifname}" ]]; then
+                log "Uplink profile '${name}' is not bound to an interface; not activating it (risk of taking the AP radio)."
+                continue
+            fi
+            cur_con="$(nmcli -t -f GENERAL.CONNECTION device show "${ifname}" 2>/dev/null | cut -d: -f2 || true)"
+            if [[ -n "${cur_con}" && "${cur_con}" != "--" ]] && is_ap_profile "${cur_con}"; then
+                log "Interface ${ifname} hosts the local AP ('${cur_con}'); not activating '${name}' on it."
+                continue
+            fi
+            cmd_args+=(ifname "${ifname}")
+        fi
+        tried=$(( tried + 1 ))
+        log "No default route; reactivating uplink profile '${name}'${ifname:+ on ${ifname}} (NetworkManager may have stopped retrying it)."
+        if nmcli -w 30 "${cmd_args[@]}" >>"${LOG_FILE}" 2>&1; then
+            log "Uplink profile '${name}' is active again."
+            UPLINK_REACTIVATED=1
+            report_event uplink_reactivated --severity warning \
+                --detail "network=${NETWORK_NAME}" --detail "connection=${name}" \
+                --dedupe-window 1800 --dedupe-key network
+            return 0
+        fi
+        log "Could not activate '${name}'; will retry next cycle."
+    done < <(printf '%s\n' "${candidates[@]}" | sort -t $'\t' -k1,1nr)
+    return 0
 }
 
 escalate_restart_wg() {
@@ -230,6 +342,12 @@ main() {
     read_state
     ensure_keepalive
     check_ap
+    ensure_uplink
+    if (( UPLINK_REACTIVATED )); then
+        # Give the fresh association / DHCP / first WireGuard handshake a
+        # moment so a just-recovered link isn't immediately counted as down.
+        sleep 10
+    fi
 
     if tunnel_reachable; then
         if (( FAIL_COUNT > 0 )); then
