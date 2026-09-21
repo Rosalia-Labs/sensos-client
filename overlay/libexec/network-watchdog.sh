@@ -209,6 +209,108 @@ check_ap() {
     fi
 }
 
+# Wi-Fi signal quality reporting for client (non-AP) interfaces.
+#
+# A marginal upstream link is the usual root cause behind the outages the rest
+# of this script recovers from, and nothing else tells the operator about it
+# until the link has already failed. Each run samples the smoothed signal of
+# every associated client interface and raises a warning event (shown on the
+# server's events page and in its warning-event count) once it has stayed at or
+# below the threshold for SIGNAL_POOR_CHECKS consecutive runs, repeats it every
+# SIGNAL_REMIND_SEC while it stays poor, and reports recovery once the signal
+# is SIGNAL_RECOVER_MARGIN_DB above the threshold (hysteresis, so a link
+# hovering at the threshold does not flap). Purely local: events are spooled
+# and delivered whenever the tunnel is next up, so a link too weak to carry the
+# alert live still gets it out later. Threshold is WIFI_SIGNAL_WARN_DBM in
+# network.conf (default -70; roughly -67 is the usual floor for a reliable link).
+SIGNAL_WARN_DBM_DEFAULT=-70
+SIGNAL_RECOVER_MARGIN_DB=5
+SIGNAL_POOR_CHECKS=2
+SIGNAL_REMIND_SEC=86400
+
+wifi_client_ifaces() {
+    have_command iw || return 0
+    iw dev 2>/dev/null \
+        | awk '$1 == "Interface" {iface = $2} $1 == "type" && $2 == "managed" {print iface}' || true
+}
+
+# Sets LINK_* for an associated interface; returns 1 when not associated or no
+# usable signal reading exists. Counters are cumulative since association.
+read_link_stats() {
+    local iface="$1" link dump
+    LINK_SIGNAL="" LINK_SSID="" LINK_TX_MBPS="" LINK_RETRIES="" LINK_FAILED="" LINK_BEACON_LOSS=""
+
+    link="$(iw dev "${iface}" link 2>/dev/null || true)"
+    grep -q '^Connected to' <<<"${link}" || return 1
+    dump="$(iw dev "${iface}" station dump 2>/dev/null || true)"
+
+    LINK_SIGNAL="$(awk '$1 == "signal" && $2 == "avg:" {print $3; exit}' <<<"${dump}")"
+    [[ -n "${LINK_SIGNAL}" ]] || LINK_SIGNAL="$(awk '$1 == "signal:" {print $2; exit}' <<<"${link}")"
+    [[ "${LINK_SIGNAL}" =~ ^-[0-9]+$ ]] || return 1
+
+    LINK_SSID="$(awk '$1 == "SSID:" {$1 = ""; sub(/^ /, ""); print; exit}' <<<"${link}")"
+    LINK_TX_MBPS="$(awk '$1 == "tx" && $2 == "bitrate:" {print $3; exit}' <<<"${link}")"
+    LINK_RETRIES="$(awk '$1 == "tx" && $2 == "retries:" {print $3; exit}' <<<"${dump}")"
+    LINK_FAILED="$(awk '$1 == "tx" && $2 == "failed:" {print $3; exit}' <<<"${dump}")"
+    LINK_BEACON_LOSS="$(awk '$1 == "beacon" && $2 == "loss:" {print $3; exit}' <<<"${dump}")"
+    return 0
+}
+
+check_signal() {
+    local warn recover iface state_file now
+    local POOR_COUNT ALERTED_AT
+
+    warn="$(read_network_value WIFI_SIGNAL_WARN_DBM)"
+    [[ "${warn}" =~ ^-[0-9]+$ ]] || warn="${SIGNAL_WARN_DBM_DEFAULT}"
+    recover=$(( warn + SIGNAL_RECOVER_MARGIN_DB ))
+    now="$(date +%s)"
+
+    while IFS= read -r iface; do
+        [[ -n "${iface}" ]] || continue
+        # Not associated (or no reading): nothing to judge. A dead link is
+        # already reported as network_down / handled by ensure_uplink.
+        read_link_stats "${iface}" || continue
+
+        state_file="${LOG_DIR}/wifi-signal-${iface}.state"
+        POOR_COUNT=0
+        ALERTED_AT=0
+        if [[ -f "${state_file}" ]]; then
+            # shellcheck disable=SC1090
+            source "${state_file}"
+        fi
+
+        if (( LINK_SIGNAL <= warn )); then
+            POOR_COUNT=$(( POOR_COUNT + 1 ))
+            log "Wi-Fi ${iface} (${LINK_SSID}) signal ${LINK_SIGNAL} dBm is at/below ${warn} dBm (poor sample #${POOR_COUNT})."
+            if (( POOR_COUNT >= SIGNAL_POOR_CHECKS )) \
+                && (( ALERTED_AT == 0 || now - ALERTED_AT >= SIGNAL_REMIND_SEC )); then
+                report_event wifi_signal_poor --severity warning \
+                    --detail "network=${NETWORK_NAME}" --detail "interface=${iface}" \
+                    --detail "ssid=${LINK_SSID}" --detail "signal_dbm=${LINK_SIGNAL}" \
+                    --detail "threshold_dbm=${warn}" --detail "tx_mbps=${LINK_TX_MBPS:-unknown}" \
+                    --detail "tx_retries=${LINK_RETRIES:-unknown}" --detail "tx_failed=${LINK_FAILED:-unknown}" \
+                    --detail "beacon_loss=${LINK_BEACON_LOSS:-unknown}"
+                ALERTED_AT="${now}"
+            fi
+        elif (( LINK_SIGNAL >= recover )); then
+            if (( ALERTED_AT > 0 )); then
+                log "Wi-Fi ${iface} (${LINK_SSID}) signal recovered to ${LINK_SIGNAL} dBm."
+                report_event wifi_signal_recovered --severity info \
+                    --detail "network=${NETWORK_NAME}" --detail "interface=${iface}" \
+                    --detail "ssid=${LINK_SSID}" --detail "signal_dbm=${LINK_SIGNAL}" \
+                    --detail "threshold_dbm=${warn}"
+            fi
+            POOR_COUNT=0
+            ALERTED_AT=0
+        elif (( ALERTED_AT == 0 )); then
+            # In the hysteresis band and not alerting: the poor streak is broken.
+            POOR_COUNT=0
+        fi
+
+        printf 'POOR_COUNT=%d\nALERTED_AT=%d\n' "${POOR_COUNT}" "${ALERTED_AT}" >"${state_file}"
+    done < <(wifi_client_ifaces)
+}
+
 # Link-layer recovery for the client uplink.
 #
 # On a headless box NetworkManager gives up on a client Wi-Fi profile after a
@@ -342,6 +444,8 @@ main() {
     read_state
     ensure_keepalive
     check_ap
+    # Reporting only: a failure here must never stop the recovery steps below.
+    check_signal || log "Wi-Fi signal check failed; continuing."
     ensure_uplink
     if (( UPLINK_REACTIVATED )); then
         # Give the fresh association / DHCP / first WireGuard handshake a

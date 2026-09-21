@@ -162,6 +162,22 @@ iw_ssid() {
     iw dev "${iface}" info 2>/dev/null | awk '$1 == "ssid" {$1=""; sub(/^ /, ""); print; exit}'
 }
 
+iw_signal_dbm() {
+    local iface="$1"
+
+    have_cmd iw || return 0
+    iw dev "${iface}" link 2>/dev/null | awk '$1 == "signal:" {print $2; exit}'
+}
+
+# Same threshold the network watchdog uses to raise wifi_signal_poor events.
+signal_warn_dbm() {
+    local warn
+
+    warn="$(read_env_key "${NETWORK_CONF}" WIFI_SIGNAL_WARN_DBM)"
+    [[ "${warn}" =~ ^-[0-9]+$ ]] || warn="-70"
+    printf '%s' "${warn}"
+}
+
 connection_exists() {
     local con="$1"
 
@@ -277,7 +293,9 @@ print_operator_summary() {
     local radio blocks hotspot_enabled hotspot_iface hotspot_ssid hotspot_unit_enabled hotspot_unit_active hotspot_unit_sub
     local iface connection nm_mode kernel_type ssid ip4 role iface_count active_hotspot=false client_count=0 idle_count=0 unknown_count=0
     local hotspot_target upstream_target
+    local signal signal_warn signal_label weak_signal_notes=""
 
+    signal_warn="$(signal_warn_dbm)"
     radio="$(wifi_radio_state)"
     blocks="$(rfkill_summary)"
     hotspot_enabled="$(read_env_key "${HOTSPOT_ENV_FILE}" HOTSPOT_ENABLED)"
@@ -361,6 +379,24 @@ print_operator_summary() {
 
         printf '  %-7s role=%-8s connection=%-22s ssid=%-20s ip=%s\n' \
             "${iface}" "${role}" "${connection}" "${ssid:---}" "${ip4:---}"
+
+        if [[ "${role}" == "client" ]]; then
+            signal="$(iw_signal_dbm "${iface}")"
+            if [[ "${signal}" =~ ^-[0-9]+$ ]]; then
+                if ((signal <= -80)); then
+                    signal_label="very weak"
+                elif ((signal <= signal_warn)); then
+                    signal_label="weak"
+                else
+                    signal_label="ok"
+                fi
+                printf '          signal=%s dBm (%s; watchdog warns at %s dBm)\n' \
+                    "${signal}" "${signal_label}" "${signal_warn}"
+                if [[ "${signal_label}" != "ok" ]]; then
+                    weak_signal_notes+="${iface} ${signal}"$'\n'
+                fi
+            fi
+        fi
     done
 
     section "Interpretation"
@@ -404,6 +440,15 @@ print_operator_summary() {
     fi
     if ((unknown_count > 0)); then
         printf '  - One or more interfaces could not be classified from NetworkManager/iw state.\n'
+    fi
+    if [[ -n "${weak_signal_notes}" ]]; then
+        while read -r iface signal; do
+            [[ -n "${iface}" ]] || continue
+            printf '  - %s upstream signal is %s dBm, at or below the %s dBm warning level. Expect slow throughput and\n' \
+                "${iface}" "${signal}" "${signal_warn}"
+            printf '    dropped links (a failed handshake can leave NetworkManager not retrying). Improve the antenna or\n'
+            printf '    position, or add a repeater; the watchdog reports this as a wifi_signal_poor event.\n'
+        done <<<"${weak_signal_notes}"
     fi
 
     section "Hints"

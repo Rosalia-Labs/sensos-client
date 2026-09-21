@@ -890,6 +890,17 @@ Events emitted automatically:
 | `upgrade` | `./upgrade` when the version changes |
 | `service_failure` | `OnFailure=` on the main SensOS units (sustained failure only) |
 | `user_login` | interactive SSH / console session open, rate-limited per `EVENTS_LOGIN_DEDUPE_SEC` |
+| `wifi_signal_poor` | network watchdog: a client Wi-Fi interface stayed at or below `WIFI_SIGNAL_WARN_DBM` (default -70) for two consecutive 10-minute checks; `warning`, repeated daily while it stays poor. Details: interface, ssid, signal_dbm, threshold_dbm, tx_mbps, tx_retries, tx_failed, beacon_loss |
+| `wifi_signal_recovered` | network watchdog: the signal came back 5 dB above the threshold after a `wifi_signal_poor` |
+| `network_down` / `network_recovered` / `network_down_escalated` | network watchdog: WireGuard tunnel unreachable (with `class`), recovered, or escalated to a NetworkManager restart |
+| `ap_down` / `ap_recovered` | network watchdog: the local hotspot was not active and was brought back |
+| `uplink_reactivated` | network watchdog: no default route, so the client uplink profile was reactivated |
+
+Signal events are queued locally like any other, so a link too weak to carry the
+alert immediately still delivers it when the tunnel is next up. Set
+`WIFI_SIGNAL_WARN_DBM=-67` (or another negative dBm value) in
+`/sensos/etc/network.conf` to change the threshold; `debug-wifi` reports the
+current signal and uses the same threshold.
 
 ### `config-events`
 
