@@ -116,6 +116,60 @@ def get_interval(key: str) -> Optional[int]:
     return None
 
 
+I2C_BUS_NUM = 1
+
+
+def sensor_should_poll(
+    explicitly_configured: bool, addr_int: int, scan_result: Optional[set[int]]
+) -> bool:
+    """An explicit --<sensor>-interval always wins, in either direction
+    (get_interval() already turns an explicit <=0 into base_interval=None,
+    which callers filter out before ever reaching this function; an explicit
+    positive value reaches here and is always polled). A sensor relying on
+    the INTERVAL_SEC fallback (not explicitly configured) is scan-gated: only
+    polled if the startup bus scan actually found it, unless the scan itself
+    failed (scan_result is None), in which case nothing is gated."""
+    if explicitly_configured:
+        return True
+    if scan_result is None:
+        return True
+    return addr_int in scan_result
+
+
+def scan_i2c_addresses(candidate_addrs: set[int]) -> Optional[set[int]]:
+    """Probe each candidate address for an ACK (a zero-byte "quick write",
+    the same technique i2cdetect/debug-i2c use), once at startup, so a sensor
+    slot with no hardware attached is never scheduled at all instead of
+    burning a full interval-width polling cycle before backing off (see
+    2026-09-24 field incident: an unused BME280_0x76 slot delayed the
+    present BME280_0x77's first reading by a full interval).
+
+    Returns the set of responding addresses, or None if the scan itself could
+    not run (bus open failed) -- callers should treat None as "skip
+    scan-gating, poll every configured sensor" rather than silently excluding
+    everything, so a scan failure degrades to the pre-scan behavior instead
+    of a fleet-wide zero-readings regression.
+    """
+    try:
+        import smbus2
+
+        detected: set[int] = set()
+        with smbus2.SMBus(I2C_BUS_NUM) as bus:
+            for addr in candidate_addrs:
+                try:
+                    bus.write_quick(addr)
+                    detected.add(addr)
+                except OSError:
+                    continue
+        return detected
+    except Exception as exc:
+        print(
+            f"I2C bus scan failed ({exc}); polling all configured sensors without bus-presence gating.",
+            file=sys.stderr,
+        )
+        return None
+
+
 def get_subsamples_per_interval() -> int:
     raw = config.get("SUBSAMPLES_PER_INTERVAL", "").strip()
     if not raw:
@@ -334,24 +388,34 @@ def main():
         ("SCD4X", "0x62", "SCD4X", read_scd4x),
     ]
 
+    scan_result = scan_i2c_addresses({int(addr, 16) for _, addr, _, _ in sensors})
+
     polling_queue = []
     for key, addr, sensor_type, read_func in sensors:
-        base_interval = get_interval(f"{key}_INTERVAL_SEC")
-        if base_interval is not None:
-            heapq.heappush(
-                polling_queue,
-                (
-                    time.time(),
-                    {
-                        "key": key,
-                        "addr": addr,
-                        "sensor_type": sensor_type,
-                        "read_func": read_func,
-                        "base_interval": base_interval,
-                        "current_interval": base_interval,
-                    },
-                ),
-            )
+        interval_key = f"{key}_INTERVAL_SEC"
+        explicitly_configured = bool(config.get(interval_key, "").strip())
+        base_interval = get_interval(interval_key)
+        if base_interval is None:
+            continue  # explicitly disabled (interval <= 0), or unset with no INTERVAL_SEC fallback either
+
+        if not sensor_should_poll(explicitly_configured, int(addr, 16), scan_result):
+            print(f"Skipping {sensor_type} at {addr}: not detected on the I2C bus.")
+            continue
+
+        heapq.heappush(
+            polling_queue,
+            (
+                time.time(),
+                {
+                    "key": key,
+                    "addr": addr,
+                    "sensor_type": sensor_type,
+                    "read_func": read_func,
+                    "base_interval": base_interval,
+                    "current_interval": base_interval,
+                },
+            ),
+        )
 
     if not polling_queue:
         print("No sensors enabled. Exiting.")

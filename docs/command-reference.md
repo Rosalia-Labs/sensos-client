@@ -462,6 +462,7 @@ Important flags:
 - `--scd30-interval`
 - `--scd4x-interval`
 - `--ads1015-interval`
+- `--lt150-interval`
 - `--enable-service`
 - `--start-service`
 - `--disable`
@@ -480,6 +481,21 @@ Behavior:
 - writes `/sensos/etc/i2c-sensors.conf`
 - defaults to `INTERVAL_SEC=300` and `SUBSAMPLES_PER_INTERVAL=5`
 - supports `SUBSAMPLES_PER_INTERVAL` to take evenly spaced subsamples within each interval and store averaged values
+- at startup, the reader probes the I2C bus once for each known sensor address (BME280 at 0x76 and
+  0x77, ADS1015, LT-150, SCD30, SCD4X) and only polls addresses that actually ACK, so a slot with
+  no hardware installed is skipped entirely rather than wasting a full interval-width polling cycle
+  on it. `--<sensor>-interval` left unset means "scan-driven" (poll it only if detected); passing
+  `--<sensor>-interval 0` always force-excludes that slot even if something answers at that
+  address, and passing a positive value always force-includes it at that interval even if the scan
+  didn't detect it (e.g. a sensor that's intermittently off the bus at the exact moment of the
+  startup scan). If the bus scan itself fails to run, every configured sensor is polled
+  unconditionally rather than defaulting to zero sensors. The scan runs once at process start;
+  hardware attached or removed after that needs `sudo systemctl restart
+  sensos-read-i2c.service` to be picked up.
+- after changing sensor intervals on an already-running reader, `sudo systemctl restart
+  sensos-read-i2c.service` is required — the reader reads its config once at startup, and this
+  command does not restart an already-active service (only `--start-service` calls `systemctl
+  start`, which is a no-op if it's already running)
 - automatically applies Raspberry Pi host I2C enablement when needed
 - provisions `/sensos/data/microenv` as `sensos-runner:sensos-data`, mode `2775`; the reader and uploader use `UMask=0002` and validate the runtime directory without repairing ownership
 - installs optional I2C/GPIO Python dependencies on demand before enabling the reader service
@@ -895,6 +911,9 @@ Events emitted automatically:
 | `network_down` / `network_recovered` / `network_down_escalated` | network watchdog: WireGuard tunnel unreachable (with `class`), recovered, or escalated to a NetworkManager restart |
 | `ap_down` / `ap_recovered` | network watchdog: the local hotspot was not active and was brought back |
 | `uplink_reactivated` | network watchdog: no default route, so the client uplink profile was reactivated |
+| `i2c_host_down` / `i2c_host_recovered` | network watchdog: `/dev/i2c-1` was missing on a device with I2C sensors configured (e.g. `dtparam=i2c_arm=on` lost from `/boot/firmware/config.txt`, seen after an unclean power-off), or came back |
+| `i2c_host_reboot` | network watchdog: repaired the I2C host config and rebooted to apply it (dtparam only takes effect at boot; rebooted at most once per outage) |
+| `i2c_host_down_persistent` | network watchdog: `/dev/i2c-1` was still missing after that reboot; likely needs physical inspection, no further reboots will be attempted |
 
 Signal events are queued locally like any other, so a link too weak to carry the
 alert immediately still delivers it when the tunnel is next up. Set

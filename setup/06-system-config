@@ -47,24 +47,10 @@ run_preflight() {
     "${PRECHECK_SCRIPT}"
 }
 
-file_contains_line() {
-    local file_path="$1"
-    local wanted_line="$2"
-
-    [[ -f "${file_path}" ]] || return 1
-    grep -Fxq "${wanted_line}" "${file_path}"
-}
-
-ensure_line_present() {
-    local file_path="$1"
-    local wanted_line="$2"
-
-    install -D -m 0644 /dev/null "${file_path}"
-    if ! file_contains_line "${file_path}" "${wanted_line}"; then
-        printf '%s\n' "${wanted_line}" >>"${file_path}"
-        log "added '${wanted_line}' to ${file_path}"
-    fi
-}
+ATOMIC_FILE_LIB="${DEPLOY_ROOT}/libexec/atomic-file.sh"
+[[ -f "${ATOMIC_FILE_LIB}" ]] || die "missing ${ATOMIC_FILE_LIB}; run setup/05-overlay first"
+# shellcheck source=../overlay/libexec/atomic-file.sh
+source "${ATOMIC_FILE_LIB}"
 
 install_managed_file() {
     local source_path="$1"

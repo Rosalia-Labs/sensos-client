@@ -4,6 +4,7 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BOOT_CONFIG_FILE="/boot/firmware/config.txt"
 MODULES_FILE="/etc/modules"
 
@@ -11,24 +12,8 @@ log() {
     printf '[ensure-i2c-host] %s\n' "$*"
 }
 
-file_contains_line() {
-    local file_path="$1"
-    local wanted_line="$2"
-
-    [[ -f "${file_path}" ]] || return 1
-    grep -Fxq "${wanted_line}" "${file_path}"
-}
-
-ensure_line_present() {
-    local file_path="$1"
-    local wanted_line="$2"
-
-    install -D -m 0644 /dev/null "${file_path}"
-    if ! file_contains_line "${file_path}" "${wanted_line}"; then
-        printf '%s\n' "${wanted_line}" >>"${file_path}"
-        log "added '${wanted_line}' to ${file_path}"
-    fi
-}
+# shellcheck source=./atomic-file.sh
+source "${SCRIPT_DIR}/atomic-file.sh"
 
 module_loaded() {
     local module_name="$1"
