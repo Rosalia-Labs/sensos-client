@@ -17,6 +17,8 @@ SENSOS_UNITS=(
     "sensos-compress-audio.service"
     "sensos-gps.service"
     "sensos-hotspot.service"
+    "sensos-i2c-watchdog.service"
+    "sensos-i2c-watchdog.timer"
     "sensos-monitor-data-space.service"
     "sensos-monitor-data-space.timer"
     "sensos-network-capture.service"

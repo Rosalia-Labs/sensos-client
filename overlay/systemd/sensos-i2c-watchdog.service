@@ -1,0 +1,7 @@
+[Unit]
+Description=Check the I2C host configuration and self-heal if needed
+OnFailure=sensos-report-failure@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/sensos/libexec/i2c-watchdog.sh

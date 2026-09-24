@@ -911,9 +911,9 @@ Events emitted automatically:
 | `network_down` / `network_recovered` / `network_down_escalated` | network watchdog: WireGuard tunnel unreachable (with `class`), recovered, or escalated to a NetworkManager restart |
 | `ap_down` / `ap_recovered` | network watchdog: the local hotspot was not active and was brought back |
 | `uplink_reactivated` | network watchdog: no default route, so the client uplink profile was reactivated |
-| `i2c_host_down` / `i2c_host_recovered` | network watchdog: `/dev/i2c-1` was missing on a device with I2C sensors configured (e.g. `dtparam=i2c_arm=on` lost from `/boot/firmware/config.txt`, seen after an unclean power-off), or came back |
-| `i2c_host_reboot` | network watchdog: repaired the I2C host config and rebooted to apply it (dtparam only takes effect at boot; rebooted at most once per outage) |
-| `i2c_host_down_persistent` | network watchdog: `/dev/i2c-1` was still missing after that reboot; likely needs physical inspection, no further reboots will be attempted |
+| `i2c_host_down` / `i2c_host_recovered` | I2C watchdog (`sensos-i2c-watchdog.timer`): `/dev/i2c-1` was missing on a device with I2C sensors configured (e.g. `dtparam=i2c_arm=on` lost from `/boot/firmware/config.txt`, seen after an unclean power-off), or came back |
+| `i2c_host_reboot` | I2C watchdog: repaired the I2C host config and rebooted to apply it (dtparam only takes effect at boot; rebooted at most once per outage) |
+| `i2c_host_down_persistent` | I2C watchdog: `/dev/i2c-1` was still missing after that reboot; likely needs physical inspection, no further reboots will be attempted |
 
 Signal events are queued locally like any other, so a link too weak to carry the
 alert immediately still delivers it when the tunnel is next up. Set

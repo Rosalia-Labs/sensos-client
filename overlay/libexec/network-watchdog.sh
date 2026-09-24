@@ -12,6 +12,7 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLIENT_ROOT="${SENSOS_CLIENT_ROOT:-/sensos}"
 NETWORK_CONF="${CLIENT_ROOT}/etc/network.conf"
 LOG_DIR="${CLIENT_ROOT}/log"
@@ -27,19 +28,8 @@ PING_TIMEOUT=2
 # for very different responses.
 ANCHOR_IP="${SENSOS_WATCHDOG_ANCHOR_IP:-1.1.1.1}"
 
-have_command() {
-    command -v "$1" >/dev/null 2>&1
-}
-
-log() {
-    mkdir -p "${LOG_DIR}"
-    printf '[%s] %s\n' "$(date -Is)" "$*" | tee -a "${LOG_FILE}"
-}
-
-report_event() {
-    have_command sensos-report-event || return 0
-    sensos-report-event "$@" || true
-}
+# shellcheck source=./watchdog-common.sh
+source "${SCRIPT_DIR}/watchdog-common.sh"
 
 read_network_value() {
     local wanted_key="$1" key value
@@ -311,89 +301,6 @@ check_signal() {
     done < <(wifi_client_ifaces)
 }
 
-is_raspberry_pi_host() {
-    local model_file="/proc/device-tree/model"
-    [[ -r "${model_file}" ]] || return 1
-    tr -d '\0' <"${model_file}" | grep -qi 'raspberry pi'
-}
-
-# I2C host self-heal.
-#
-# On a device with I2C sensors configured, /dev/i2c-1 must exist because
-# dtparam=i2c_arm=on was applied in /boot/firmware/config.txt at boot -- see
-# ensure-i2c-host.sh. Nothing previously re-checked this after initial setup,
-# so if that line was ever lost (seen in the field, 2026-09: an unclean
-# power-off on a power-unreliable site corrupting the FAT32 boot partition,
-# not something an I2C sensor merely being unplugged would do -- an unplugged
-# sensor leaves /dev/i2c-1 itself alone and just fails individual reads, which
-# read-i2c-sensors.py already tolerates), I2C silently stayed dead until
-# someone physically found the box and ran raspi-config by hand.
-#
-# This re-applies the host config (safe/idempotent even when nothing was
-# actually wrong) and, unlike every other escalation step in this script,
-# reboots to make it take effect -- dtparam only applies at boot, so there is
-# no way to bring I2C back without one. That is judged safe here in a way a
-# reboot-on-network-failure is not (see the "no reboot" policy on the escalate_*
-# steps below): by the time this runs, the device has already booted cleanly
-# and has a network link, so the reboot applies a fix already known to work
-# rather than gambling on recovery of a live fault. Rebooted at most once per
-# outage: if I2C is still down on the next check after that, physical
-# inspection is needed (disconnected HAT, hardware fault) and a repeated
-# reboot would not help.
-I2C_STATE_FILE="${LOG_DIR}/i2c-host.state"
-
-i2c_host_expected() {
-    is_raspberry_pi_host || return 1
-    [[ -f "${CLIENT_ROOT}/etc/i2c-sensors.conf" ]] || return 1
-    have_command systemctl || return 1
-    systemctl is-enabled --quiet sensos-read-i2c.service 2>/dev/null
-}
-
-check_i2c_host() {
-    i2c_host_expected || return 0
-
-    local I2C_DOWN_SINCE="" I2C_REBOOTED_AT=""
-    [[ -f "${I2C_STATE_FILE}" ]] && source "${I2C_STATE_FILE}"
-
-    if [[ -e /dev/i2c-1 ]]; then
-        if [[ -n "${I2C_DOWN_SINCE}" ]]; then
-            log "I2C host recovered (was down since ${I2C_DOWN_SINCE})."
-            report_event i2c_host_recovered --severity info \
-                --detail "network=${NETWORK_NAME}"
-        fi
-        rm -f "${I2C_STATE_FILE}"
-        return 0
-    fi
-
-    local now
-    now="$(date -Is)"
-    [[ -n "${I2C_DOWN_SINCE}" ]] || I2C_DOWN_SINCE="${now}"
-
-    log "/dev/i2c-1 missing; re-applying I2C host configuration."
-    report_event i2c_host_down --severity warning \
-        --detail "network=${NETWORK_NAME}" --detail "down_since=${I2C_DOWN_SINCE}" \
-        --dedupe-window 1800 --dedupe-key network
-
-    "${CLIENT_ROOT}/libexec/ensure-i2c-host.sh" >>"${LOG_FILE}" 2>&1 || true
-
-    if [[ -z "${I2C_REBOOTED_AT}" ]]; then
-        log "Rebooting to apply repaired I2C host configuration (dtparam only takes effect at boot)."
-        report_event i2c_host_reboot --severity warning \
-            --detail "network=${NETWORK_NAME}" --detail "down_since=${I2C_DOWN_SINCE}" \
-            --dedupe-window 21600 --dedupe-key network
-        printf 'I2C_DOWN_SINCE=%q\nI2C_REBOOTED_AT=%q\n' "${I2C_DOWN_SINCE}" "${now}" >"${I2C_STATE_FILE}"
-        systemctl reboot
-        exit 0
-    fi
-
-    log "/dev/i2c-1 still missing after a reboot already attempted at ${I2C_REBOOTED_AT}; not rebooting again. Likely needs physical inspection (disconnected sensors/HAT, hardware fault)."
-    report_event i2c_host_down_persistent --severity warning \
-        --detail "network=${NETWORK_NAME}" --detail "down_since=${I2C_DOWN_SINCE}" \
-        --detail "rebooted_at=${I2C_REBOOTED_AT}" \
-        --dedupe-window 21600 --dedupe-key network
-    printf 'I2C_DOWN_SINCE=%q\nI2C_REBOOTED_AT=%q\n' "${I2C_DOWN_SINCE}" "${I2C_REBOOTED_AT}" >"${I2C_STATE_FILE}"
-}
-
 # Link-layer recovery for the client uplink.
 #
 # On a headless box NetworkManager gives up on a client Wi-Fi profile after a
@@ -529,7 +436,6 @@ main() {
     check_ap
     # Reporting only: a failure here must never stop the recovery steps below.
     check_signal || log "Wi-Fi signal check failed; continuing."
-    check_i2c_host || log "I2C host check failed; continuing."
     ensure_uplink
     if (( UPLINK_REACTIVATED )); then
         # Give the fresh association / DHCP / first WireGuard handshake a
