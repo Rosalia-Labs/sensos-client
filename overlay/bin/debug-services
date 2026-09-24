@@ -32,8 +32,42 @@ SENSOS_UNITS=(
     "sensos-upload-i2c.service"
 )
 
+VERBOSE=false
+
 have_cmd() {
     command -v "$1" >/dev/null 2>&1
+}
+
+print_usage() {
+    cat <<EOF
+Usage: debug-services [options]
+
+Print status for every SensOS systemd unit.
+
+Options:
+  -v, --verbose  Also print \`systemctl status\` (including recent log lines) for each unit
+  -h, --help     Show this help and exit
+EOF
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -v|--verbose)
+                VERBOSE=true
+                ;;
+            -h|--help)
+                print_usage
+                exit 0
+                ;;
+            *)
+                printf 'ERROR: unknown option: %s\n' "$1" >&2
+                print_usage >&2
+                exit 1
+                ;;
+        esac
+        shift
+    done
 }
 
 collect_units() {
@@ -71,9 +105,18 @@ print_unit_status() {
         "${unit}" "${enabled}" "${active}" "${sub}" "${loaded}"
 }
 
+print_unit_verbose_status() {
+    local unit="$1"
+
+    printf '\n--- %s ---\n' "${unit}"
+    systemctl status --no-pager -l "${unit}" 2>&1 || true
+}
+
 main() {
     local -a units=()
     local unit
+
+    parse_args "$@"
 
     if ! have_cmd systemctl; then
         echo "ERROR: systemctl not found" >&2
@@ -90,6 +133,12 @@ main() {
     for unit in "${units[@]}"; do
         print_unit_status "${unit}"
     done
+
+    if [[ "${VERBOSE}" == true ]]; then
+        for unit in "${units[@]}"; do
+            print_unit_verbose_status "${unit}"
+        done
+    fi
 }
 
 main "$@"
