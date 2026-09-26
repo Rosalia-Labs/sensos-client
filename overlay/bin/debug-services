@@ -29,6 +29,7 @@ SENSOS_UNITS=(
     "sensos-send-status-update.timer"
     "sensos-thin-data.service"
     "sensos-upload-birdnet.service"
+    "sensos-upload-birdweather.service"
     "sensos-upload-i2c.service"
 )
 

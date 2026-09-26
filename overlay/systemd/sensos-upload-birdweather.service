@@ -1,0 +1,19 @@
+[Unit]
+Description=Upload BirdNET detections to BirdWeather
+OnFailure=sensos-report-failure@%n.service
+
+[Service]
+Type=simple
+User=sensos-runner
+Group=sensos-data
+UMask=0002
+LoadCredential=birdweather_token:/sensos/keys/birdweather_token
+ExecStart=/sensos/python/venv/bin/python /sensos/libexec/upload-birdweather-results.py
+WorkingDirectory=/sensos/data
+StandardOutput=journal
+StandardError=journal
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

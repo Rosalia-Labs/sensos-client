@@ -572,6 +572,64 @@ Behavior:
 - enables the upload service for future boot by default
 - leaves the upload service stopped unless `--start-service` is supplied
 
+### `config-birdweather`
+
+Configures optional, independent upload of local BirdNET detections to
+[BirdWeather](https://www.birdweather.com) (a public, crowdsourced bird
+detection platform used by BirdNET-Pi/BirdNET-Go), alongside the normal
+upload to `sensos-server`. Off by default; enabling it shares this device's
+detections (and, with `--upload-audio`, short audio clips) publicly with
+BirdWeather.
+
+Important flags:
+
+- `--station-token` (required the first time; get one by creating a station at
+  `https://app.birdweather.com`)
+- `--session-interval-sec`
+- `--connect-timeout-sec`
+- `--read-timeout-sec`
+- `--upload-audio` (also uploads the detection's FLAC clip as a BirdWeather
+  "soundscape"; off by default -- meaningfully more data per detection)
+- `--upload-min-score`, `--upload-min-likelihood`, `--upload-min-volume`,
+  `--upload-min-score-x-likelihood` (independent of the same-named
+  `config-birdnet-uploads` thresholds -- a detection can clear the bar for
+  your own server but not for BirdWeather, or vice versa)
+- `--enable-service`
+- `--start-service`
+- `--disable`
+
+Typical use:
+
+```sh
+config-birdweather --station-token '<token-from-app.birdweather.com>' --start-service
+config-birdweather --station-token '<token>' --upload-audio --start-service
+config-birdweather --disable
+```
+
+Behavior:
+
+- writes `/sensos/etc/birdweather-uploads.conf` and, when `--station-token` is
+  given, `/sensos/keys/birdweather_token` (mode 0600, loaded into the service
+  via `LoadCredential=`, never placed in the config file itself)
+- uploads one detection at a time to BirdWeather's public API
+  (`POST /api/v1/stations/{token}/detections`) -- BirdWeather's schema
+  doesn't batch, unlike the sensos-server upload
+- species is split from the local BirdNET label (`Scientific name_Common
+  Name`) into BirdWeather's separate `commonName`/`scientificName` fields;
+  `confidence` is the weighted score
+- includes this device's `LATITUDE`/`LONGITUDE` from `location.conf` if set;
+  otherwise BirdWeather falls back to the station's own configured location
+- with `--upload-audio`, the clip is uploaded first (BirdWeather's
+  "soundscape" endpoint) and linked to the detection; if the clip has already
+  been thinned from local disk, or the audio upload itself fails, the
+  detection's metadata still uploads on its own
+- tracked independently of the sensos-server upload (`sent_to_birdweather`,
+  a separate column from `sent_to_server` on the same local `detections`
+  row) -- disabling this, changing its thresholds, or it failing outright
+  never affects the primary upload to sensos-server
+- enables the upload service for future boot by default
+- leaves the upload service stopped unless `--start-service` is supplied
+
 ### `config-rpi-eeprom`
 
 Reads and updates Raspberry Pi bootloader EEPROM settings related to board power policy.

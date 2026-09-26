@@ -67,18 +67,25 @@ parse_switches() {
                 ;;
             --*)
                 opt="$1"
-                if [[ $# -gt 1 && "$2" != --* ]]; then
+                if [[ -v __cli_options_help["$opt"] && ${__cli_options_is_bool["$opt"]:-0} -eq 1 ]]; then
+                    # Boolean options are always a bare flag: presence means
+                    # true, `--no-<opt>` (handled above) is the negation
+                    # path, and `--opt=false` remains available for
+                    # explicit/scripted use. Never treat the next token as
+                    # this option's value -- that previously let e.g.
+                    # `--disable somejunk` silently set disable_service to
+                    # the garbage string "somejunk", which then failed every
+                    # later `== "true"` check with no error at all, so the
+                    # script proceeded as if --disable had never been passed.
+                    val="true"
+                elif [[ $# -gt 1 && "$2" != --* ]]; then
                     val="$2"
                     shift
                 else
                     if [[ -v __cli_options_help["$opt"] ]]; then
-                        if [[ ${__cli_options_is_bool["$opt"]:-0} -eq 1 ]]; then
-                            val="true"
-                        else
-                            echo "[ERROR] Option '$opt' expects a value. Use '$opt=<value>' or '$opt <value>'."
-                            show_usage "$script_name"
-                            exit 1
-                        fi
+                        echo "[ERROR] Option '$opt' expects a value. Use '$opt=<value>' or '$opt <value>'."
+                        show_usage "$script_name"
+                        exit 1
                     else
                         echo "[ERROR] Unknown option: $opt"
                         show_usage "$script_name"

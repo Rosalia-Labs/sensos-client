@@ -68,6 +68,7 @@ RESTART_SAFE_SENSOS_UNITS=(
     sensos-thin-data.service
     sensos-birdnet.service
     sensos-upload-birdnet.service
+    sensos-upload-birdweather.service
     sensos-read-i2c.service
     sensos-upload-i2c.service
     sensos-gps.service

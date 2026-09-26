@@ -87,8 +87,14 @@ register_option --disable disable_service "Disable and stop systemd service" "fa
 
 parse_switches "$script_name" "$@"
 
-if [[ "$disable_service" == "true" && ( "$enable_service" == "true" || "$start_service" == "true" ) ]]; then
-    echo "--disable cannot be combined with --enable-service or --start-service"
+# Only --start-service is checked here: --enable-service defaults to "true"
+# even when never passed on the command line, so checking it here would
+# make plain `config-i2c-sensors --disable` (no other flags) falsely refuse
+# to run against its own default. --disable always wins over a leftover
+# default enable_service value -- see the enable branch below, which is
+# skipped whenever disable_service is set, regardless of enable_service.
+if [[ "$disable_service" == "true" && "$start_service" == "true" ]]; then
+    echo "--disable cannot be combined with --start-service"
     exit 1
 fi
 
@@ -133,7 +139,7 @@ if [[ "$disable_service" == "true" ]]; then
     sudo systemctl disable --now sensos-read-i2c.service || true
 fi
 
-if [[ "$enable_service" == "true" ]]; then
+if [[ "$enable_service" == "true" && "$disable_service" != "true" ]]; then
     echo "Enabling sensos-read-i2c.service..."
     sudo systemctl enable sensos-read-i2c.service
 fi
