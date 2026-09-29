@@ -12,6 +12,7 @@ PRECHECK_SCRIPT="${CLIENT_ROOT}/setup/00-preflight"
 OVERLAY_SYSTEMD_DIR="${CLIENT_ROOT}/overlay/systemd"
 INSTALL_STATE_FILE="${DEPLOY_ROOT}/etc/install-state.env"
 ARECORD_CONF_FILE="${DEPLOY_ROOT}/etc/arecord.conf"
+SYSTEM_CONFIG_STATE_FILE="${DEPLOY_ROOT}/etc/system-config-state.env"
 
 HOST_BASELINE_UNITS=(
     sensos-monitor-data-space.timer
@@ -180,11 +181,37 @@ ensure_enabled_sensos_unit_if_present() {
     fi
 }
 
+reboot_required_this_run() {
+    [[ -f "${SYSTEM_CONFIG_STATE_FILE}" ]] || return 1
+    grep -Eq '^REBOOT_REQUIRED=1$' "${SYSTEM_CONFIG_STATE_FILE}"
+}
+
 reconcile_always_on_sensos_units() {
     local unit_name
 
     log "ensuring always-on SensOS worker units are enabled and running"
     for unit_name in "${ALWAYS_ON_SENSOS_UNITS[@]}"; do
+        if [[ "${unit_name}" == "sensos-i2c-watchdog.timer" ]] && reboot_required_this_run; then
+            # setup/06-system-config (which already ran, earlier in this same
+            # setup/install pipeline) just determined a reboot is needed for
+            # Raspberry Pi hardware changes -- e.g. a freshly-added
+            # dtparam=i2c_arm=on line -- to take effect. Enable the timer for
+            # next boot, but deliberately don't restart/re-arm it now: a
+            # restart resets its OnUnitActiveSec=10min countdown from this
+            # moment, so if the operator hasn't rebooted by the time it fires,
+            # the watchdog finds I2C genuinely not-yet-applied (correctly, but
+            # redundantly with the "REBOOT REQUIRED" upgrade already logged)
+            # and self-heals with its own reboot. OnBootSec=10min re-arms it
+            # cleanly after the actual reboot instead, so there's nothing lost
+            # by skipping the restart here.
+            if systemctl list-unit-files --type=timer 2>/dev/null | awk '{print $1}' | grep -Fxq "${unit_name}"; then
+                systemctl enable "${unit_name}"
+                log "enabled ${unit_name} but left it un-restarted; a reboot is required this run"
+            else
+                log "host unit not present; skipped ${unit_name}"
+            fi
+            continue
+        fi
         ensure_enabled_sensos_unit_if_present "${unit_name}"
     done
 }
