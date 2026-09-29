@@ -26,38 +26,14 @@ for name in dir(UTILS_MODULE):
         globals()[name] = getattr(UTILS_MODULE, name)
 
 LOCATION_CONF = os.path.join(CLIENT_ROOT, "etc", "location.conf")
-REQUESTS = None
-
-
-def http_requests():
-    global REQUESTS
-    if REQUESTS is None:
-        REQUESTS = require_requests()
-    return REQUESTS
 
 
 def send_location(server_host, port, peer_uuid, api_password, latitude, longitude):
-    payload = {
-        "latitude": latitude,
-        "longitude": longitude,
-    }
-    url = f"http://{server_host}:{port}/api/v1/client/peer/location"
-    headers = {
-        **build_basic_auth_header(api_password, username=peer_uuid),
-        "Content-Type": "application/json",
-    }
-
-    try:
-        response = http_requests().put(url, headers=headers, json=payload, timeout=5)
-    except Exception as exc:
-        print(f"❌ Request failed: {exc}", file=sys.stderr)
-        return
-
-    if response.status_code == 200:
+    ok, error = send_client_location(server_host, port, peer_uuid, api_password, latitude, longitude)
+    if ok:
         print(f"✅ Location updated to ({latitude}, {longitude}) for {peer_uuid}.")
-        return
-
-    print(f"❌ Server responded with {response.status_code}: {response.text}", file=sys.stderr)
+    else:
+        print(f"❌ {error}", file=sys.stderr)
 
 
 def read_local_location_conf():

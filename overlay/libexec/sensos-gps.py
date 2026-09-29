@@ -30,6 +30,10 @@ setup_logging = UTILS_MODULE.setup_logging
 ensure_runtime_dir = UTILS_MODULE.ensure_runtime_dir
 write_runtime_file = UTILS_MODULE.write_runtime_file
 report_event = UTILS_MODULE.report_event
+read_network_conf = UTILS_MODULE.read_network_conf
+require_peer_uuid = UTILS_MODULE.require_peer_uuid
+read_service_credential = UTILS_MODULE.read_service_credential
+send_client_location = UTILS_MODULE.send_client_location
 
 CONFIG_PATH = CLIENT_ROOT / "etc" / "gps.conf"
 LOCATION_CONF = CLIENT_ROOT / "etc" / "location.conf"
@@ -41,7 +45,9 @@ DEFAULT_BUS = 1
 DEFAULT_SERIAL_BAUD = 9600
 DEFAULT_SERIAL_COLLECT_SEC = 5.0
 SERIAL_PORT_GLOBS = ("/dev/serial/by-id/*", "/dev/ttyACM*", "/dev/ttyUSB*")
-DEFAULT_LOCATION_DRIFT_M = 50.0
+DEFAULT_LOCATION_MOVE_THRESHOLD_M = 1000.0
+DEFAULT_INITIAL_FIX_MINUTES = 5.0
+INITIAL_FIX_SAMPLE_INTERVAL_SEC = 10
 DEFAULT_TIME_CONFLICT_SEC = 300.0
 ERROR_SLEEP_SEC = 15
 MAX_NMEA_BUFFER_BYTES = 8192
@@ -400,6 +406,53 @@ def maybe_validate_time_source(
     )
 
 
+_server_context: dict[str, str] | None = None
+_server_context_loaded = False
+
+
+def server_context() -> dict[str, str] | None:
+    """Best-effort, cached after the first call: server_host/port/peer_uuid/
+    api_password if this device is enrolled, else None. A device can run GPS
+    entirely locally before ever being enrolled (e.g. bench-testing hardware
+    before it's shipped and enrolled), so a missing/incomplete enrollment must
+    never be treated as a GPS failure -- it just means location updates stay
+    local-only until config-network has run."""
+    global _server_context, _server_context_loaded
+    if _server_context_loaded:
+        return _server_context
+    _server_context_loaded = True
+    try:
+        network_config = read_network_conf()
+        server_host = network_config.get("SERVER_WG_IP")
+        server_port = network_config.get("SERVER_PORT")
+        if not server_host or not server_port:
+            return None
+        peer_uuid = require_peer_uuid(network_config)
+        api_password = read_service_credential("api_password")
+    except SystemExit:
+        return None
+    _server_context = {
+        "server_host": server_host,
+        "server_port": server_port,
+        "peer_uuid": peer_uuid,
+        "api_password": api_password,
+    }
+    return _server_context
+
+
+def push_location_to_server(latitude: float, longitude: float) -> None:
+    ctx = server_context()
+    if ctx is None:
+        return
+    ok, error = send_client_location(
+        ctx["server_host"], ctx["server_port"], ctx["peer_uuid"], ctx["api_password"], latitude, longitude
+    )
+    if ok:
+        print(f"Reported location to server: ({latitude:.6f}, {longitude:.6f})")
+    else:
+        print(f"Could not report location to server (will retry on next GPS-driven update): {error}", file=sys.stderr)
+
+
 def report_location_change(old_lat: float | None, old_lon: float | None, latitude: float, longitude: float) -> None:
     details = {
         "old_latitude": old_lat,
@@ -411,23 +464,75 @@ def report_location_change(old_lat: float | None, old_lon: float | None, latitud
     if old_lat is not None and old_lon is not None:
         details["distance_m"] = f"{haversine_m(old_lat, old_lon, latitude, longitude):.1f}"
     report_event("gps_location_updated", severity="notice", details=details, dedupe_window=300)
+    push_location_to_server(latitude, longitude)
 
 
-def maybe_update_location(fix: dict[str, object], threshold_m: float, allow_update: bool) -> None:
-    if not allow_update:
+def report_fix_result(fix: tuple[float, float, int] | None) -> None:
+    """Reported once per boot, right after the startup fix-acquisition window
+    finishes, regardless of whether it changed the recorded location -- so
+    there's a record of every boot's attempt, not just the ones that moved
+    the stored position."""
+    if fix is None:
+        report_event("gps_fix_unavailable", severity="notice")
         return
-    latitude = fix.get("latitude")
-    longitude = fix.get("longitude")
-    if not isinstance(latitude, float) or not isinstance(longitude, float):
-        return
+    avg_lat, avg_lon, sample_count = fix
+    report_event(
+        "gps_fix_acquired",
+        severity="info",
+        details={"latitude": avg_lat, "longitude": avg_lon, "sample_count": sample_count},
+    )
+
+
+def acquire_initial_fix(read_fix_fn, sample_interval_sec: float, duration_sec: float) -> tuple[float, float, int] | None:
+    """Runs once, at service startup only -- not on any ongoing per-cycle
+    basis. A device only relocates by being physically unplugged, moved, and
+    replugged in, which is a fresh boot either way, so there is no need to
+    keep re-deciding location throughout a long uptime; the one-time startup
+    sample is the only time it's meaningful to ask "did this device move".
+
+    Samples fixes for up to duration_sec and averages every valid one with a
+    plain mean. No outlier-rejection (e.g. median) needed here: the threshold
+    this feeds into is kilometers, and ordinary GPS error -- even a single
+    bad multipath fix off by a couple hundred meters -- is nowhere near large
+    enough to bias a several-sample mean anywhere close to that scale.
+
+    Returns (avg_lat, avg_lon, sample_count), or None if no valid fix was
+    obtained in the window at all.
+    """
+    deadline = time.monotonic() + duration_sec
+    samples: list[tuple[float, float]] = []
+    while True:
+        try:
+            fix = read_fix_fn()
+        except Exception as exc:
+            print(f"Error reading GPS fix during initial acquisition: {exc}", file=sys.stderr)
+            fix = None
+        if fix is not None:
+            latitude = fix.get("latitude")
+            longitude = fix.get("longitude")
+            if isinstance(latitude, float) and isinstance(longitude, float):
+                samples.append((latitude, longitude))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(sample_interval_sec, remaining))
+
+    if not samples:
+        return None
+    avg_lat = sum(lat for lat, _ in samples) / len(samples)
+    avg_lon = sum(lon for _, lon in samples) / len(samples)
+    return avg_lat, avg_lon, len(samples)
+
+
+def maybe_update_location_from_fix(avg_lat: float, avg_lon: float, threshold_m: float) -> None:
     current_lat, current_lon = read_location()
     if current_lat is None or current_lon is None:
-        write_location(latitude, longitude)
-        report_location_change(current_lat, current_lon, latitude, longitude)
+        write_location(avg_lat, avg_lon)
+        report_location_change(current_lat, current_lon, avg_lat, avg_lon)
         return
-    if haversine_m(current_lat, current_lon, latitude, longitude) >= threshold_m:
-        write_location(latitude, longitude)
-        report_location_change(current_lat, current_lon, latitude, longitude)
+    if haversine_m(current_lat, current_lon, avg_lat, avg_lon) >= threshold_m:
+        write_location(avg_lat, avg_lon)
+        report_location_change(current_lat, current_lon, avg_lat, avg_lon)
 
 
 def main() -> int:
@@ -449,7 +554,10 @@ def main() -> int:
     serial_baud = config_int(config, "GPS_SERIAL_BAUD", DEFAULT_SERIAL_BAUD)
     allow_sync = config_bool(config, "GPS_SYNC_TIME", True)
     allow_location = config_bool(config, "GPS_UPDATE_LOCATION", True)
-    location_threshold_m = max(0.0, config_float(config, "GPS_LOCATION_DRIFT_M", DEFAULT_LOCATION_DRIFT_M))
+    location_threshold_m = max(
+        0.0, config_float(config, "GPS_LOCATION_MOVE_THRESHOLD_M", DEFAULT_LOCATION_MOVE_THRESHOLD_M)
+    )
+    initial_fix_sec = max(0.0, config_float(config, "GPS_INITIAL_FIX_MINUTES", DEFAULT_INITIAL_FIX_MINUTES)) * 60
     conflict_threshold_sec = max(0.0, config_float(config, "GPS_TIME_CONFLICT_SEC", DEFAULT_TIME_CONFLICT_SEC))
     nmea_buffer = ""
 
@@ -478,6 +586,30 @@ def main() -> int:
         f"update_location={'yes' if allow_location else 'no'}",
     )
 
+    if allow_location:
+        if backend == "i2c":
+            def read_one_fix():
+                nonlocal nmea_buffer
+                fix, nmea_buffer = parse_i2c_gps(bus_num, addr_str, nmea_buffer)
+                return fix
+        else:
+            def read_one_fix():
+                assert serial_gps is not None
+                return serial_gps.read_fix()
+
+        print(f"Acquiring initial GPS fix (sampling for up to {initial_fix_sec / 60:.1f} min)...")
+        initial_fix = acquire_initial_fix(read_one_fix, INITIAL_FIX_SAMPLE_INTERVAL_SEC, initial_fix_sec)
+        report_fix_result(initial_fix)
+        if initial_fix is not None:
+            avg_lat, avg_lon, sample_count = initial_fix
+            print(
+                f"Initial GPS fix: lat={avg_lat:.6f} lon={avg_lon:.6f} "
+                f"(averaged over {sample_count} sample(s))"
+            )
+            maybe_update_location_from_fix(avg_lat, avg_lon, location_threshold_m)
+        else:
+            print("No GPS fix acquired during the initial sampling window.", file=sys.stderr)
+
     while True:
         try:
             if backend == "i2c":
@@ -495,7 +627,20 @@ def main() -> int:
             print(message)
             maybe_validate_time_source(fix, conflict_threshold_sec, allow_sync)
             maybe_update_time(fix, allow_sync)
-            maybe_update_location(fix, location_threshold_m, allow_location)
+            if allow_location:
+                latitude = fix.get("latitude")
+                longitude = fix.get("longitude")
+                if isinstance(latitude, float) and isinstance(longitude, float):
+                    # A single fix, not an averaged one -- unlike the boot-time
+                    # acquisition phase above. Safe on its own here because the
+                    # threshold is kilometer-scale (see maybe_update_location_from_fix):
+                    # ordinary GPS noise on any one fix is nowhere near enough to
+                    # spuriously cross it. This is deliberately cheap and piggybacks
+                    # on the regular poll cycle that's already running for time-sync
+                    # (which must stay continuous regardless of location -- a box
+                    # with no internet/NTP has nothing but GPS to correct clock drift
+                    # with) rather than running its own separate polling cadence.
+                    maybe_update_location_from_fix(latitude, longitude, location_threshold_m)
             write_state("fix", message, fix)
             time.sleep(interval_sec)
         except TimeConflictError as exc:

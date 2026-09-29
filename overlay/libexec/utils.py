@@ -3,6 +3,7 @@
 
 import os
 import sys
+import json
 import shlex
 import shutil
 import base64
@@ -14,6 +15,8 @@ import stat
 import pwd
 import grp
 import time
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 CLIENT_ROOT = os.environ.get("SENSOS_CLIENT_ROOT", "/sensos")
 CLIENT_API_USERNAME = "sensos"
@@ -258,6 +261,47 @@ def get_basic_auth(api_password, username=CLIENT_API_USERNAME):
 
 def build_basic_auth_header(api_password, username=CLIENT_API_USERNAME):
     return {"Authorization": f"Basic {get_basic_auth(api_password, username=username)}"}
+
+
+def send_client_location(server_host, port, peer_uuid, api_password, latitude, longitude, *, timeout=5):
+    """PUT this device's current location to the server (sensos.peer_locations,
+    an append-only history table -- every call adds a new timestamped row,
+    it never overwrites). Shared by config-location (manual) and sensos-gps.py
+    (automatic, on a GPS-driven drift correction) so both paths report through
+    the same wire format instead of duplicating it. Best-effort: never raises,
+    the caller decides what a failure means for it (config-location prints and
+    exits non-zero at the call site; sensos-gps.py must not let a failed push
+    interrupt the GPS loop).
+
+    Deliberately stdlib urllib, not the `requests` package used elsewhere in
+    this file: `requests` is only ever installed as the *system* python3-requests
+    apt package (see setup/packages-required.txt), never added to the isolated
+    venv's own requirements.txt (setup/04-python-venv creates it with plain
+    `python3 -m venv`, no --system-site-packages) -- callers running under
+    that venv (sensos-gps.py, via /sensos/python/venv/bin/python) would not
+    be able to import it. urllib works identically under both interpreters.
+    """
+    payload = {"latitude": latitude, "longitude": longitude}
+    url = f"http://{server_host}:{port}/api/v1/client/peer/location"
+    headers = {
+        **build_basic_auth_header(api_password, username=peer_uuid),
+        "Content-Type": "application/json",
+    }
+    req = urllib_request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="PUT",
+    )
+    try:
+        with urllib_request.urlopen(req, timeout=timeout) as response:
+            response.read()
+    except urllib_error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        return False, f"server responded with {exc.code}: {body}"
+    except Exception as exc:
+        return False, f"request failed: {exc}"
+    return True, None
 
 
 def report_event(event_type, *, severity="info", details=None, dedupe_window=0, dedupe_key=None):

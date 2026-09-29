@@ -12,6 +12,7 @@ UMask=0002
 CapabilityBoundingSet=CAP_SYS_TIME
 AmbientCapabilities=CAP_SYS_TIME
 NoNewPrivileges=true
+LoadCredential=api_password:/sensos/keys/api_password
 ExecStart=/sensos/python/venv/bin/python /sensos/libexec/sensos-gps.py
 WorkingDirectory=/sensos/data
 StandardOutput=journal

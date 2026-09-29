@@ -62,7 +62,8 @@ def main() -> int:
         (["--interval"], {"dest": "interval", "type": int, "default": 60, "help": "Polling interval in seconds."}),
         (["--sync-time"], {"dest": "sync_time", "action": argparse.BooleanOptionalAction, "default": True, "help": "Update system time from GPS if needed."}),
         (["--update-location"], {"dest": "update_location", "action": argparse.BooleanOptionalAction, "default": True, "help": "Update location.conf from GPS if needed."}),
-        (["--location-drift-m"], {"dest": "location_drift_m", "type": float, "default": 50.0, "help": "Minimum movement before location.conf is updated."}),
+        (["--initial-fix-minutes"], {"dest": "initial_fix_minutes", "type": float, "default": 5.0, "help": "How long to sample and average GPS fixes once, at service startup, before deciding whether the device has moved. Location is only ever (re)decided at startup -- a device relocates by being physically unplugged, moved, and replugged in, which is a fresh boot either way."}),
+        (["--location-move-threshold-m"], {"dest": "location_move_threshold_m", "type": float, "default": 1000.0, "help": "Minimum distance (meters) between the averaged startup fix and the currently recorded location before location.conf is updated. Deliberately kilometer-scale by default: a real relocation moves a device kilometers, not meters, and BirdNET's own location-based likelihood scoring works at a much coarser resolution than a few meters anyway."}),
         (["--time-conflict-sec"], {"dest": "time_conflict_sec", "type": float, "default": 300.0, "help": "If GPS and an already synchronized system clock differ by at least this many seconds, report a conflict instead of correcting time."}),
         (["--enable-service"], {"dest": "enable_service", "action": argparse.BooleanOptionalAction, "default": True, "help": "Enable the systemd service."}),
         (["--start-service"], {"dest": "start_service", "action": argparse.BooleanOptionalAction, "default": False, "help": "Start the systemd service now."}),
@@ -93,7 +94,8 @@ def main() -> int:
         f"GPS_INTERVAL_SEC={args.interval}\n"
         f"GPS_SYNC_TIME={bool_text(args.sync_time)}\n"
         f"GPS_UPDATE_LOCATION={bool_text(args.update_location)}\n"
-        f"GPS_LOCATION_DRIFT_M={args.location_drift_m}\n"
+        f"GPS_INITIAL_FIX_MINUTES={args.initial_fix_minutes}\n"
+        f"GPS_LOCATION_MOVE_THRESHOLD_M={args.location_move_threshold_m}\n"
         f"GPS_TIME_CONFLICT_SEC={args.time_conflict_sec}\n"
     )
     write_file(CONFIG_PATH, content, mode=0o664, user="sensos-admin", group="sensos-data")
