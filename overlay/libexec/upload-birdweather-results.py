@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -27,6 +28,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from birdnet_data import connect_db, ensure_schema
 from birdweather_data import (
     ensure_birdweather_schema,
+    mark_birdweather_failed_permanently,
     mark_birdweather_sent,
     mark_low_score_birdweather_detections_skipped,
     save_birdweather_soundscape_id,
@@ -110,11 +112,31 @@ def read_station_location() -> tuple[float, float] | None:
         return None
 
 
+LABEL_PAREN_RE = re.compile(r"^(?P<common>.+?)\s*\((?P<scientific>[^()]+)\)\s*$")
+
+
 def split_label(label: str) -> tuple[str, str]:
-    """BirdNET labels are 'Scientific name_Common Name'. BirdWeather requires
-    both separately; fall back to using the whole label as the common name
-    if a label ever doesn't contain the separator, rather than crashing the
-    uploader over one malformed row."""
+    """BirdWeather requires commonName/scientificName separately. BirdNET
+    labels file format varies by model/labels-file version -- this fleet's
+    actual en_us.txt uses 'Common Name (Scientific name)' (confirmed from a
+    real upload failure, 2026-09-30: 'Slate-throated Redstart (Myioborus
+    miniatus)'), not the underscore-separated 'Scientific name_Common Name'
+    convention documented for some other BirdNET-Analyzer label sets. Try the
+    parenthesized form first since that's the confirmed real format, fall
+    back to the underscore form in case a different model/labels-file
+    version is ever used, and fall back to using the whole label as the
+    common name (empty scientific name) only if neither matches, rather than
+    crashing the uploader over one malformed row -- though note BirdWeather's
+    API requires scientificName, so that last fallback will always be
+    rejected by their validation (HTTP 422); see run_upload_session's
+    permanent-failure handling for what happens then.
+    """
+    match = LABEL_PAREN_RE.match(label)
+    if match:
+        common_name = match.group("common").strip()
+        scientific_name = match.group("scientific").strip()
+        if common_name and scientific_name:
+            return scientific_name, common_name
     if "_" in label:
         scientific_name, common_name = label.split("_", 1)
         if scientific_name and common_name:
@@ -181,14 +203,21 @@ def upload_one_detection(
     conn, row, station_token: str, config: dict, location: tuple[float, float] | None
 ) -> None:
     detection_id = int(row["id"])
-    scientific_name, common_name = split_label(row["weighted_label"] or row["label"])
+    # Raw BirdNET label/score, not the location-and-date-weighted ones:
+    # BirdWeather's own confidence scoring expects the standard raw BirdNET
+    # output. weighted_label can legitimately name a *different* species than
+    # label (BirdNET's own likelihood weighting can flip which candidate
+    # wins), so weighted_score would be that other species' score, not this
+    # one's -- label and score must be taken from the same (raw) candidate,
+    # never mixed with the weighted one.
+    scientific_name, common_name = split_label(row["label"])
     timestamp = row["clip_start_time"]
 
     payload = {
         "timestamp": timestamp,
         "commonName": common_name,
         "scientificName": scientific_name,
-        "confidence": float(row["weighted_score"]),
+        "confidence": float(row["score"]),
     }
     if location is not None:
         payload["lat"], payload["lon"] = location
@@ -265,6 +294,23 @@ def run_upload_session(station_token: str, config: dict, location: tuple[float, 
     except error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         print(f"[ERROR] BirdWeather upload failed: HTTP {exc.code}: {body}", file=sys.stderr)
+        if exc.code == 422:
+            # The request was rejected as invalid, not a network/server
+            # problem -- retrying the identical payload would just get the
+            # identical rejection forever, blocking every detection behind
+            # it (select_pending_birdweather_detections always re-fetches
+            # the oldest pending row first). Mark it skipped and move on;
+            # everything else -- network errors, 5xx, other 4xx that might
+            # reflect a broader problem like a bad token -- still sleeps and
+            # retries as before, since those aren't necessarily permanent
+            # and blocking the whole queue on them is the right call.
+            detection_id = int(row["id"])
+            with connect_db() as conn:
+                ensure_schema(conn)
+                ensure_birdweather_schema(conn)
+                mark_birdweather_failed_permanently(conn, detection_id)
+            print(f"[WARN] Detection {detection_id} rejected by BirdWeather as invalid; skipping it, not retrying.")
+            return False
         return True
     except error.URLError as exc:
         print(f"[ERROR] BirdWeather upload network error: {exc}", file=sys.stderr)

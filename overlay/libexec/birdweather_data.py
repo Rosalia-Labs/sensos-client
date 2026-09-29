@@ -88,6 +88,22 @@ def mark_birdweather_sent(conn: sqlite3.Connection, detection_id: int) -> None:
     conn.commit()
 
 
+def mark_birdweather_failed_permanently(conn: sqlite3.Connection, detection_id: int) -> None:
+    """For a failure that will never succeed on retry (BirdWeather rejected
+    the request itself, e.g. HTTP 422 -- the data is invalid, not the
+    network), not a transient one. Reuses the same "skipped" state as the
+    UPLOAD_MIN_* threshold filter: kept locally untouched, just removed from
+    the upload queue. Without this, select_pending_birdweather_detections
+    always re-fetches the oldest pending row first, so one permanently-bad
+    detection would retry forever and block every detection behind it from
+    ever reaching BirdWeather."""
+    conn.execute(
+        "UPDATE detections SET sent_to_birdweather = 2 WHERE id = ?",
+        (detection_id,),
+    )
+    conn.commit()
+
+
 def save_birdweather_soundscape_id(
     conn: sqlite3.Connection, detection_id: int, soundscape_id: int
 ) -> None:
