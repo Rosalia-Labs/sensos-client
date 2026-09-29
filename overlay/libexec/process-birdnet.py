@@ -539,6 +539,46 @@ def collect_detections(
     return detections
 
 
+def merge_consecutive_detections(detections: List[Detection]) -> List[Detection]:
+    """Collapse consecutive windows that share the same raw top label into a
+    single detection spanning the whole run. Grouped and scored on the raw
+    label/score, never the weighted ones -- weighted_score collapses toward
+    zero for non-species labels (e.g. "Engine"), which would make it useless
+    for picking a run's peak window."""
+    merged: List[Detection] = []
+    run: List[Detection] = []
+
+    def flush() -> None:
+        if not run:
+            return
+        peak = max(run, key=lambda d: d.score)
+        merged.append(
+            Detection(
+                channel_index=peak.channel_index,
+                window_index=run[0].window_index,
+                start_frame=run[0].start_frame,
+                end_frame=run[-1].end_frame,
+                max_score_start_frame=peak.start_frame,
+                volume=peak.volume,
+                label=peak.label,
+                score=peak.score,
+                likely_score=peak.likely_score,
+                weighted_label=peak.weighted_label,
+                weighted_score=peak.weighted_score,
+                weighted_likely_score=peak.weighted_likely_score,
+            )
+        )
+
+    for detection in detections:
+        if run and detection.label == run[-1].label:
+            run.append(detection)
+        else:
+            flush()
+            run = [detection]
+    flush()
+    return merged
+
+
 def write_detection_clips(
     source_path: Path,
     audio: np.ndarray,
@@ -619,15 +659,17 @@ def process_audio(
     latitude, longitude = location_coordinates()
     detections: List[Detection] = []
     for channel_index, channel_audio in audio_channels(audio, INPUT_MODE):
-        channel_detections = collect_detections(
-            channel_index,
-            channel_audio,
-            len(channel_audio),
-            model,
-            meta_model,
-            latitude,
-            longitude,
-            source_observation_date(source_path),
+        channel_detections = merge_consecutive_detections(
+            collect_detections(
+                channel_index,
+                channel_audio,
+                len(channel_audio),
+                model,
+                meta_model,
+                latitude,
+                longitude,
+                source_observation_date(source_path),
+            )
         )
         detections.extend(
             detection
