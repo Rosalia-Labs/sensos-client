@@ -868,7 +868,7 @@ Behavior:
 - when NTP does not appear healthy, a valid GPS fix becomes the active time source
 - runs GPS polling as `sensos-runner:sensos-data`; clock adjustment receives only `CAP_SYS_TIME`, and GPS runtime files are written without sudo or ownership repair
 - if the system clock claims to be NTP-synchronized but disagrees with GPS by more than `--time-conflict-sec`, reports a `gps_time_conflict` warning event and then corrects the clock from GPS anyway -- the "synchronized" flag only means NTP succeeded at some point this boot, not that it is still accurate, and can stay stuck "yes" long after connectivity is lost
-- reports `gps_fix_acquired` or `gps_fix_unavailable` once per boot after the initial sampling window finishes, and `gps_location_updated`/`gps_time_updated` whenever GPS actually corrects the location or clock (see the events table above)
+- reports `gps_fix_unavailable` once per boot if the initial sampling window ends without a usable fix, and `gps_location_updated`/`gps_time_updated` whenever GPS actually corrects the location or clock (see the events table above) -- a successful fix on its own isn't reported, only the outcomes that matter
 - enables `sensos-gps.service` for future boot by default
 - leaves the GPS service stopped unless `--start-service` is supplied
 - controls `sensos-gps.service`
@@ -981,7 +981,7 @@ Events emitted automatically:
 | `i2c_host_down_persistent` | I2C watchdog: `/dev/i2c-1` was still missing after that reboot; likely needs physical inspection, no further reboots will be attempted |
 | `location_changed` | `config-location`: device location was set/updated by hand. Details: old/new latitude, longitude |
 | `time_changed` | `config-time`: device clock was set/updated by hand. Details: old/new UTC time, entered timezone |
-| `gps_fix_acquired` / `gps_fix_unavailable` | `sensos-gps.service`: reported once per boot, right after the startup fix-sampling window (`GPS_INITIAL_FIX_MINUTES`, default 5 min) finishes -- whether or not it changed the recorded location. Details (acquired only): averaged latitude, longitude, sample count |
+| `gps_fix_unavailable` | `sensos-gps.service`: `notice` -- the startup fix-sampling window (`GPS_INITIAL_FIX_MINUTES`, default 5 min) finished without a usable fix. A successful fix is not itself reported |
 | `gps_location_updated` | `sensos-gps.service`: the startup-averaged GPS fix differed from the currently recorded location by more than `GPS_LOCATION_MOVE_THRESHOLD_M` (default 1000m/1km -- real relocations move a device kilometers, not meters). Details: old/new latitude, longitude, distance moved |
 | `gps_time_updated` | `sensos-gps.service`: GPS set the system clock because it wasn't otherwise synchronized (`GPS_SYNC_TIME`). Details: old/new UTC time |
 | `gps_time_conflict` | `sensos-gps.service`: `warning` -- GPS time disagreed with an *already*-synchronized system clock by more than `GPS_TIME_CONFLICT_SEC` (default 300s); the clock is then corrected from GPS regardless (also fires `gps_time_updated`). Details: system/GPS time, drift |

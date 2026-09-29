@@ -460,18 +460,11 @@ def report_location_change(old_lat: float | None, old_lon: float | None, latitud
 
 def report_fix_result(fix: tuple[float, float, int] | None) -> None:
     """Reported once per boot, right after the startup fix-acquisition window
-    finishes, regardless of whether it changed the recorded location -- so
-    there's a record of every boot's attempt, not just the ones that moved
-    the stored position."""
+    finishes. Only the failure case is worth an event -- a successful fix is
+    the expected outcome and isn't itself noteworthy; it's already visible
+    via gps_location_updated when it actually changes anything."""
     if fix is None:
         report_event("gps_fix_unavailable", severity="notice")
-        return
-    avg_lat, avg_lon, sample_count = fix
-    report_event(
-        "gps_fix_acquired",
-        severity="info",
-        details={"latitude": avg_lat, "longitude": avg_lon, "sample_count": sample_count},
-    )
 
 
 def acquire_initial_fix(read_fix_fn, sample_interval_sec: float, duration_sec: float) -> tuple[float, float, int] | None:
