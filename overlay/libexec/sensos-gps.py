@@ -53,10 +53,6 @@ ERROR_SLEEP_SEC = 15
 MAX_NMEA_BUFFER_BYTES = 8192
 
 
-class TimeConflictError(RuntimeError):
-    pass
-
-
 def config_value(config: dict[str, str], key: str, default: str = "") -> str:
     return config.get(key, default).strip()
 
@@ -365,30 +361,28 @@ class SerialGps:
         return parse_nmea_fix(lines, f"serial:{self.port}")
 
 
-def maybe_update_time(fix: dict[str, object], allow_sync: bool) -> None:
+def maybe_update_time(
+    fix: dict[str, object],
+    conflict_threshold_sec: float,
+    allow_sync: bool,
+) -> None:
     if not allow_sync:
         return
     gps_time = fix.get("gps_time")
     if not isinstance(gps_time, datetime.datetime):
         return
-    if system_time_synchronized():
-        return
-    set_system_time(gps_time)
-
-
-def maybe_validate_time_source(
-    fix: dict[str, object],
-    conflict_threshold_sec: float,
-    allow_sync: bool,
-) -> None:
-    if not allow_sync or not system_time_synchronized():
-        return
-    gps_time = fix.get("gps_time")
-    if not isinstance(gps_time, datetime.datetime):
+    if not system_time_synchronized():
+        set_system_time(gps_time)
         return
     drift_sec = abs((current_utc() - gps_time).total_seconds())
     if drift_sec < conflict_threshold_sec:
         return
+    # timedatectl's "synchronized" flag only means NTP succeeded at some
+    # point this boot, not that it's still accurate -- on this fleet's
+    # flaky WireGuard/carrier uplinks it can stay "yes" long after the
+    # reference is unreachable while the clock free-runs. A disagreement
+    # this large is worth trusting GPS over that stale flag rather than
+    # just logging it forever with nothing ever correcting it.
     report_event(
         "gps_time_conflict",
         severity="warning",
@@ -400,10 +394,7 @@ def maybe_validate_time_source(
         },
         dedupe_window=1800,
     )
-    raise TimeConflictError(
-        "GPS time differs from the synchronized system clock by "
-        f"{drift_sec:.1f}s, above the {conflict_threshold_sec:.1f}s conflict threshold"
-    )
+    set_system_time(gps_time)
 
 
 _server_context: dict[str, str] | None = None
@@ -625,8 +616,7 @@ def main() -> int:
                 continue
             message = f"GPS fix: lat={fix['latitude']:.6f} lon={fix['longitude']:.6f} source={fix['source']}"
             print(message)
-            maybe_validate_time_source(fix, conflict_threshold_sec, allow_sync)
-            maybe_update_time(fix, allow_sync)
+            maybe_update_time(fix, conflict_threshold_sec, allow_sync)
             if allow_location:
                 latitude = fix.get("latitude")
                 longitude = fix.get("longitude")
@@ -642,11 +632,6 @@ def main() -> int:
                     # with) rather than running its own separate polling cadence.
                     maybe_update_location_from_fix(latitude, longitude, location_threshold_m)
             write_state("fix", message, fix)
-            time.sleep(interval_sec)
-        except TimeConflictError as exc:
-            message = f"GPS time conflict: {exc}"
-            print(message, file=sys.stderr)
-            write_state("time_conflict", message)
             time.sleep(interval_sec)
         except Exception as exc:
             message = f"GPS service failure: {exc}"

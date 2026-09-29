@@ -867,7 +867,7 @@ Behavior:
 - **during regular operation**, each ongoing poll (`--interval`, commonly set to something like an hour) also checks the single fix from that cycle against the same threshold and updates location if it's moved -- piggybacked on the poll that's already running for time-sync (which has to stay continuous regardless of location, since a box with no internet/NTP has nothing but GPS to correct clock drift with). A single fix is safe to act on directly here, unlike a naive meters-scale design would be, because ordinary GPS noise (even an occasional large multipath error) is nowhere near enough to spuriously cross a kilometer-scale threshold
 - when NTP does not appear healthy, a valid GPS fix becomes the active time source
 - runs GPS polling as `sensos-runner:sensos-data`; clock adjustment receives only `CAP_SYS_TIME`, and GPS runtime files are written without sudo or ownership repair
-- reports a GPS/NTP time conflict instead of overriding a synchronized clock when the difference is too large, as a `gps_time_conflict` warning event
+- if the system clock claims to be NTP-synchronized but disagrees with GPS by more than `--time-conflict-sec`, reports a `gps_time_conflict` warning event and then corrects the clock from GPS anyway -- the "synchronized" flag only means NTP succeeded at some point this boot, not that it is still accurate, and can stay stuck "yes" long after connectivity is lost
 - reports `gps_fix_acquired` or `gps_fix_unavailable` once per boot after the initial sampling window finishes, and `gps_location_updated`/`gps_time_updated` whenever GPS actually corrects the location or clock (see the events table above)
 - enables `sensos-gps.service` for future boot by default
 - leaves the GPS service stopped unless `--start-service` is supplied
@@ -984,7 +984,7 @@ Events emitted automatically:
 | `gps_fix_acquired` / `gps_fix_unavailable` | `sensos-gps.service`: reported once per boot, right after the startup fix-sampling window (`GPS_INITIAL_FIX_MINUTES`, default 5 min) finishes -- whether or not it changed the recorded location. Details (acquired only): averaged latitude, longitude, sample count |
 | `gps_location_updated` | `sensos-gps.service`: the startup-averaged GPS fix differed from the currently recorded location by more than `GPS_LOCATION_MOVE_THRESHOLD_M` (default 1000m/1km -- real relocations move a device kilometers, not meters). Details: old/new latitude, longitude, distance moved |
 | `gps_time_updated` | `sensos-gps.service`: GPS set the system clock because it wasn't otherwise synchronized (`GPS_SYNC_TIME`). Details: old/new UTC time |
-| `gps_time_conflict` | `sensos-gps.service`: `warning` -- GPS time disagreed with an *already*-synchronized system clock by more than `GPS_TIME_CONFLICT_SEC` (default 300s); the clock is left alone. Details: system/GPS time, drift |
+| `gps_time_conflict` | `sensos-gps.service`: `warning` -- GPS time disagreed with an *already*-synchronized system clock by more than `GPS_TIME_CONFLICT_SEC` (default 300s); the clock is then corrected from GPS regardless (also fires `gps_time_updated`). Details: system/GPS time, drift |
 
 Signal events are queued locally like any other, so a link too weak to carry the
 alert immediately still delivers it when the tunnel is next up. Set
