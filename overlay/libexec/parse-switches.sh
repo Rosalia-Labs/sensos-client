@@ -5,6 +5,7 @@
 declare -A __cli_options_help
 declare -A __cli_options_defaults
 declare -A __cli_options_is_bool
+declare -A __cli_options_negatable
 declare -A __cli_options_varname
 
 register_option() {
@@ -23,6 +24,16 @@ register_option() {
         *) __cli_options_is_bool["$opt"]=0 ;;
     esac
 
+    # --no-<opt> is only meaningful when the flag defaults to true -- that's
+    # the only case where a bare flag alone can't express "off". For a
+    # default-false flag, simply omitting it already means false, so
+    # registering a negation would just be dead, never-useful surface area.
+    if [[ "$default" == "true" ]]; then
+        __cli_options_negatable["$opt"]=1
+    else
+        __cli_options_negatable["$opt"]=0
+    fi
+
     if [[ -z "${!safe_varname+x}" ]]; then
         declare -g "$safe_varname"
         printf -v "$safe_varname" '%s' "$default"
@@ -33,7 +44,7 @@ parse_switches() {
     local script_name="$1"
     shift
 
-    local opt val safe_varname
+    local opt val safe_varname negated_opt
     local -a remaining_args=()
 
     while [[ $# -gt 0 ]]; do
@@ -48,25 +59,29 @@ parse_switches() {
                 show_usage "$script_name"
                 exit 0
                 ;;
-            --no-*)
-                opt="--${1#--no-}"
-                if [[ -v __cli_options_help["$opt"] && ${__cli_options_is_bool["$opt"]:-0} -eq 1 ]]; then
-                    safe_varname="${__cli_options_varname[$opt]}"
-                    printf -v "$safe_varname" '%s' "false"
-                else
-                    echo "[ERROR] Unknown or non-boolean negated option: $1"
-                    show_usage "$script_name"
-                    exit 1
-                fi
-                shift
-                continue
-                ;;
             --*=*)
                 opt="${1%%=*}"
                 val="${1#*=}"
                 ;;
             --*)
                 opt="$1"
+                # A directly-registered option always wins, even one spelled
+                # --no-X (e.g. --no-fstab) -- only fall back to treating a
+                # --no-X token as the negation of --X when nothing was
+                # registered under that literal name.
+                if [[ ! -v __cli_options_help["$opt"] && "$opt" == --no-* ]]; then
+                    negated_opt="--${opt#--no-}"
+                    if [[ -v __cli_options_help["$negated_opt"] && ${__cli_options_negatable["$negated_opt"]:-0} -eq 1 ]]; then
+                        safe_varname="${__cli_options_varname[$negated_opt]}"
+                        printf -v "$safe_varname" '%s' "false"
+                        shift
+                        continue
+                    else
+                        echo "[ERROR] Unknown, non-boolean, or non-negatable option: $opt"
+                        show_usage "$script_name"
+                        exit 1
+                    fi
+                fi
                 if [[ -v __cli_options_help["$opt"] && ${__cli_options_is_bool["$opt"]:-0} -eq 1 ]]; then
                     # Boolean options are always a bare flag: presence means
                     # true, `--no-<opt>` (handled above) is the negation
@@ -135,7 +150,11 @@ show_usage() {
         usage="$opt [value]"
         if [[ ${__cli_options_is_bool["$opt"]:-0} -eq 1 ]]; then
             usage="$opt"
-            hint=" (boolean; use --no-${opt#--} to negate)"
+            if [[ ${__cli_options_negatable["$opt"]:-0} -eq 1 ]]; then
+                hint=" (boolean; use --no-${opt#--} to negate)"
+            else
+                hint=" (boolean flag)"
+            fi
         fi
         printf "  %-24s %-50s %s\n" "$usage" "$help$hint" "(default: $default)"
     done
