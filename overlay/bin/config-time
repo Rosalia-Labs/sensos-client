@@ -26,6 +26,7 @@ assert UTILS_SPEC.loader is not None
 UTILS_SPEC.loader.exec_module(UTILS_MODULE)
 
 ensure_sensos_admin = UTILS_MODULE.ensure_sensos_admin
+report_event = UTILS_MODULE.report_event
 
 
 def parse_args() -> argparse.Namespace:
@@ -326,6 +327,7 @@ def main() -> int:
         print("No changes made.")
         return 0
 
+    old_dt = current_utc_time()
     try:
         ensure_utc_timezone()
         set_local_time(new_dt)
@@ -333,6 +335,17 @@ def main() -> int:
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
+
+    report_event(
+        "time_changed",
+        severity="notice",
+        details={
+            "old_utc_time": old_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "new_utc_time": new_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "entered_timezone": entry_tz,
+            "source": "manual",
+        },
+    )
 
     print()
     print("Updated device time:")

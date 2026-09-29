@@ -60,11 +60,31 @@ def send_location(server_host, port, peer_uuid, api_password, latitude, longitud
     print(f"❌ Server responded with {response.status_code}: {response.text}", file=sys.stderr)
 
 
+def read_local_location_conf():
+    config = read_kv_config(LOCATION_CONF)
+    try:
+        return float(config["LATITUDE"]), float(config["LONGITUDE"])
+    except (KeyError, TypeError, ValueError):
+        return None, None
+
+
 def write_local_location_conf(latitude, longitude):
+    old_latitude, old_longitude = read_local_location_conf()
     create_dir(os.path.dirname(LOCATION_CONF), owner="sensos-admin", group="sensos-data", mode=0o2775)
     content = f"LATITUDE={latitude}\nLONGITUDE={longitude}\n"
     write_file(LOCATION_CONF, content, mode=0o664, user="sensos-admin", group="sensos-data")
     print(f"✅ Location written to {LOCATION_CONF}")
+    report_event(
+        "location_changed",
+        severity="notice",
+        details={
+            "old_latitude": old_latitude,
+            "old_longitude": old_longitude,
+            "latitude": latitude,
+            "longitude": longitude,
+            "source": "manual",
+        },
+    )
 
 
 def is_interactive():

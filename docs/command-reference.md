@@ -131,6 +131,7 @@ Behavior:
 - if no correction flags are supplied and stdin is interactive, walks through time correction interactively
 - if correction flags are supplied, can apply them non-interactively
 - always keeps the actual system timezone on UTC
+- reports a `time_changed` event (old/new UTC time, entered timezone) whenever the clock is actually corrected
 
 Run this first. Accurate time matters before recording or storing sensor data.
 
@@ -252,6 +253,7 @@ Behavior:
 - uses `PUT /api/v1/client/peer/location` when syncing to the server
 - `--setup-server` and `--setup-port` override the default steady-state API target from `network.conf`
 - syncs location to the server when `network.conf`, `CLIENT_WG_IP`, and the client API password are available
+- reports a `location_changed` event (old/new latitude, longitude) on every write, including the first one
 
 ### `config-storage`
 
@@ -861,7 +863,8 @@ Behavior:
 - can update time and location automatically from GPS
 - when NTP does not appear healthy, a valid GPS fix becomes the active time source
 - runs GPS polling as `sensos-runner:sensos-data`; clock adjustment receives only `CAP_SYS_TIME`, and GPS runtime files are written without sudo or ownership repair
-- reports a GPS/NTP time conflict instead of overriding a synchronized clock when the difference is too large
+- reports a GPS/NTP time conflict instead of overriding a synchronized clock when the difference is too large, as a `gps_time_conflict` warning event
+- reports `gps_location_updated` and `gps_time_updated` events whenever GPS actually corrects the location or clock (see the events table above)
 - enables `sensos-gps.service` for future boot by default
 - leaves the GPS service stopped unless `--start-service` is supplied
 - controls `sensos-gps.service`
@@ -972,6 +975,11 @@ Events emitted automatically:
 | `i2c_host_down` / `i2c_host_recovered` | I2C watchdog (`sensos-i2c-watchdog.timer`): `/dev/i2c-1` was missing on a device with I2C sensors configured (e.g. `dtparam=i2c_arm=on` lost from `/boot/firmware/config.txt`, seen after an unclean power-off), or came back |
 | `i2c_host_reboot` | I2C watchdog: repaired the I2C host config and rebooted to apply it (dtparam only takes effect at boot; rebooted at most once per outage) |
 | `i2c_host_down_persistent` | I2C watchdog: `/dev/i2c-1` was still missing after that reboot; likely needs physical inspection, no further reboots will be attempted |
+| `location_changed` | `config-location`: device location was set/updated by hand. Details: old/new latitude, longitude |
+| `time_changed` | `config-time`: device clock was set/updated by hand. Details: old/new UTC time, entered timezone |
+| `gps_location_updated` | `sensos-gps.service`: GPS fix moved the device location by more than `GPS_LOCATION_DRIFT_M` (default 50m). Details: old/new latitude, longitude, distance moved |
+| `gps_time_updated` | `sensos-gps.service`: GPS set the system clock because it wasn't otherwise synchronized (`GPS_SYNC_TIME`). Details: old/new UTC time |
+| `gps_time_conflict` | `sensos-gps.service`: `warning` -- GPS time disagreed with an *already*-synchronized system clock by more than `GPS_TIME_CONFLICT_SEC` (default 300s); the clock is left alone. Details: system/GPS time, drift |
 
 Signal events are queued locally like any other, so a link too weak to carry the
 alert immediately still delivers it when the tunnel is next up. Set

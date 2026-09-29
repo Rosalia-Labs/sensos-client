@@ -29,6 +29,7 @@ read_kv_config = UTILS_MODULE.read_kv_config
 setup_logging = UTILS_MODULE.setup_logging
 ensure_runtime_dir = UTILS_MODULE.ensure_runtime_dir
 write_runtime_file = UTILS_MODULE.write_runtime_file
+report_event = UTILS_MODULE.report_event
 
 CONFIG_PATH = CLIENT_ROOT / "etc" / "gps.conf"
 LOCATION_CONF = CLIENT_ROOT / "etc" / "location.conf"
@@ -169,12 +170,23 @@ def write_state(status: str, message: str, fix: dict[str, object] | None = None)
 
 
 def set_system_time(gps_time: datetime.datetime) -> None:
+    old_time = current_utc()
     timestamp = gps_time.astimezone(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
     try:
         time.clock_settime(time.CLOCK_REALTIME, gps_time.timestamp())
     except (OSError, PermissionError) as exc:
         raise RuntimeError(f"failed to set system time from GPS: {exc}") from exc
     print(f"Updated system UTC time from GPS to {timestamp}")
+    report_event(
+        "gps_time_updated",
+        severity="notice",
+        details={
+            "old_utc_time": state_value(old_time),
+            "new_utc_time": state_value(gps_time),
+            "source": "gps",
+        },
+        dedupe_window=300,
+    )
 
 
 def read_i2c_gps_chunk(bus_num: int, addr_str: str) -> str:
@@ -371,10 +383,34 @@ def maybe_validate_time_source(
     drift_sec = abs((current_utc() - gps_time).total_seconds())
     if drift_sec < conflict_threshold_sec:
         return
+    report_event(
+        "gps_time_conflict",
+        severity="warning",
+        details={
+            "system_utc_time": state_value(current_utc()),
+            "gps_utc_time": state_value(gps_time),
+            "drift_sec": f"{drift_sec:.1f}",
+            "source": "gps",
+        },
+        dedupe_window=1800,
+    )
     raise TimeConflictError(
         "GPS time differs from the synchronized system clock by "
         f"{drift_sec:.1f}s, above the {conflict_threshold_sec:.1f}s conflict threshold"
     )
+
+
+def report_location_change(old_lat: float | None, old_lon: float | None, latitude: float, longitude: float) -> None:
+    details = {
+        "old_latitude": old_lat,
+        "old_longitude": old_lon,
+        "latitude": latitude,
+        "longitude": longitude,
+        "source": "gps",
+    }
+    if old_lat is not None and old_lon is not None:
+        details["distance_m"] = f"{haversine_m(old_lat, old_lon, latitude, longitude):.1f}"
+    report_event("gps_location_updated", severity="notice", details=details, dedupe_window=300)
 
 
 def maybe_update_location(fix: dict[str, object], threshold_m: float, allow_update: bool) -> None:
@@ -387,9 +423,11 @@ def maybe_update_location(fix: dict[str, object], threshold_m: float, allow_upda
     current_lat, current_lon = read_location()
     if current_lat is None or current_lon is None:
         write_location(latitude, longitude)
+        report_location_change(current_lat, current_lon, latitude, longitude)
         return
     if haversine_m(current_lat, current_lon, latitude, longitude) >= threshold_m:
         write_location(latitude, longitude)
+        report_location_change(current_lat, current_lon, latitude, longitude)
 
 
 def main() -> int:
