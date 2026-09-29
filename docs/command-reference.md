@@ -596,6 +596,10 @@ Important flags:
   `--upload-min-score-x-likelihood` (independent of the same-named
   `config-birdnet-uploads` thresholds -- a detection can clear the bar for
   your own server but not for BirdWeather, or vice versa)
+- `--skip-backfill` (only detections recorded from this point on will upload;
+  anything already sitting in the local backlog is left alone -- useful when
+  enabling BirdWeather on a device that's already been running BirdNET for a
+  while, so it doesn't try to upload the entire local history in one burst)
 - `--enable-service`
 - `--start-service`
 - `--disable`
@@ -605,6 +609,7 @@ Typical use:
 ```sh
 config-birdweather --station-token '<token-from-app.birdweather.com>' --start-service
 config-birdweather --station-token '<token>' --upload-audio --start-service
+config-birdweather --station-token '<token>' --skip-backfill --start-service
 config-birdweather --disable
 ```
 
@@ -616,9 +621,10 @@ Behavior:
 - uploads one detection at a time to BirdWeather's public API
   (`POST /api/v1/stations/{token}/detections`) -- BirdWeather's schema
   doesn't batch, unlike the sensos-server upload
-- species is split from the local BirdNET label (`Scientific name_Common
-  Name`) into BirdWeather's separate `commonName`/`scientificName` fields;
-  `confidence` is the weighted score
+- species is split from the local BirdNET label (this fleet's format:
+  `Common Name (Scientific name)`) into BirdWeather's separate
+  `commonName`/`scientificName` fields; `confidence` is the raw BirdNET
+  score, never the location/date-weighted one
 - includes this device's `LATITUDE`/`LONGITUDE` from `location.conf` if set;
   otherwise BirdWeather falls back to the station's own configured location
 - with `--upload-audio`, the clip is uploaded first (BirdWeather's
@@ -629,6 +635,13 @@ Behavior:
   a separate column from `sent_to_server` on the same local `detections`
   row) -- disabling this, changing its thresholds, or it failing outright
   never affects the primary upload to sensos-server
+- `--skip-backfill` records the current UTC time as `UPLOAD_BACKFILL_CUTOFF`
+  in the config file; every upload cycle thereafter skips any still-pending
+  detection recorded before that moment (same one-way `sent_to_birdweather`
+  skip state as the `--upload-min-*` thresholds). It's a one-time cutoff set
+  when the flag is passed, not an ongoing setting -- re-running
+  `config-birdweather` later without it leaves already-skipped detections
+  skipped, it just stops recording a new cutoff
 - enables the upload service for future boot by default
 - leaves the upload service stopped unless `--start-service` is supplied
 

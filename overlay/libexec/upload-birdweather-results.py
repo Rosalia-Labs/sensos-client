@@ -31,6 +31,7 @@ from birdweather_data import (
     mark_birdweather_failed_permanently,
     mark_birdweather_sent,
     mark_low_score_birdweather_detections_skipped,
+    mark_pre_cutoff_birdweather_detections_skipped,
     save_birdweather_soundscape_id,
     select_pending_birdweather_detections,
 )
@@ -101,6 +102,7 @@ def read_upload_config() -> dict:
         "upload_min_score_x_likelihood": read_upload_threshold(
             config, "UPLOAD_MIN_SCORE_X_LIKELIHOOD"
         ),
+        "backfill_cutoff": config.get("UPLOAD_BACKFILL_CUTOFF", "").strip() or None,
     }
 
 
@@ -280,6 +282,14 @@ def run_upload_session(station_token: str, config: dict, location: tuple[float, 
         )
         if skipped:
             print(f"[INFO] Skipped {skipped} low-score detection(s) below BirdWeather upload thresholds.")
+        skipped_backfill = mark_pre_cutoff_birdweather_detections_skipped(
+            conn, config["backfill_cutoff"]
+        )
+        if skipped_backfill:
+            print(
+                f"[INFO] Skipped {skipped_backfill} pre-existing detection(s) recorded "
+                "before the BirdWeather backfill cutoff."
+            )
         rows = select_pending_birdweather_detections(conn, 1)
     if not rows:
         print("[INFO] No pending BirdNET detections to upload to BirdWeather.")

@@ -117,6 +117,31 @@ def save_birdweather_soundscape_id(
     conn.commit()
 
 
+def mark_pre_cutoff_birdweather_detections_skipped(
+    conn: sqlite3.Connection, cutoff_iso: str | None
+) -> int:
+    """Companion to mark_low_score_birdweather_detections_skipped, for
+    "only upload from now on" (config-birdweather --skip-backfill): marks
+    every still-pending detection recorded before the cutoff as skipped.
+    Only ever moves rows 0 -> 2, so it's safe to keep calling even after
+    the cutoff is later removed from config -- previously-skipped rows
+    just stay skipped, nothing gets un-skipped."""
+    if not cutoff_iso:
+        return 0
+    cursor = conn.execute(
+        """
+        UPDATE detections
+        SET sent_to_birdweather = 2
+        WHERE deleted_at IS NULL
+          AND sent_to_birdweather = 0
+          AND clip_start_time < ?
+        """,
+        (cutoff_iso,),
+    )
+    conn.commit()
+    return cursor.rowcount
+
+
 def mark_low_score_birdweather_detections_skipped(
     conn: sqlite3.Connection,
     min_score: float,
