@@ -308,7 +308,17 @@ class GpsdClient:
                 chunk = self.sock.recv(4096)
             except (socket.timeout, TimeoutError):
                 return None
+            except OSError as exc:
+                # A dropped connection (e.g. gpsd restarting) must not leave
+                # self.sock pointing at a dead socket -- acquire_initial_fix()
+                # catches and swallows this exception per-sample and just
+                # tries again next cycle, so without this the whole 5-minute
+                # startup window would keep hitting the same dead socket and
+                # never get a single sample.
+                self.close()
+                raise RuntimeError(f"gpsd connection error: {exc}") from exc
             if not chunk:
+                self.close()
                 raise RuntimeError("gpsd closed the connection")
             self.buffer += chunk.decode("ascii", errors="ignore")
         line, self.buffer = self.buffer.split("\n", 1)
