@@ -16,7 +16,7 @@ GPS_PYTHON="${CLIENT_ROOT}/python/venv/bin/python"
 DEFAULT_I2C_BUS="1"
 DEFAULT_I2C_ADDR="0x10"
 DEFAULT_BACKEND="i2c"
-DEFAULT_SERIAL_BAUD="9600"
+GPSD_DEFAULT_FILE="/etc/default/gpsd"
 SERIAL_PORT_GLOBS=(/dev/serial/by-id/* /dev/ttyACM* /dev/ttyUSB*)
 
 configured_backend() {
@@ -40,15 +40,11 @@ configured_addr() {
     printf '%s\n' "${addr}"
 }
 
-configured_serial_port() {
-    read_kv_value "${CONFIG_FILE}" "GPS_SERIAL_PORT" 2>/dev/null || true
-}
-
-configured_serial_baud() {
-    local baud
-    baud="$(read_kv_value "${CONFIG_FILE}" "GPS_SERIAL_BAUD" 2>/dev/null || true)"
-    [[ -n "${baud}" ]] || baud="${DEFAULT_SERIAL_BAUD}"
-    printf '%s\n' "${baud}"
+configured_gpsd_device() {
+    # gpsd is configured directly, not via gps.conf -- config-gps writes the
+    # resolved device path straight into /etc/default/gpsd's DEVICES= line.
+    [[ -f "${GPSD_DEFAULT_FILE}" ]] || return 1
+    read_kv_value "${GPSD_DEFAULT_FILE}" "DEVICES" 2>/dev/null | tr -d '"' || true
 }
 
 list_serial_candidates() {
@@ -57,16 +53,6 @@ list_serial_candidates() {
         [[ -e "${path}" ]] || continue
         printf '%s\n' "${path}"
     done
-}
-
-resolve_serial_port() {
-    local configured
-    configured="$(configured_serial_port)"
-    if [[ -n "${configured}" ]]; then
-        printf '%s\n' "${configured}"
-        return 0
-    fi
-    list_serial_candidates | head -n 1
 }
 
 section() {
@@ -109,28 +95,33 @@ probe_gps_hardware() {
 }
 
 probe_serial_hardware() {
-    local configured resolved candidates
-    configured="$(configured_serial_port)"
-    resolved="$(resolve_serial_port)"
-    candidates="$(list_serial_candidates | paste -sd' ' - 2>/dev/null || true)"
+    local configured_device candidates gpsd_active
 
-    printf 'configured_port=%s\n' "${configured:-<autodetect>}"
+    # gpsd is the sole owner of the serial device now -- it's configured
+    # directly via /etc/default/gpsd (by config-gps --backend serial), not
+    # read here by this service. What's physically plugged in (candidates)
+    # is shown separately for comparison in case the two have drifted apart.
+    candidates="$(list_serial_candidates | paste -sd' ' - 2>/dev/null || true)"
     printf 'candidates=%s\n' "${candidates:-none}"
 
-    if [[ -z "${resolved}" ]]; then
-        printf 'hardware_present=no\n'
-        printf 'hardware_probe=no serial GPS device found\n'
+    if ! configured_device="$(configured_gpsd_device)" || [[ -z "${configured_device}" ]]; then
+        printf 'hardware_present=unknown\n'
+        printf 'hardware_probe=gpsd not configured yet (run config-gps --backend serial)\n'
         return 0
     fi
 
-    printf 'resolved_port=%s\n' "${resolved}"
-    if [[ -r "${resolved}" ]]; then
+    printf 'gpsd_device=%s\n' "${configured_device}"
+    if [[ -e "${configured_device}" ]]; then
         printf 'hardware_present=yes\n'
-        printf 'hardware_probe=%s is present and readable\n' "${resolved}"
+        printf 'hardware_probe=%s is present\n' "${configured_device}"
     else
-        printf 'hardware_present=unknown\n'
-        printf 'hardware_probe=%s exists but is not readable by %s (check dialout group membership)\n' \
-            "${resolved}" "$(id -un)"
+        printf 'hardware_present=no\n'
+        printf 'hardware_probe=%s configured in gpsd but not present (unplugged?)\n' "${configured_device}"
+    fi
+
+    if have_cmd systemctl; then
+        gpsd_active="$(systemctl is-active gpsd.service 2>/dev/null || true)"
+        printf 'gpsd_active=%s\n' "${gpsd_active:-unknown}"
     fi
 }
 
@@ -207,18 +198,8 @@ show_live_probe() {
 }
 
 show_serial_live_probe() {
-    local resolved baud python_cmd probe_output
-    resolved="$(resolve_serial_port)"
-    baud="$(configured_serial_baud)"
-
+    local python_cmd probe_output
     printf 'backend=serial\n'
-    printf 'resolved_port=%s\n' "${resolved:-<none>}"
-    printf 'baud=%s\n' "${baud}"
-
-    if [[ -z "${resolved}" ]]; then
-        printf 'live_status=device_missing\n'
-        return 0
-    fi
 
     python_cmd="$(gps_python_cmd 2>/dev/null || true)"
     if [[ -z "${python_cmd}" ]]; then
@@ -226,80 +207,64 @@ show_serial_live_probe() {
         return 0
     fi
 
-    probe_output="$("${python_cmd}" - "${resolved}" "${baud}" <<'PY' 2>&1
-import sys
+    # Reads from gpsd's own JSON protocol (127.0.0.1:2947) rather than
+    # opening the serial device directly -- gpsd already owns that device
+    # (chrony also reads it, via gpsd's SHM feed, for time), so a second
+    # direct reader here would conflict with the real service the same way
+    # it would conflict with gpsd itself.
+    probe_output="$("${python_cmd}" - <<'PY' 2>&1
+import json
+import socket
 import time
 
-port = sys.argv[1]
-baud = int(sys.argv[2])
-
 try:
-    import pynmea2
-    import serial
+    sock = socket.create_connection(("127.0.0.1", 2947), timeout=5)
 except Exception as exc:
-    print("live_status=dependency_error")
+    print("live_status=gpsd_connect_error")
     print(f"error={exc}")
     raise SystemExit(0)
 
-try:
-    handle = serial.Serial(port, baudrate=baud, timeout=1)
-except Exception as exc:
-    print("live_status=open_error")
-    print(f"error={exc}")
-    raise SystemExit(0)
-
-lines = []
+sock.sendall(b'?WATCH={"enable":true,"json":true}\n')
+buffer = ""
 deadline = time.monotonic() + 5.0
-try:
-    while time.monotonic() < deadline:
-        raw = handle.readline()
-        if not raw:
-            continue
-        line = raw.decode("ascii", errors="ignore").strip()
-        if line.startswith("$"):
-            lines.append(line)
-finally:
-    handle.close()
-
-last_rmc = last_gga = None
-parsed = []
-for line in lines:
+reports_seen = []
+tpv = None
+while time.monotonic() < deadline and tpv is None:
+    sock.settimeout(max(0.1, deadline - time.monotonic()))
     try:
-        msg = pynmea2.parse(line)
-    except Exception:
-        continue
-    parsed.append(line)
-    sentence = getattr(msg, "sentence_type", "")
-    if sentence == "RMC":
-        last_rmc = msg
-    elif sentence == "GGA":
-        last_gga = msg
+        chunk = sock.recv(4096)
+    except socket.timeout:
+        break
+    if not chunk:
+        break
+    buffer += chunk.decode("ascii", errors="ignore")
+    while "\n" in buffer:
+        line, buffer = buffer.split("\n", 1)
+        if not line.strip():
+            continue
+        try:
+            report = json.loads(line)
+        except ValueError:
+            continue
+        reports_seen.append(report.get("class", "?"))
+        if report.get("class") == "TPV":
+            tpv = report
+            break
+sock.close()
 
-rmc_status = getattr(last_rmc, "status", "") if last_rmc is not None else ""
-gga_quality = getattr(last_gga, "gps_qual", "") if last_gga is not None else ""
-latitude = getattr(last_rmc, "latitude", None) or getattr(last_gga, "latitude", None)
-longitude = getattr(last_rmc, "longitude", None) or getattr(last_gga, "longitude", None)
+if tpv is None:
+    print("live_status=no_fix")
+    print(f"reports_seen={','.join(reports_seen) or 'none'}")
+    raise SystemExit(0)
 
-status = "no_data"
-if lines and not parsed:
-    status = "unparsed_data"
-elif latitude not in (None, "") and longitude not in (None, "") and (
-    rmc_status == "A" or (str(gga_quality).isdigit() and int(gga_quality) > 0)
-):
-    status = "fix"
-elif parsed:
-    status = "parsed_no_fix"
-
-print(f"live_status={status}")
-print(f"raw_line_count={len(lines)}")
-print(f"parsed_sentence_count={len(parsed)}")
-print(f"rmc_status={rmc_status or 'unknown'}")
-print(f"gga_fix_quality={gga_quality or 'unknown'}")
-print(f"latitude={latitude if latitude not in (None, '') else 'unknown'}")
-print(f"longitude={longitude if longitude not in (None, '') else 'unknown'}")
-print(f"sample_nmea={lines[0][:120] if lines else 'none'}")
-for index, line in enumerate(parsed[-3:], start=1):
-    print(f"parsed_nmea_{index}={line[:120]}")
+mode = tpv.get("mode", 0)
+print(f"live_status={'fix' if mode >= 2 else 'no_fix'}")
+print(f"device={tpv.get('device', 'unknown')}")
+print(f"mode={mode}")
+print(f"gps_time={tpv.get('time', 'unknown')}")
+print(f"latitude={tpv.get('lat', 'unknown')}")
+print(f"longitude={tpv.get('lon', 'unknown')}")
+print(f"altitude={tpv.get('alt', 'unknown')}")
 PY
 )"
     printf '%s\n' "${probe_output}"
@@ -344,8 +309,18 @@ except Exception as exc:
 
 try:
     with smbus2.SMBus(bus_num) as bus:
-        available = bus.read_byte_data(addr, 0xFD)
-        chars = [chr(bus.read_byte_data(addr, 0xFF)) for _ in range(available)] if available > 0 else []
+        # 0xFD/0xFE are the high/low bytes of a 16-bit "bytes available"
+        # count (u-blox DDC protocol) -- reading only 0xFD truncates to the
+        # top 8 bits, same bug fixed in sensos-gps.py's read_i2c_gps_chunk.
+        # 0xFFFF is u-blox's documented sentinel for "no data available".
+        high = bus.read_byte_data(addr, 0xFD)
+        low = bus.read_byte_data(addr, 0xFE)
+        available = (high << 8) | low
+        chars = (
+            [chr(bus.read_byte_data(addr, 0xFF)) for _ in range(min(available, 8192))]
+            if 0 < available < 0xFFFF
+            else []
+        )
 except Exception as exc:
     print("live_status=probe_error")
     print(f"error={exc}")
@@ -519,7 +494,6 @@ show_recent_logs() {
                 /sensos-gps starting:/ { line = $0; next }
                 /No valid GPS fix available\./ { line = $0; next }
                 /GPS fix: / { line = $0; next }
-                /GPS time conflict: / { line = $0; next }
                 /GPS service failure: / { line = $0; next }
                 NF { line = $0 }
                 END { print line }

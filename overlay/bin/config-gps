@@ -3,6 +3,7 @@
 # Copyright (c) 2025 Rosalia Labs LLC
 
 import argparse
+import glob
 import importlib.util
 import os
 import subprocess
@@ -29,6 +30,9 @@ ensure_sensos_admin = UTILS_MODULE.ensure_sensos_admin
 
 CONFIG_PATH = os.path.join(CLIENT_ROOT, "etc", "gps.conf")
 SERVICE_NAME = "sensos-gps.service"
+GPSD_SERVICE_NAME = "gpsd.service"
+GPSD_DEFAULT_PATH = "/etc/default/gpsd"
+SERIAL_PORT_GLOBS = ("/dev/serial/by-id/*", "/dev/ttyACM*", "/dev/ttyUSB*")
 
 
 def systemctl(*args: str) -> None:
@@ -50,21 +54,61 @@ def bool_text(value: bool) -> str:
     return "true" if value else "false"
 
 
+def resolve_serial_port(port_hint: str) -> str:
+    if port_hint:
+        if not os.path.exists(port_hint):
+            raise SystemExit(f"ERROR: --serial-port {port_hint} does not exist.")
+        return port_hint
+    for pattern in SERIAL_PORT_GLOBS:
+        matches = sorted(glob.glob(pattern))
+        if matches:
+            return matches[0]
+    raise SystemExit(
+        "ERROR: no GPS serial device found "
+        f"({' or '.join(SERIAL_PORT_GLOBS)}). Pass --serial-port explicitly, "
+        "or plug in the GPS and retry."
+    )
+
+
+def configure_gpsd(serial_port: str) -> None:
+    """gpsd is the sole owner of the physical device: chrony reads GPS time
+    from it (via SHM, see chrony.conf) and sensos-gps.py reads location from
+    it (via gpsd's own JSON client protocol) -- neither opens the serial
+    port directly, so they never fight each other for it the way sensos-gps
+    and chrony used to fight over the system clock.
+
+    The resolved device path is pinned explicitly (not left to gpsd's own
+    USB hotplug autodetection) for the same reason every other serial-port
+    decision in this fleet pins an exact /dev/serial/by-id path -- autodetect
+    can silently pick the wrong device when more than one serial-ish thing is
+    plugged in (seen in practice: a cellular modem's AT port alongside the
+    actual GPS puck)."""
+    resolved_port = resolve_serial_port(serial_port)
+    content = (
+        'START_DAEMON="true"\n'
+        'GPSD_OPTIONS="-n"\n'  # -n: start reading immediately, don't wait for a client to connect -- chrony's SHM feed needs continuous polling, not on-demand.
+        f'DEVICES="{resolved_port}"\n'
+        'USBAUTO="false"\n'
+    )
+    write_file(GPSD_DEFAULT_PATH, content, mode=0o644, user="root", group="root")
+    print(f"Configured gpsd to use {resolved_port} (wrote {GPSD_DEFAULT_PATH})")
+    subprocess.run(["sudo", "systemctl", "daemon-reload"], check=False)
+    systemctl("enable", GPSD_SERVICE_NAME)
+    systemctl("restart", GPSD_SERVICE_NAME)
+
+
 def main() -> int:
     ensure_sensos_admin()
     arg_defs = [
         (["--disable"], {"action": "store_true", "help": "Disable GPS service and stop updates."}),
-        (["--backend"], {"default": "i2c", "choices": ["i2c", "serial"], "help": "GPS backend type: 'i2c' for a wired u-blox GPS, 'serial' for a USB/UART NMEA GPS."}),
+        (["--backend"], {"default": "i2c", "choices": ["i2c", "serial"], "help": "GPS backend type: 'serial' for a USB/UART NMEA GPS via gpsd (the supported path -- this fleet's actual hardware), 'i2c' for a wired GPS read directly (legacy; this fleet couldn't get reliable fixes with i2c orientation/antenna placement and doesn't expect to use it going forward)."}),
         (["--i2c-addr"], {"dest": "i2c_addr", "default": "0x10", "help": "I2C GPS address (i2c backend)."}),
         (["--i2c-bus"], {"dest": "i2c_bus", "type": int, "default": 1, "help": "I2C bus number (i2c backend)."}),
-        (["--serial-port"], {"dest": "serial_port", "default": "", "help": "Serial device for the USB/UART GPS (serial backend); empty means autodetect /dev/serial/by-id, then /dev/ttyACM*, then /dev/ttyUSB*."}),
-        (["--serial-baud"], {"dest": "serial_baud", "type": int, "default": 9600, "help": "Serial baud rate for the USB/UART GPS (serial backend)."}),
+        (["--serial-port"], {"dest": "serial_port", "default": "", "help": "Serial device for the USB/UART GPS (serial backend); empty means autodetect /dev/serial/by-id, then /dev/ttyACM*, then /dev/ttyUSB*. Configures gpsd directly -- sensos-gps.py reads location through gpsd, never the raw device."}),
         (["--interval"], {"dest": "interval", "type": int, "default": 60, "help": "Polling interval in seconds."}),
-        (["--sync-time"], {"dest": "sync_time", "action": argparse.BooleanOptionalAction, "default": True, "help": "Update system time from GPS if needed."}),
         (["--update-location"], {"dest": "update_location", "action": argparse.BooleanOptionalAction, "default": True, "help": "Update location.conf from GPS if needed."}),
         (["--initial-fix-minutes"], {"dest": "initial_fix_minutes", "type": float, "default": 5.0, "help": "How long to sample and average GPS fixes once, at service startup, before deciding whether the device has moved. Location is only ever (re)decided at startup -- a device relocates by being physically unplugged, moved, and replugged in, which is a fresh boot either way."}),
         (["--location-move-threshold-m"], {"dest": "location_move_threshold_m", "type": float, "default": 1000.0, "help": "Minimum distance (meters) between the averaged startup fix and the currently recorded location before location.conf is updated. Deliberately kilometer-scale by default: a real relocation moves a device kilometers, not meters, and BirdNET's own location-based likelihood scoring works at a much coarser resolution than a few meters anyway."}),
-        (["--time-conflict-sec"], {"dest": "time_conflict_sec", "type": float, "default": 300.0, "help": "If GPS and an already synchronized system clock differ by at least this many seconds, report a conflict instead of correcting time."}),
         (["--enable-service"], {"dest": "enable_service", "action": argparse.BooleanOptionalAction, "default": True, "help": "Enable the systemd service."}),
         (["--start-service"], {"dest": "start_service", "action": argparse.BooleanOptionalAction, "default": False, "help": "Start the systemd service now."}),
     ]
@@ -84,19 +128,18 @@ def main() -> int:
         print("GPS disabled.")
         return 0
 
+    if args.backend == "serial":
+        configure_gpsd(args.serial_port)
+
     content = (
         "GPS_ENABLED=true\n"
         f"GPS_BACKEND={args.backend}\n"
         f"GPS_I2C_ADDR={args.i2c_addr}\n"
         f"GPS_I2C_BUS={args.i2c_bus}\n"
-        f"GPS_SERIAL_PORT={args.serial_port}\n"
-        f"GPS_SERIAL_BAUD={args.serial_baud}\n"
         f"GPS_INTERVAL_SEC={args.interval}\n"
-        f"GPS_SYNC_TIME={bool_text(args.sync_time)}\n"
         f"GPS_UPDATE_LOCATION={bool_text(args.update_location)}\n"
         f"GPS_INITIAL_FIX_MINUTES={args.initial_fix_minutes}\n"
         f"GPS_LOCATION_MOVE_THRESHOLD_M={args.location_move_threshold_m}\n"
-        f"GPS_TIME_CONFLICT_SEC={args.time_conflict_sec}\n"
     )
     write_file(CONFIG_PATH, content, mode=0o664, user="sensos-admin", group="sensos-data")
     print(f"Wrote GPS config to {CONFIG_PATH}")

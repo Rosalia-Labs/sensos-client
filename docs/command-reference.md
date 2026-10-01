@@ -835,56 +835,85 @@ Behavior:
 
 ### `config-gps`
 
-Configures the optional GPS integration service.
+Configures the optional GPS integration service. **GPS is location-only.**
+Time sync is entirely chrony's job (see `overlay/etc/chrony.conf`'s `refclock
+SHM 0` line, fed by gpsd) -- `sensos-gps.service` never touches the system
+clock. Two independent, uncoordinated clock-correction mechanisms (chrony and
+a previous version of this service) were found actively fighting each other
+in the field: every GPS-driven clock step made chrony discard its
+accumulated NTP measurements and restart its own recovery, which could keep
+chrony from ever reaching sync even when its servers were fully reachable.
+Removing GPS from the time-sync picture entirely, and letting gpsd feed GPS
+into chrony as just another source alongside `pool.ntp.org`, fixes this by
+construction: there is only ever one thing adjusting the clock.
 
 Important flags:
 
 - `--disable`
-- `--backend` (`i2c` for a wired u-blox GPS, `serial` for a USB/UART NMEA GPS)
+- `--backend` (`serial` for a USB/UART NMEA GPS via gpsd -- the supported
+  path, and this fleet's actual hardware; `i2c` for a wired GPS read
+  directly -- legacy, kept only because it still runs, not recommended for
+  new deployments: this fleet could not get reliable fixes with i2c
+  orientation/antenna placement and switched to USB/serial permanently)
 - `--i2c-addr`, `--i2c-bus` (i2c backend)
-- `--serial-port`, `--serial-baud` (serial backend)
+- `--serial-port` (serial backend; configures gpsd directly)
 - `--interval`
-- `--sync-time`
 - `--update-location`
 - `--initial-fix-minutes`
 - `--location-move-threshold-m`
-- `--time-conflict-sec`
 - `--enable-service`
 - `--start-service`
 
 Typical use:
 
 ```sh
-# Wired u-blox GPS on the I2C bus (default backend):
-config-gps --start-service
-
-# USB GPS dongle (serial NMEA); port autodetected:
+# USB GPS dongle (serial NMEA, via gpsd); port autodetected:
 config-gps --backend serial --start-service
 
-# USB GPS with an explicit stable device path and baud:
-config-gps --backend serial --serial-port /dev/serial/by-id/usb-u-blox_... --serial-baud 9600 --start-service
+# USB GPS with an explicit stable device path:
+config-gps --backend serial --serial-port /dev/serial/by-id/usb-u-blox_... --start-service
 
 config-gps --interval 60 --location-move-threshold-m 1000
 config-gps --initial-fix-minutes 10
-config-gps --time-conflict-sec 300
 ```
 
 Behavior:
 
 - writes `/sensos/etc/gps.conf`
-- installs optional GPS Python dependencies on demand before enabling the GPS service. The `serial` backend needs `pyserial`; if it is not yet provisioned the command tells you to run `./upgrade` first
-- with `--backend serial` and no `--serial-port`, autodetects in order: `/dev/serial/by-id/*`, then `/dev/ttyACM*`, then `/dev/ttyUSB*`. Prefer a `/dev/serial/by-id/` path in `--serial-port` because it is stable across reboots and re-plugging
-- the GPS service runs as `sensos-runner`, which is already in the `dialout` group, so USB serial devices are readable without extra setup
-- can update time and location automatically from GPS
-- **at service startup**, samples and averages GPS fixes for `--initial-fix-minutes` (default 5) to get a good position quickly, then compares that average against the currently recorded location and updates it only if they differ by more than `--location-move-threshold-m` (default 1000m/1km) -- deliberately kilometer-scale, since these devices relocate by being physically unplugged, moved, and replugged in, not by drifting
-- **during regular operation**, each ongoing poll (`--interval`, commonly set to something like an hour) also checks the single fix from that cycle against the same threshold and updates location if it's moved -- piggybacked on the poll that's already running for time-sync (which has to stay continuous regardless of location, since a box with no internet/NTP has nothing but GPS to correct clock drift with). A single fix is safe to act on directly here, unlike a naive meters-scale design would be, because ordinary GPS noise (even an occasional large multipath error) is nowhere near enough to spuriously cross a kilometer-scale threshold
-- when NTP does not appear healthy, a valid GPS fix becomes the active time source
-- runs GPS polling as `sensos-runner:sensos-data`; clock adjustment receives only `CAP_SYS_TIME`, and GPS runtime files are written without sudo or ownership repair
-- if the system clock claims to be NTP-synchronized but disagrees with GPS by more than `--time-conflict-sec`, reports a `gps_time_conflict` warning event and then corrects the clock from GPS anyway -- the "synchronized" flag only means NTP succeeded at some point this boot, not that it is still accurate, and can stay stuck "yes" long after connectivity is lost
-- reports `gps_fix_unavailable` once per boot if the initial sampling window ends without a usable fix, and `gps_location_updated`/`gps_time_updated` whenever GPS actually corrects the location or clock (see the events table above) -- a successful fix on its own isn't reported, only the outcomes that matter
+- with `--backend serial`: resolves the device (explicit `--serial-port`, or
+  autodetects in order `/dev/serial/by-id/*`, then `/dev/ttyACM*`, then
+  `/dev/ttyUSB*`), writes it into `/etc/default/gpsd`'s `DEVICES=` line, and
+  enables/restarts `gpsd.service`. gpsd becomes the sole owner of the
+  physical device -- chrony reads GPS time from it via gpsd's SHM feed, and
+  `sensos-gps.service` reads location from it via gpsd's own JSON client
+  protocol (`127.0.0.1:2947`); neither opens the serial port directly, so
+  they never contend for it
+- the resolved device path is pinned explicitly in `/etc/default/gpsd`
+  rather than left to gpsd's own USB hotplug autodetection, for the same
+  reason every other serial-port decision in this fleet pins an exact
+  `/dev/serial/by-id` path: autodetect can silently pick the wrong device
+  when more than one serial-ish thing is plugged in (seen in practice: a
+  cellular modem's AT port alongside the actual GPS puck)
+- **at service startup**, samples and averages GPS fixes for
+  `--initial-fix-minutes` (default 5) to get a good position quickly, then
+  compares that average against the currently recorded location and updates
+  it only if they differ by more than `--location-move-threshold-m` (default
+  1000m/1km) -- deliberately kilometer-scale, since these devices relocate
+  by being physically unplugged, moved, and replugged in, not by drifting
+- **during regular operation**, each ongoing poll (`--interval`) also checks
+  the single fix from that cycle against the same threshold and updates
+  location if it's moved. A single fix is safe to act on directly here,
+  unlike a naive meters-scale design would be, because ordinary GPS noise
+  (even an occasional large multipath error) is nowhere near enough to
+  spuriously cross a kilometer-scale threshold
+- reports `gps_fix_unavailable` once per boot if the initial sampling window
+  ends without a usable fix, and `gps_location_updated` whenever GPS
+  actually corrects the location (see the events table above) -- a
+  successful fix on its own isn't reported, only the outcomes that matter
 - enables `sensos-gps.service` for future boot by default
 - leaves the GPS service stopped unless `--start-service` is supplied
-- controls `sensos-gps.service`
+- controls `sensos-gps.service`; `--backend serial` additionally controls
+  `gpsd.service`
 
 ### `config-birdnet`
 
@@ -996,8 +1025,6 @@ Events emitted automatically:
 | `time_changed` | `config-time`: device clock was set/updated by hand. Details: old/new UTC time, entered timezone |
 | `gps_fix_unavailable` | `sensos-gps.service`: `notice` -- the startup fix-sampling window (`GPS_INITIAL_FIX_MINUTES`, default 5 min) finished without a usable fix. A successful fix is not itself reported |
 | `gps_location_updated` | `sensos-gps.service`: the startup-averaged GPS fix differed from the currently recorded location by more than `GPS_LOCATION_MOVE_THRESHOLD_M` (default 1000m/1km -- real relocations move a device kilometers, not meters). Details: old/new latitude, longitude, distance moved |
-| `gps_time_updated` | `sensos-gps.service`: GPS set the system clock because it wasn't otherwise synchronized (`GPS_SYNC_TIME`). Details: old/new UTC time |
-| `gps_time_conflict` | `sensos-gps.service`: `warning` -- GPS time disagreed with an *already*-synchronized system clock by more than `GPS_TIME_CONFLICT_SEC` (default 300s); the clock is then corrected from GPS regardless (also fires `gps_time_updated`). Details: system/GPS time, drift |
 
 Signal events are queued locally like any other, so a link too weak to carry the
 alert immediately still delivers it when the tunnel is next up. Set
@@ -1186,6 +1213,6 @@ Then add optional features as needed:
 ```sh
 config-wifi --ssid <ssid> --password <pass> --start
 config-modem --service 1nce --start
-config-gps --start-service
+config-gps --backend serial --start-service
 config-birdnet --start-service
 ```

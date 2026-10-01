@@ -3,6 +3,8 @@ alsa-utils
 chrony
 curl
 gpiod|libgpiod-tools
+gpsd
+gpsd-clients
 iftop
 jq
 libffi-dev

@@ -4,9 +4,10 @@
 
 import datetime
 import importlib.util
+import json
 import math
 import os
-import subprocess
+import socket
 import sys
 import time
 from pathlib import Path
@@ -42,13 +43,12 @@ STATE_PATH = STATE_DIR / "gps-state.env"
 DEFAULT_INTERVAL_SEC = 60
 DEFAULT_ADDR = "0x10"
 DEFAULT_BUS = 1
-DEFAULT_SERIAL_BAUD = 9600
 DEFAULT_SERIAL_COLLECT_SEC = 5.0
-SERIAL_PORT_GLOBS = ("/dev/serial/by-id/*", "/dev/ttyACM*", "/dev/ttyUSB*")
+DEFAULT_GPSD_HOST = "127.0.0.1"
+DEFAULT_GPSD_PORT = 2947
 DEFAULT_LOCATION_MOVE_THRESHOLD_M = 1000.0
 DEFAULT_INITIAL_FIX_MINUTES = 5.0
 INITIAL_FIX_SAMPLE_INTERVAL_SEC = 10
-DEFAULT_TIME_CONFLICT_SEC = 300.0
 ERROR_SLEEP_SEC = 15
 MAX_NMEA_BUFFER_BYTES = 8192
 
@@ -74,22 +74,6 @@ def config_float(config: dict[str, str], key: str, default: float) -> float:
         return float(config_value(config, key, str(default)))
     except ValueError:
         return default
-
-
-def timedatectl_value(key: str, default: str = "") -> str:
-    proc = subprocess.run(
-        ["timedatectl", "show", "-p", key, "--value"],
-        text=True,
-        capture_output=True,
-    )
-    if proc.returncode != 0:
-        return default
-    return proc.stdout.strip() or default
-
-
-def system_time_synchronized() -> bool:
-    return timedatectl_value("SystemClockSynchronized", "").lower() == "yes" or \
-        timedatectl_value("NTPSynchronized", "").lower() == "yes"
 
 
 def current_utc() -> datetime.datetime:
@@ -171,34 +155,29 @@ def write_state(status: str, message: str, fix: dict[str, object] | None = None)
     write_runtime_file(STATE_PATH, "\n".join(lines) + "\n")
 
 
-def set_system_time(gps_time: datetime.datetime) -> None:
-    old_time = current_utc()
-    timestamp = gps_time.astimezone(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
-    try:
-        time.clock_settime(time.CLOCK_REALTIME, gps_time.timestamp())
-    except (OSError, PermissionError) as exc:
-        raise RuntimeError(f"failed to set system time from GPS: {exc}") from exc
-    print(f"Updated system UTC time from GPS to {timestamp}")
-    report_event(
-        "gps_time_updated",
-        severity="notice",
-        details={
-            "old_utc_time": state_value(old_time),
-            "new_utc_time": state_value(gps_time),
-            "source": "gps",
-        },
-        dedupe_window=300,
-    )
-
-
 def read_i2c_gps_chunk(bus_num: int, addr_str: str) -> str:
+    """u-blox DDC (I2C): 0xFD/0xFE are the high/low bytes of a 16-bit count
+    of bytes currently queued in the module's output buffer. Reading only
+    0xFD truncates to the top 8 bits -- anything over 255 bytes queued
+    (about 2 seconds of normal 1Hz NMEA output) was silently under-read,
+    so steady-state polling fell further behind real time every cycle
+    instead of draining the module's buffer, making gps_time look
+    increasingly stale relative to the system clock. 0xFFFF is u-blox's
+    documented sentinel for "no data available", not a literal 65535-byte
+    read. The single-read size is capped at MAX_NMEA_BUFFER_BYTES so a
+    long-neglected buffer (or a corrupted register read) can't block the
+    main loop for an unbounded amount of time; a backlog beyond that just
+    drains over a few more poll cycles."""
     import smbus2
 
     i2c_addr = int(addr_str, 16)
     with smbus2.SMBus(bus_num) as bus:
-        available = bus.read_byte_data(i2c_addr, 0xFD)
-        if available <= 0:
+        high = bus.read_byte_data(i2c_addr, 0xFD)
+        low = bus.read_byte_data(i2c_addr, 0xFE)
+        available = (high << 8) | low
+        if available <= 0 or available == 0xFFFF:
             return ""
+        available = min(available, MAX_NMEA_BUFFER_BYTES)
         raw_chars = [chr(bus.read_byte_data(i2c_addr, 0xFF)) for _ in range(available)]
     return "".join(raw_chars)
 
@@ -287,114 +266,90 @@ def parse_i2c_gps(bus_num: int, addr_str: str, buffer: str) -> tuple[dict[str, o
     return parse_nmea_fix(lines, f"i2c:{addr_str}"), remainder
 
 
-def autodetect_serial_port() -> str | None:
-    import glob
+class GpsdClient:
+    """Reads position fixes from gpsd's local JSON protocol, rather than
+    opening the GPS serial device directly. gpsd is already the sole owner
+    of that device -- chrony also reads it (via gpsd's SHM feed) for time,
+    see chrony.conf -- so a second direct reader here would just fight gpsd
+    for the port the same way chrony and this service used to fight each
+    other over the system clock."""
 
-    for pattern in SERIAL_PORT_GLOBS:
-        matches = sorted(glob.glob(pattern))
-        if matches:
-            return matches[0]
-    return None
-
-
-class SerialGps:
-    """Reads NMEA from a USB/UART GPS exposed as a serial character device."""
-
-    def __init__(self, port_hint: str, baud: int) -> None:
-        self.port_hint = port_hint
-        self.baud = baud
-        self.handle = None
-        self.port: str | None = None
-
-    def _resolve_port(self) -> str | None:
-        if self.port_hint:
-            return self.port_hint if os.path.exists(self.port_hint) else None
-        return autodetect_serial_port()
+    def __init__(self, host: str = DEFAULT_GPSD_HOST, port: int = DEFAULT_GPSD_PORT) -> None:
+        self.host = host
+        self.port = port
+        self.sock: socket.socket | None = None
+        self.buffer = ""
 
     def close(self) -> None:
-        if self.handle is not None:
+        if self.sock is not None:
             try:
-                self.handle.close()
+                self.sock.close()
             except Exception:
                 pass
-        self.handle = None
-        self.port = None
+        self.sock = None
+        self.buffer = ""
 
-    def _ensure_open(self) -> None:
-        if self.handle is not None:
+    def _ensure_connected(self) -> None:
+        if self.sock is not None:
             return
-        import serial
+        sock = socket.create_connection((self.host, self.port), timeout=5)
+        sock.sendall(b'?WATCH={"enable":true,"json":true}\n')
+        self.sock = sock
+        self.buffer = ""
 
-        port = self._resolve_port()
-        if not port:
-            hint = self.port_hint or " or ".join(SERIAL_PORT_GLOBS)
-            raise RuntimeError(f"no GPS serial device found ({hint})")
-        self.handle = serial.Serial(port, baudrate=self.baud, timeout=1)
-        self.port = port
-        print(f"Opened GPS serial port {port} @ {self.baud} baud")
+    def _read_line(self, deadline: float) -> str | None:
+        assert self.sock is not None
+        while "\n" not in self.buffer:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            self.sock.settimeout(max(0.1, remaining))
+            try:
+                chunk = self.sock.recv(4096)
+            except (socket.timeout, TimeoutError):
+                return None
+            if not chunk:
+                raise RuntimeError("gpsd closed the connection")
+            self.buffer += chunk.decode("ascii", errors="ignore")
+        line, self.buffer = self.buffer.split("\n", 1)
+        return line
 
     def read_fix(self, collect_seconds: float = DEFAULT_SERIAL_COLLECT_SEC) -> dict[str, object] | None:
-        self._ensure_open()
-        assert self.handle is not None
-
+        self._ensure_connected()
         deadline = time.monotonic() + collect_seconds
-        lines: list[str] = []
-        have_rmc = have_gga = False
         while time.monotonic() < deadline:
-            raw = self.handle.readline()
-            if not raw:
+            line = self._read_line(deadline)
+            if not line:
                 continue
-            line = raw.decode("ascii", errors="ignore").strip()
-            if not line.startswith("$"):
+            try:
+                report = json.loads(line)
+            except ValueError:
                 continue
-            lines.append(line)
-            tag = line[3:6].upper()
-            if tag == "RMC":
-                have_rmc = True
-            elif tag == "GGA":
-                have_gga = True
-            if have_rmc and have_gga:
-                break
-
-        if not lines:
-            return None
-        return parse_nmea_fix(lines, f"serial:{self.port}")
-
-
-def maybe_update_time(
-    fix: dict[str, object],
-    conflict_threshold_sec: float,
-    allow_sync: bool,
-) -> None:
-    if not allow_sync:
-        return
-    gps_time = fix.get("gps_time")
-    if not isinstance(gps_time, datetime.datetime):
-        return
-    if not system_time_synchronized():
-        set_system_time(gps_time)
-        return
-    drift_sec = abs((current_utc() - gps_time).total_seconds())
-    if drift_sec < conflict_threshold_sec:
-        return
-    # timedatectl's "synchronized" flag only means NTP succeeded at some
-    # point this boot, not that it's still accurate -- on this fleet's
-    # flaky WireGuard/carrier uplinks it can stay "yes" long after the
-    # reference is unreachable while the clock free-runs. A disagreement
-    # this large is worth trusting GPS over that stale flag rather than
-    # just logging it forever with nothing ever correcting it.
-    report_event(
-        "gps_time_conflict",
-        severity="warning",
-        details={
-            "system_utc_time": state_value(current_utc()),
-            "gps_utc_time": state_value(gps_time),
-            "drift_sec": f"{drift_sec:.1f}",
-            "source": "gps",
-        },
-        dedupe_window=1800,
-    )
-    set_system_time(gps_time)
+            if report.get("class") != "TPV":
+                continue
+            mode = report.get("mode", 0)
+            if mode < 2:
+                continue
+            lat = report.get("lat")
+            lon = report.get("lon")
+            if lat is None or lon is None:
+                continue
+            gps_time = None
+            time_str = report.get("time")
+            if time_str:
+                try:
+                    gps_time = datetime.datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+                except ValueError:
+                    gps_time = None
+            return {
+                "latitude": float(lat),
+                "longitude": float(lon),
+                "altitude": float(report["alt"]) if report.get("alt") is not None else None,
+                "fix": int(mode),
+                "gps_time": gps_time,
+                "source": f"gpsd:{report.get('device', self.host)}",
+            }
+        return None
 
 
 _server_context: dict[str, str] | None = None
@@ -534,15 +489,11 @@ def main() -> int:
     interval_sec = max(5, config_int(config, "GPS_INTERVAL_SEC", DEFAULT_INTERVAL_SEC))
     bus_num = config_int(config, "GPS_I2C_BUS", DEFAULT_BUS)
     addr_str = config_value(config, "GPS_I2C_ADDR", DEFAULT_ADDR)
-    serial_port = config_value(config, "GPS_SERIAL_PORT", "")
-    serial_baud = config_int(config, "GPS_SERIAL_BAUD", DEFAULT_SERIAL_BAUD)
-    allow_sync = config_bool(config, "GPS_SYNC_TIME", True)
     allow_location = config_bool(config, "GPS_UPDATE_LOCATION", True)
     location_threshold_m = max(
         0.0, config_float(config, "GPS_LOCATION_MOVE_THRESHOLD_M", DEFAULT_LOCATION_MOVE_THRESHOLD_M)
     )
     initial_fix_sec = max(0.0, config_float(config, "GPS_INITIAL_FIX_MINUTES", DEFAULT_INITIAL_FIX_MINUTES)) * 60
-    conflict_threshold_sec = max(0.0, config_float(config, "GPS_TIME_CONFLICT_SEC", DEFAULT_TIME_CONFLICT_SEC))
     nmea_buffer = ""
 
     if backend not in ("i2c", "serial"):
@@ -551,22 +502,22 @@ def main() -> int:
         write_state("error", message)
         return 1
 
-    serial_gps = SerialGps(serial_port, serial_baud) if backend == "serial" else None
+    # Location only -- time sync is chrony's job (see chrony.conf's GPS
+    # refclock, fed by gpsd). sensos-gps never touches the system clock.
+    gpsd_client = GpsdClient() if backend == "serial" else None
 
     if backend == "serial":
-        source_desc = f"port={serial_port or 'autodetect'} baud={serial_baud}"
+        source_desc = "via gpsd"
     else:
         source_desc = f"i2c_bus={bus_num} i2c_addr={addr_str}"
 
     print(
         f"sensos-gps starting: backend={backend} {source_desc} interval={interval_sec}s "
-        f"sync_time={'yes' if allow_sync else 'no'} "
         f"update_location={'yes' if allow_location else 'no'}"
     )
     write_state(
         "starting",
         f"backend={backend} {source_desc} interval={interval_sec}s "
-        f"sync_time={'yes' if allow_sync else 'no'} "
         f"update_location={'yes' if allow_location else 'no'}",
     )
 
@@ -578,8 +529,8 @@ def main() -> int:
                 return fix
         else:
             def read_one_fix():
-                assert serial_gps is not None
-                return serial_gps.read_fix()
+                assert gpsd_client is not None
+                return gpsd_client.read_fix()
 
         print(f"Acquiring initial GPS fix (sampling for up to {initial_fix_sec / 60:.1f} min)...")
         initial_fix = acquire_initial_fix(read_one_fix, INITIAL_FIX_SAMPLE_INTERVAL_SEC, initial_fix_sec)
@@ -599,8 +550,8 @@ def main() -> int:
             if backend == "i2c":
                 fix, nmea_buffer = parse_i2c_gps(bus_num, addr_str, nmea_buffer)
             else:
-                assert serial_gps is not None
-                fix = serial_gps.read_fix()
+                assert gpsd_client is not None
+                fix = gpsd_client.read_fix()
             if fix is None:
                 message = "No valid GPS fix available."
                 print(message)
@@ -609,7 +560,6 @@ def main() -> int:
                 continue
             message = f"GPS fix: lat={fix['latitude']:.6f} lon={fix['longitude']:.6f} source={fix['source']}"
             print(message)
-            maybe_update_time(fix, conflict_threshold_sec, allow_sync)
             if allow_location:
                 latitude = fix.get("latitude")
                 longitude = fix.get("longitude")
@@ -618,11 +568,7 @@ def main() -> int:
                     # acquisition phase above. Safe on its own here because the
                     # threshold is kilometer-scale (see maybe_update_location_from_fix):
                     # ordinary GPS noise on any one fix is nowhere near enough to
-                    # spuriously cross it. This is deliberately cheap and piggybacks
-                    # on the regular poll cycle that's already running for time-sync
-                    # (which must stay continuous regardless of location -- a box
-                    # with no internet/NTP has nothing but GPS to correct clock drift
-                    # with) rather than running its own separate polling cadence.
+                    # spuriously cross it.
                     maybe_update_location_from_fix(latitude, longitude, location_threshold_m)
             write_state("fix", message, fix)
             time.sleep(interval_sec)
@@ -630,8 +576,8 @@ def main() -> int:
             message = f"GPS service failure: {exc}"
             print(message, file=sys.stderr)
             write_state("error", message)
-            if serial_gps is not None:
-                serial_gps.close()
+            if gpsd_client is not None:
+                gpsd_client.close()
             time.sleep(ERROR_SLEEP_SEC)
 
 

@@ -1,5 +1,6 @@
 [Unit]
-Description=Read GPS fix data and update device time/location
+Description=Read GPS fix data and update device location
+After=gpsd.service
 OnFailure=sensos-report-failure@%n.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
@@ -9,8 +10,6 @@ Type=simple
 User=sensos-runner
 Group=sensos-data
 UMask=0002
-CapabilityBoundingSet=CAP_SYS_TIME
-AmbientCapabilities=CAP_SYS_TIME
 NoNewPrivileges=true
 LoadCredential=api_password:/sensos/keys/api_password
 ExecStart=/sensos/python/venv/bin/python /sensos/libexec/sensos-gps.py
