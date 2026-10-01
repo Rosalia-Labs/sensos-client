@@ -15,6 +15,7 @@ SYSTEM_CONFIG_STATE_FILE="${DEPLOY_ROOT}/etc/system-config-state.env"
 
 BOOT_CONFIG_FILE="/boot/firmware/config.txt"
 MODULES_FILE="/etc/modules"
+INITRAMFS_CONF_FILE="/etc/initramfs-tools/initramfs.conf"
 JOURNALD_CONF_FILE="/etc/systemd/journald.conf"
 CHRONY_CONF_FILE="/etc/chrony/chrony.conf"
 NFTABLES_CONF_FILE="/etc/nftables.conf"
@@ -168,6 +169,47 @@ configure_pi_hardware() {
     write_system_config_state "${reboot_required}"
 }
 
+configure_initramfs_modules() {
+    # Confirmed field incident (biosense-1-11, 2026-09-29/30): a plain kernel
+    # upgrade on Pi 5/Bookworm can leave dpkg half-configured --
+    # update-initramfs's postinst hook fails with "mkinitramfs: failed to
+    # determine device for /" under the default MODULES=dep (only modules
+    # needed for the *currently running* kernel get bundled). MODULES=most
+    # is the confirmed fix. This was only ever applied by hand on that one
+    # device during the incident, never codified here -- so it protected
+    # nothing else, and didn't even necessarily persist on that device
+    # across a later re-image. Every device comes from the same base image,
+    # so every Pi (not just Pi 5 -- this is cheap and harmless on any model)
+    # gets it going forward, closing the gap before the next kernel upgrade
+    # hits it again.
+    if ! is_raspberry_pi_host; then
+        log "host does not appear to be Raspberry Pi hardware; skipping initramfs MODULES setting"
+        return
+    fi
+
+    [[ -f "${INITRAMFS_CONF_FILE}" ]] || {
+        log "no ${INITRAMFS_CONF_FILE} found; skipping initramfs MODULES setting"
+        return
+    }
+
+    if grep -Fxq 'MODULES=most' "${INITRAMFS_CONF_FILE}"; then
+        return
+    fi
+
+    local tmp_file
+    tmp_file="$(mktemp "$(dirname "${INITRAMFS_CONF_FILE}")/.$(basename "${INITRAMFS_CONF_FILE}").XXXXXX")"
+    if grep -Eq '^MODULES=' "${INITRAMFS_CONF_FILE}"; then
+        sed 's/^MODULES=.*/MODULES=most/' "${INITRAMFS_CONF_FILE}" >"${tmp_file}"
+    else
+        cp -p "${INITRAMFS_CONF_FILE}" "${tmp_file}"
+        printf 'MODULES=most\n' >>"${tmp_file}"
+    fi
+    sync "${tmp_file}" 2>/dev/null || true
+    mv -f "${tmp_file}" "${INITRAMFS_CONF_FILE}"
+    sync "$(dirname "${INITRAMFS_CONF_FILE}")" 2>/dev/null || sync
+    log "set MODULES=most in ${INITRAMFS_CONF_FILE} (takes effect on the next kernel upgrade's initramfs rebuild)"
+}
+
 configure_journald() {
     install -D -m 0644 /dev/null "${JOURNALD_CONF_FILE}"
     printf 'Storage=persistent\n' >"${JOURNALD_CONF_FILE}"
@@ -243,6 +285,7 @@ main() {
     require_inputs
     run_preflight
     configure_pi_hardware
+    configure_initramfs_modules
     configure_journald
     configure_chrony
     configure_nftables

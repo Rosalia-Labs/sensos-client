@@ -26,6 +26,8 @@ source "$CONFIG_FILE"
 : "${RATE:?Missing RATE in config}"
 : "${MAX_TIME:?Missing MAX_TIME in config}"
 
+DEVICE_WAIT_TIMEOUT_SEC="${DEVICE_WAIT_TIMEOUT_SEC:-30}"
+
 if [ -z "$BASE_DIR" ]; then
     BASE_DIR="${CLIENT_ROOT}/data/audio_recordings"
 fi
@@ -74,6 +76,33 @@ location_token() {
     printf '_%s_%s\n' \
         "$(format_coord_token "${latitude}" "N" "S")" \
         "$(format_coord_token "${longitude}" "E" "W")"
+}
+
+wait_for_recording_device() {
+    # USB sound cards (the common case) don't always finish ALSA enumeration
+    # by the time this service starts at boot -- After=network.target is the
+    # only ordering this unit declares, nothing about the audio subsystem.
+    # Without this wait, arecord fails immediately, OnFailure= fires, and
+    # Restart=always brings it back up a few seconds later once the device
+    # has actually appeared -- a real boot-order race, not a genuine fault,
+    # but it still reports a confusing "service_failure" event showing
+    # active_state=active/result=success (the state by the time the report
+    # actually runs, not the state at the moment it failed). A cheap,
+    # instant hw-params probe (same technique config-arecord's get_hw_params
+    # uses) in a bounded wait here means the common case never reaches
+    # OnFailure= at all; a genuinely missing/broken device still falls
+    # through to the real arecord invocation below and fails/reports
+    # normally after the timeout.
+    local waited=0
+    while (( waited < DEVICE_WAIT_TIMEOUT_SEC )); do
+        if arecord --dump-hw-params -D "$DEVICE" -d 1 -f S16_LE /dev/null >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    echo "WARNING: recording device $DEVICE did not respond within ${DEVICE_WAIT_TIMEOUT_SEC}s; proceeding anyway." >&2
+    return 1
 }
 
 LOCATION_TOKEN="$(location_token)"
@@ -128,6 +157,8 @@ cleanup() {
 }
 
 trap cleanup EXIT INT TERM
+
+wait_for_recording_device
 
 echo "Starting continuous recording with the following settings:"
 echo "  DEVICE:   $DEVICE"
