@@ -540,6 +540,45 @@ Behavior:
 - `server-owns`: the server becomes authoritative after acceptance, and the client may prune old local copies later
 - `--delete-after-days` is only valid with `--ownership-model server-owns`
 
+### `config-teros`
+
+Configures a USB-attached METER TEROS 12 node (see [TEROS USB node](teros-usb-node.md)).
+TEROS is USB/serial, not I2C -- it gets its own config, service, and
+requirements file, deliberately separate from `config-i2c-sensors`. It still
+writes into the same shared readings table that service uploads, via
+`config-i2c-uploads`/`sensos-upload-i2c.service` -- nothing about storage or
+upload is I2C-specific, so there's no separate upload path to configure.
+
+Important flags:
+
+- `--device`
+- `--interval`
+- `--subsamples`
+- `--enable-service`
+- `--start-service`
+- `--disable`
+
+Typical use:
+
+```sh
+# Port autodetected:
+config-teros --start-service
+
+# Explicit stable device path:
+config-teros --device /dev/teros-node-0 --interval 300 --start-service
+```
+
+Behavior:
+
+- writes `/sensos/etc/teros.conf`
+- with no `--device`, autodetects in order: `/dev/serial/by-id/*`, then `/dev/ttyACM*`, then `/dev/ttyUSB*`. Prefer a `/dev/serial/by-id/` path (or the udev-assigned `/dev/teros-node-0`) because it is stable across reboots and re-plugging
+- installs a udev rule that names the node `/dev/teros-node-0` and restarts `sensos-read-teros.service` when it is plugged in
+- each probe on the node is polled as its own sensor with `sensor_type` `TEROS12` and a `device_address` of `0x101`, `0x102`, and so on -- the synthetic address keeps every probe above the 7-bit I2C range so it can never collide with a real I2C sensor sharing the same table
+- installs optional TEROS Python dependencies (`pyserial`) on demand before enabling the reader service
+- enables the reader service for future boot by default
+- leaves the reader service stopped unless `--start-service` is supplied
+- controls `sensos-read-teros.service`
+
 ### `config-birdnet-uploads`
 
 Configures the continuous BirdNET result upload service and its ownership
@@ -1194,6 +1233,26 @@ Behavior:
 - runs `i2cdetect -y 1` when the I2C device node is present
 - is intended for field debugging on deployed clients
 
+### `debug-teros`
+
+Pings a USB-attached TEROS 12 node and prints which SDI-12 addresses are occupied by which probe.
+
+Typical use:
+
+```sh
+debug-teros
+debug-teros --device /dev/ttyUSB0
+```
+
+Behavior:
+
+- reads `TEROS_DEVICE` from `/sensos/etc/teros.conf` unless `--device` is given
+- lists `/dev/teros-node-*`, `/dev/ttyUSB*`, and `/dev/ttyACM*`, and `sensos-runner` access to the device
+- queries the node inventory and prints, per probe, the SDI-12 address, the SensOS `device_address`, model, firmware, and METER serial number
+- runs the query as `sensos-runner` when possible so permission problems surface the same way they would in the service
+- shows `sensos-read-teros.service` state and recent log lines
+- the node resets when the port opens, so the query takes about eight seconds
+
 ## Recommended Bring-Up Example
 
 A common operator sequence looks like:
@@ -1214,5 +1273,6 @@ Then add optional features as needed:
 config-wifi --ssid <ssid> --password <pass> --start
 config-modem --service 1nce --start
 config-gps --backend serial --start-service
+config-teros --start-service
 config-birdnet --start-service
 ```

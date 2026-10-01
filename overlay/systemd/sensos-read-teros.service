@@ -1,0 +1,18 @@
+[Unit]
+Description=Read TEROS 12 probes from a USB node and store readings
+OnFailure=sensos-report-failure@%n.service
+
+[Service]
+Type=simple
+User=sensos-runner
+Group=sensos-data
+UMask=0002
+ExecStart=/sensos/python/venv/bin/python /sensos/libexec/read-teros-sensors.py
+WorkingDirectory=/sensos/data
+StandardOutput=journal
+StandardError=journal
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

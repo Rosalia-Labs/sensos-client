@@ -73,6 +73,7 @@ RESTART_SAFE_SENSOS_UNITS=(
     sensos-read-i2c.service
     sensos-upload-i2c.service
     sensos-gps.service
+    sensos-read-teros.service
 )
 
 log() {

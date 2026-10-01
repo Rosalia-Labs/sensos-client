@@ -19,6 +19,7 @@ OVERLAY_SYSTEMD_DIR="${OVERLAY_ROOT}/systemd"
 BIRDNET_REQUIREMENTS_SOURCE="${CLIENT_ROOT}/python/requirements-birdnet.txt"
 I2C_REQUIREMENTS_SOURCE="${CLIENT_ROOT}/python/requirements-i2c.txt"
 GPS_REQUIREMENTS_SOURCE="${CLIENT_ROOT}/python/requirements-gps.txt"
+TEROS_REQUIREMENTS_SOURCE="${CLIENT_ROOT}/python/requirements-teros.txt"
 
 DEPLOY_ETC_DIR="${DEPLOY_ROOT}/etc"
 DEPLOY_LIBEXEC_DIR="${DEPLOY_ROOT}/libexec"
@@ -117,6 +118,15 @@ install_gps_requirements() {
         log "installed ${DEPLOY_ETC_DIR}/gps-requirements.txt from ${GPS_REQUIREMENTS_SOURCE}"
     else
         log "no GPS requirements file found at ${GPS_REQUIREMENTS_SOURCE}; skipping"
+    fi
+}
+
+install_teros_requirements() {
+    if [[ -f "${TEROS_REQUIREMENTS_SOURCE}" ]]; then
+        install -m 0644 "${TEROS_REQUIREMENTS_SOURCE}" "${DEPLOY_ETC_DIR}/teros-requirements.txt"
+        log "installed ${DEPLOY_ETC_DIR}/teros-requirements.txt from ${TEROS_REQUIREMENTS_SOURCE}"
+    else
+        log "no TEROS requirements file found at ${TEROS_REQUIREMENTS_SOURCE}; skipping"
     fi
 }
 
@@ -241,6 +251,7 @@ main() {
     install_birdnet_requirements
     install_i2c_requirements
     install_gps_requirements
+    install_teros_requirements
     remove_legacy_symlinks
     install_host_entries "${OVERLAY_BIN_DIR}" "${HOST_BIN_DIR}" 0755
     install_host_entries "${OVERLAY_SYSTEMD_DIR}" "${HOST_SYSTEMD_DIR}" 0644

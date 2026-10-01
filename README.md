@@ -13,5 +13,6 @@ Other docs:
 - [Developer security notes](docs/security-development.md)
 - [BirdNET setup](docs/birdnet.md)
 - [I2C upload API](docs/i2c-uploads.md)
+- [TEROS USB node](docs/teros-usb-node.md)
 - [Network capture](docs/network-capture.md)
 - [Versioning](docs/versioning.md)

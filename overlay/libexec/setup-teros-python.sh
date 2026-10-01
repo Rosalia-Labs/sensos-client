@@ -1,0 +1,111 @@
+#!/bin/bash
+
+set -euo pipefail
+
+DEPLOY_ROOT="${SENSOS_CLIENT_ROOT:-/sensos}"
+TEROS_REQUIREMENTS_FILE="${DEPLOY_ROOT}/etc/teros-requirements.txt"
+VENV_DIR="${DEPLOY_ROOT}/python/venv"
+STAMP_FILE="${VENV_DIR}/.teros-requirements.sha256"
+PYTHON_BIN="${VENV_DIR}/bin/python"
+VERIFY_ONLY=0
+
+log() {
+    printf '[libexec/setup-teros-python] %s\n' "$*"
+}
+
+die() {
+    printf '[libexec/setup-teros-python] ERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+require_root() {
+    [[ "${EUID}" -eq 0 ]] || die "run as root"
+}
+
+require_inputs() {
+    [[ -f "${TEROS_REQUIREMENTS_FILE}" ]] || die "missing ${TEROS_REQUIREMENTS_FILE}"
+    [[ -x "${PYTHON_BIN}" ]] || die "missing ${PYTHON_BIN}; run ./install first"
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --verify-only)
+                VERIFY_ONLY=1
+                ;;
+            *)
+                die "unknown option: $1"
+                ;;
+        esac
+        shift
+    done
+}
+
+requirements_declared() {
+    grep -Eq '^\s*[^#[:space:]]' "${TEROS_REQUIREMENTS_FILE}"
+}
+
+requirements_digest() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "${TEROS_REQUIREMENTS_FILE}" | awk '{print $1}'
+        return
+    fi
+
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "${TEROS_REQUIREMENTS_FILE}" | awk '{print $1}'
+        return
+    fi
+
+    die "missing sha256sum/shasum; cannot track TEROS Python requirements state"
+}
+
+install_requirements_if_needed() {
+    local current_digest
+    local previous_digest=""
+
+    current_digest="$(requirements_digest)"
+    if [[ -f "${STAMP_FILE}" ]]; then
+        previous_digest="$(head -n 1 "${STAMP_FILE}" | tr -d '[:space:]')"
+    fi
+
+    if [[ "${current_digest}" == "${previous_digest}" ]]; then
+        log "TEROS Python requirements unchanged; skipping pip"
+        return
+    fi
+
+    if requirements_declared; then
+        log "installing TEROS Python dependencies from ${TEROS_REQUIREMENTS_FILE}"
+        "${PYTHON_BIN}" -m pip install -r "${TEROS_REQUIREMENTS_FILE}"
+    else
+        log "no TEROS Python requirements declared; skipping pip"
+    fi
+
+    printf '%s\n' "${current_digest}" >"${STAMP_FILE}"
+}
+
+requirements_are_current() {
+    local current_digest
+    local previous_digest=""
+
+    current_digest="$(requirements_digest)"
+    if [[ -f "${STAMP_FILE}" ]]; then
+        previous_digest="$(head -n 1 "${STAMP_FILE}" | tr -d '[:space:]')"
+    fi
+    [[ -n "${previous_digest}" && "${current_digest}" == "${previous_digest}" ]]
+}
+
+main() {
+    parse_args "$@"
+    require_root
+    require_inputs
+    if [[ "${VERIFY_ONLY}" == "1" ]]; then
+        if requirements_are_current; then
+            log "TEROS Python requirements already provisioned"
+            return 0
+        fi
+        die "TEROS Python requirements are not provisioned for current config; rerun ./install or ./upgrade with connectivity"
+    fi
+    install_requirements_if_needed
+}
+
+main "$@"

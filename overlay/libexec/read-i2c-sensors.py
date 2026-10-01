@@ -3,8 +3,6 @@
 # Copyright (c) 2025 Rosalia Labs LLC
 
 import atexit
-import datetime
-import heapq
 import importlib.util
 import os
 import sys
@@ -20,6 +18,7 @@ UTILS_FILE = os.path.join(str(CLIENT_ROOT), "libexec", "utils.py")
 sys.path.insert(0, SCRIPT_DIR)
 
 from i2c_data import connect_db, ensure_schema
+from sensor_polling import get_interval, get_subsamples_per_interval, run_polling_loop
 
 if not os.path.isfile(UTILS_FILE):
     raise RuntimeError(f"Missing utils.py at {UTILS_FILE}")
@@ -39,9 +38,6 @@ if not config:
     print(f"Config file missing or empty: {CONFIG_PATH}", file=sys.stderr)
     sys.exit(1)
 ensure_runtime_dir(CLIENT_ROOT / "data" / "microenv")
-
-MAX_ATTEMPTS = 3
-BACKOFF_MULTIPLIER = 2
 
 _i2c = None
 _cached = {
@@ -98,24 +94,6 @@ def safe_sensor_read(read_func, *args, **kwargs):
         raise
 
 
-def get_interval(key: str) -> Optional[int]:
-    value_str = config.get(key, "").strip()
-    if value_str:
-        try:
-            value = int(value_str)
-            return value if value > 0 else None
-        except ValueError:
-            return None
-    fallback_str = config.get("INTERVAL_SEC", "").strip()
-    if fallback_str:
-        try:
-            value = int(fallback_str)
-            return value if value > 0 else None
-        except ValueError:
-            return None
-    return None
-
-
 I2C_BUS_NUM = 1
 
 
@@ -168,62 +146,6 @@ def scan_i2c_addresses(candidate_addrs: set[int]) -> Optional[set[int]]:
             file=sys.stderr,
         )
         return None
-
-
-def get_subsamples_per_interval() -> int:
-    raw = config.get("SUBSAMPLES_PER_INTERVAL", "").strip()
-    if not raw:
-        return 1
-    try:
-        value = int(raw)
-    except ValueError:
-        return 1
-    return max(1, value)
-
-
-def average_sensor_samples(samples: list[dict]) -> Optional[dict]:
-    if not samples:
-        return None
-    sums: dict[str, float] = {}
-    counts: dict[str, int] = {}
-    for sample in samples:
-        if not sample:
-            continue
-        for key, value in sample.items():
-            try:
-                numeric = float(value)
-            except (TypeError, ValueError):
-                continue
-            sums[key] = sums.get(key, 0.0) + numeric
-            counts[key] = counts.get(key, 0) + 1
-    if not counts:
-        return None
-    averaged: dict[str, float] = {}
-    for key, total in sums.items():
-        count = counts.get(key, 0)
-        if count <= 0:
-            continue
-        averaged[key] = round(total / count, 3)
-    return averaged or None
-
-
-def read_with_retries(sensor: dict) -> Optional[dict]:
-    data = None
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        try:
-            data = safe_sensor_read(sensor["read_func"], sensor["addr"])
-            if data:
-                return data
-            print(
-                f"{sensor['sensor_type']} returned no data (attempt {attempt}/{MAX_ATTEMPTS})"
-            )
-        except Exception as exc:
-            print(
-                f"Error on attempt {attempt} reading {sensor['sensor_type']}: {exc}",
-                file=sys.stderr,
-            )
-        time.sleep(0.2)
-    return None
 
 
 def read_bme280(addr_str: str = None):
@@ -344,18 +266,6 @@ def read_lt150(addr_str: str = "0x49"):
         return None
 
 
-def flatten_sensor_data(sensor_data, device_address, sensor_type, timestamp):
-    if not sensor_data:
-        return []
-    flat = []
-    for key, value in sensor_data.items():
-        try:
-            flat.append((timestamp, device_address, sensor_type, key, float(value)))
-        except (TypeError, ValueError):
-            continue
-    return flat
-
-
 def store_readings(readings):
     if not readings:
         return
@@ -390,11 +300,11 @@ def main():
 
     scan_result = scan_i2c_addresses({int(addr, 16) for _, addr, _, _ in sensors})
 
-    polling_queue = []
+    polling_sensors = []
     for key, addr, sensor_type, read_func in sensors:
         interval_key = f"{key}_INTERVAL_SEC"
         explicitly_configured = bool(config.get(interval_key, "").strip())
-        base_interval = get_interval(interval_key)
+        base_interval = get_interval(config, interval_key)
         if base_interval is None:
             continue  # explicitly disabled (interval <= 0), or unset with no INTERVAL_SEC fallback either
 
@@ -402,69 +312,24 @@ def main():
             print(f"Skipping {sensor_type} at {addr}: not detected on the I2C bus.")
             continue
 
-        heapq.heappush(
-            polling_queue,
-            (
-                time.time(),
-                {
-                    "key": key,
-                    "addr": addr,
-                    "sensor_type": sensor_type,
-                    "read_func": read_func,
-                    "base_interval": base_interval,
-                    "current_interval": base_interval,
-                },
-            ),
+        # Wrap here, not inside the shared polling loop: the I2C bus-reset
+        # retry is specific to this transport and has no serial equivalent
+        # (see read-teros-sensors.py, which passes its read_func unwrapped).
+        polling_sensors.append(
+            {
+                "key": key,
+                "addr": addr,
+                "sensor_type": sensor_type,
+                "read_func": lambda a, _f=read_func: safe_sensor_read(_f, a),
+                "base_interval": base_interval,
+            }
         )
 
-    if not polling_queue:
+    if not polling_sensors:
         print("No sensors enabled. Exiting.")
         sys.exit(1)
 
-    subsamples_per_interval = get_subsamples_per_interval()
-    print(f"Using subsamples_per_interval={subsamples_per_interval}")
-    print("Entering sensor loop (priority queue with retries + backoff)")
-    while polling_queue:
-        now = time.time()
-        next_time, sensor = heapq.heappop(polling_queue)
-        wait = max(0, next_time - now)
-        if wait:
-            time.sleep(wait)
-
-        timestamp = datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-        print(
-            f"Polling {sensor['sensor_type']} at {sensor['addr']} "
-            f"with {subsamples_per_interval} subsample(s)..."
-        )
-
-        sample_values: list[dict] = []
-        subsample_spacing_sec = sensor["base_interval"] / max(subsamples_per_interval, 1)
-        for subsample_index in range(subsamples_per_interval):
-            sample = read_with_retries(sensor)
-            if sample:
-                sample_values.append(sample)
-            if subsample_index < subsamples_per_interval - 1:
-                time.sleep(subsample_spacing_sec)
-
-        averaged_data = average_sensor_samples(sample_values)
-        if averaged_data:
-            print(
-                f"{sensor['sensor_type']} ({sensor['addr']}) averaged "
-                f"{len(sample_values)}/{subsamples_per_interval} samples: {averaged_data}"
-            )
-            readings = flatten_sensor_data(
-                averaged_data, sensor["addr"], sensor["sensor_type"], timestamp
-            )
-            store_readings(readings)
-            sensor["current_interval"] = sensor["base_interval"]
-        else:
-            print(
-                f"No valid subsamples were captured for {sensor['sensor_type']} at {sensor['addr']}; backing off."
-            )
-            sensor["current_interval"] = min(sensor["current_interval"] * BACKOFF_MULTIPLIER, 3600)
-
-        next_poll_time = next_time + sensor["current_interval"]
-        heapq.heappush(polling_queue, (next_poll_time, sensor))
+    run_polling_loop(polling_sensors, get_subsamples_per_interval(config), store_readings)
 
 
 if __name__ == "__main__":
