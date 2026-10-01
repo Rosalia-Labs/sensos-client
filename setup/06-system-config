@@ -176,7 +176,14 @@ configure_journald() {
 
 configure_chrony() {
     if [[ -f "${OVERLAY_CHRONY_CONF}" ]]; then
-        install_managed_file "${OVERLAY_CHRONY_CONF}" "${CHRONY_CONF_FILE}"
+        if install_managed_file "${OVERLAY_CHRONY_CONF}" "${CHRONY_CONF_FILE}"; then
+            # install_managed_file only copies the file -- chronyd keeps
+            # running on whatever config it loaded at its own last start
+            # until explicitly told to reload. Without this, a chrony.conf
+            # change (e.g. a new refclock) silently has no effect until
+            # something else happens to restart chrony or the host reboots.
+            systemctl try-reload-or-restart chrony.service 2>/dev/null || true
+        fi
     else
         log "no overlay chrony config found; keeping host chrony configuration"
     fi
