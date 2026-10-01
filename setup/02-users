@@ -16,6 +16,7 @@ SENSOS_ADMIN_GROUPS=(
     plugdev
     netdev
     audio
+    systemd-journal
 )
 
 SENSOS_RUNNER_GROUPS=(
