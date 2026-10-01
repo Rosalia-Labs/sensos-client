@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import datetime
 import heapq
+import itertools
 import sys
 import time
 from typing import Callable, Optional
@@ -125,17 +126,27 @@ def run_polling_loop(
     """Runs forever. Each entry in `sensors` needs: key, addr, sensor_type,
     read_func, base_interval. Never returns under normal operation -- callers
     should treat an empty `sensors` list as a startup error before calling
-    this, not rely on it returning."""
-    polling_queue: list[tuple[float, dict]] = []
+    this, not rely on it returning.
+
+    Queue entries are (next_time, tiebreaker, sensor) rather than plain
+    (next_time, sensor): heapq falls back to comparing the second tuple
+    element to break a tie on the first, and sensor dicts aren't orderable --
+    two entries queued in the same tight loop can easily get the identical
+    time.time() value (seen in practice), which would otherwise crash with
+    "'<' not supported between instances of 'dict' and 'dict'". The
+    tiebreaker is a monotonically increasing counter, so ties always resolve
+    on it before ever reaching the dicts."""
+    tiebreaker = itertools.count()
+    polling_queue: list[tuple[float, int, dict]] = []
     for sensor in sensors:
         sensor["current_interval"] = sensor["base_interval"]
-        heapq.heappush(polling_queue, (time.time(), sensor))
+        heapq.heappush(polling_queue, (time.time(), next(tiebreaker), sensor))
 
     print(f"Using subsamples_per_interval={subsamples_per_interval}")
     print("Entering sensor loop (priority queue with retries + backoff)")
     while polling_queue:
         now = time.time()
-        next_time, sensor = heapq.heappop(polling_queue)
+        next_time, _, sensor = heapq.heappop(polling_queue)
         wait = max(0, next_time - now)
         if wait:
             time.sleep(wait)
@@ -181,4 +192,4 @@ def run_polling_loop(
             )
 
         next_poll_time = next_time + sensor["current_interval"]
-        heapq.heappush(polling_queue, (next_poll_time, sensor))
+        heapq.heappush(polling_queue, (next_poll_time, next(tiebreaker), sensor))
