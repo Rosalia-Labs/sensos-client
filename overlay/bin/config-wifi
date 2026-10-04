@@ -16,7 +16,6 @@ PARSE_SWITCHES_LIB="${OVERLAY_ROOT}/libexec/parse-switches.sh"
 SENSOS_ADMIN_HELPER_LIB="${OVERLAY_ROOT}/libexec/ensure-sensos-admin.sh"
 HOTSPOT_ENV_FILE="/etc/default/sensos-hotspot"
 HOTSPOT_SERVICE="sensos-hotspot.service"
-SENSOS_AP_CONNECTION_NAME="sensosap"
 IFACE_SUPPLIED=false
 
 for arg in "$@"; do
@@ -90,16 +89,7 @@ disable_hotspot_reclaim_on_next_boot() {
         echo "Disabled autoconnect for hotspot profile '${HOTSPOT_CONNECTION_NAME_VALUE}'."
     fi
 
-    if nmcli -t -f NAME connection show | grep -Fxq "${SENSOS_AP_CONNECTION_NAME}"; then
-        local sensos_ap_iface
-        sensos_ap_iface="$(nmcli -g connection.interface-name connection show "${SENSOS_AP_CONNECTION_NAME}" 2>/dev/null | head -n 1 || true)"
-        if [[ -z "${sensos_ap_iface}" || "${sensos_ap_iface}" == "${target_iface}" ]]; then
-            sudo nmcli connection down "${SENSOS_AP_CONNECTION_NAME}" 2>/dev/null || true
-            sudo nmcli connection modify "${SENSOS_AP_CONNECTION_NAME}" connection.autoconnect no || true
-            sudo nmcli connection modify "${SENSOS_AP_CONNECTION_NAME}" connection.autoconnect-priority -999 || true
-            echo "Disabled autoconnect for configured hotspot profile '${SENSOS_AP_CONNECTION_NAME}'."
-        fi
-    fi
+    "${OVERLAY_ROOT}/libexec/reconcile-hotspot.sh" retire "${target_iface}" >/dev/null 2>&1 || true
 
     echo "Hotspot mode on ${target_iface} has been retired so Wi-Fi client mode can use that radio."
 }
@@ -339,6 +329,22 @@ sudo nmcli con mod "${NM_CON_NAME}" connection.autoconnect-priority 50 || true
 echo "Autoconnect enabled."
 
 disable_hotspot_reclaim_on_next_boot "${iface}"
+
+write_wifi_config() {
+    local config_file="${OVERLAY_ROOT}/etc/wifi.conf"
+    mkdir -p "$(dirname "${config_file}")"
+    cat >"${config_file}" <<EOF
+# Auto-generated uplink configuration (password lives only in NetworkManager)
+UPLINK_SSID="${ssid}"
+UPLINK_INTERFACE="${iface}"
+UPLINK_NM_CONNECTION="${NM_CON_NAME}"
+UPDATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+EOF
+    chmod 664 "${config_file}"
+    echo "Uplink configuration written to ${config_file}"
+}
+
+write_wifi_config
 
 if [[ -z "${limit_up_kbit}" && -z "${limit_down_kbit}" ]]; then
     echo "No traffic caps requested; clearing any existing traffic caps on ${iface}"

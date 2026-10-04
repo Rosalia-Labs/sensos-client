@@ -802,7 +802,7 @@ Behavior:
 - Wi-Fi client mode and AP mode are mutually exclusive on the same interface
 - when `--iface` equals the hotspot-managed interface, prompts before replacing hotspot mode in interactive use
 - non-interactive hotspot replacement requires `--replace-hotspot`
-- hotspot replacement retires both the built-in bootstrap hotspot and the configured `sensosap` hotspot on that interface
+- hotspot replacement retires both the bootstrap hotspot (image default) and the configured `sensos-ap` hotspot on that interface
 - if the device has only one Wi-Fi NIC and that NIC must join an upstream Wi-Fi network, the device cannot also host a local AP at the same time
 - optionally applies traffic caps with `tc`
 - registers the interface with `vnstat` when available

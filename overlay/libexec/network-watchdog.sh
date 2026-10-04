@@ -133,70 +133,11 @@ is_ap_profile() {
     [[ "$(nm_prop "$1" 802-11-wireless.mode)" == "ap" ]]
 }
 
-# Find a wifi connection that's actually supposed to be an always-on AP, by
-# ACTUAL MODE, not name. config-hotspot's own connection-naming has not been
-# perfectly stable across the fleet's history, and a device that never
-# successfully ran config-hotspot may still be sitting on sensos-pigen's
-# original bootstrap AP under a different name entirely -- this is the same
-# discovery technique config-hotspot itself uses to find its own AP
-# connection, reused here so nothing in this script depends on a specific
-# connection name ever again.
-#
-# Critically, this only considers AP-mode profiles with autoconnect=yes.
-# config-wifi's disable_hotspot_reclaim_on_next_boot() deliberately retires an
-# AP profile (autoconnect=no, priority=-999) on single-radio devices when
-# that radio is being reclaimed for the client uplink instead -- it leaves
-# the profile in place, just parked. Without this filter, this watchdog would
-# find that parked profile, see it's inactive, and keep trying to bring it
-# back up every cycle -- fighting config-wifi's own decision and potentially
-# flipping a single-radio device's only radio back into AP mode, breaking the
-# very uplink it's supposed to be carrying.
-find_ap_connection() {
-    local name
-    while IFS= read -r name; do
-        [[ -n "${name}" ]] || continue
-        is_ap_profile "${name}" || continue
-        [[ "$(nm_prop "${name}" connection.autoconnect)" == "yes" ]] || continue
-        printf '%s\n' "${name}"
-        return 0
-    done < <(nm_saved_connections)
-    return 0
-}
-
-# The permanent local-access AP, if this device has one, is the last line of
-# recovery when the uplink is down -- it needs to be checked independently of
-# tunnel health, every run, not just assumed to still be there. Not every
-# device has one (single-radio units dedicate their only radio to the uplink
-# instead) -- the "is one even configured" check below is what makes this
-# self-adapt to that without hardcoding radio count.
+# The local-access AP is applied by reconcile-hotspot.sh, which makes it match
+# /sensos/etc/hotspot.conf. Run every cycle so a dropped AP comes back, and so
+# a pi-gen bootstrap profile is never restored: only the recorded intent is.
 check_ap() {
-    local ap_con active_ap
-
-    ap_con="$(find_ap_connection)"
-    [[ -n "${ap_con}" ]] || return 0
-
-    local name
-    active_ap=""
-    while IFS= read -r name; do
-        [[ -n "${name}" ]] || continue
-        if is_ap_profile "${name}"; then
-            active_ap="${name}"
-            break
-        fi
-    done < <(nm_active_connections)
-    [[ -n "${active_ap}" ]] && return 0
-
-    log "Local access point '${ap_con}' is configured but not active; bringing it up."
-    report_event ap_down --severity warning \
-        --detail "network=${NETWORK_NAME}" --detail "connection=${ap_con}" \
-        --dedupe-window 1800 --dedupe-key network
-    if nmcli connection up "${ap_con}" >>"${LOG_FILE}" 2>&1; then
-        log "Local access point '${ap_con}' restored."
-        report_event ap_recovered --severity info \
-            --detail "network=${NETWORK_NAME}" --detail "connection=${ap_con}"
-    else
-        log "Failed to bring '${ap_con}' back up; will retry next cycle."
-    fi
+    "${SCRIPT_DIR}/reconcile-hotspot.sh" reconcile --report || log "Local access point reconcile failed; continuing."
 }
 
 # Wi-Fi signal quality reporting for client (non-AP) interfaces.
@@ -402,8 +343,7 @@ escalate_reconnect_link() {
     # route (it runs ipv4.method=shared, no upstream gateway), but never
     # touch the local-access AP here regardless of what it's named -- this
     # step is strictly for the uplink radio, never the AP radio, on any
-    # topology or naming history. Checked by actual mode, not name -- see
-    # find_ap_connection for why.
+    # topology or naming history. Checked by actual mode, not name.
     local con_mode
     con_mode="$(nmcli -t -f 802-11-wireless.mode connection show "${con}" 2>/dev/null | cut -d: -f2)"
     if [[ "${con_mode}" == "ap" ]]; then

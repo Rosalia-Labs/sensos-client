@@ -331,7 +331,7 @@ print_operator_summary() {
         upstream_target="${ifaces[0]}"
     fi
 
-    if connection_active sensosap || connection_active sensos-hotspot; then
+    if connection_active sensos-ap || connection_active sensos-hotspot; then
         active_hotspot=true
     fi
 
@@ -349,12 +349,24 @@ print_operator_summary() {
     fi
 
     section "Hotspot"
-    printf '  built-in startup hotspot: enabled=%s interface=%s ssid=%s\n' \
+    printf '  bootstrap hotspot (image default, retired by config-hotspot): enabled=%s interface=%s ssid=%s\n' \
         "${hotspot_enabled:-unknown}" "${hotspot_iface:-unknown}" "${hotspot_ssid:-unknown}"
     printf '  startup service:          enabled=%s active=%s state=%s\n' \
         "${hotspot_unit_enabled:-unknown}" "${hotspot_unit_active:-unknown}" "${hotspot_unit_sub:-unknown}"
-    connection_line sensosap "configured hotspot"
-    connection_line sensos-hotspot "built-in hotspot"
+    connection_line sensos-ap "configured AP (config-hotspot)"
+    connection_line sensos-hotspot "bootstrap hotspot"
+    printf '  intent (%s):\n' "${CLIENT_ROOT}/etc/hotspot.conf"
+    if [[ -f "${CLIENT_ROOT}/etc/hotspot.conf" ]]; then
+        grep -E '^(AP_ENABLED|AP_INTERFACE|AP_CONNECTION)=' "${CLIENT_ROOT}/etc/hotspot.conf" | sed 's/^/    /'
+    else
+        printf '    not recorded (no AP configured here yet)\n'
+    fi
+    printf '  uplink (%s):\n' "${CLIENT_ROOT}/etc/wifi.conf"
+    if [[ -f "${CLIENT_ROOT}/etc/wifi.conf" ]]; then
+        grep -E '^(UPLINK_SSID|UPLINK_INTERFACE)=' "${CLIENT_ROOT}/etc/wifi.conf" | sed 's/^/    /'
+    else
+        printf '    not recorded\n'
+    fi
 
     section "Interfaces"
     if ((${iface_count} == 0)); then
@@ -426,7 +438,7 @@ print_operator_summary() {
     fi
 
     if [[ "${active_hotspot}" != true ]]; then
-        if connection_exists sensosap; then
+        if connection_exists sensos-ap; then
             printf '  - A SensOS AP profile exists but is not active.\n'
         elif connection_exists sensos-hotspot; then
             printf '  - The bootstrap AP profile exists but is not active.\n'
@@ -480,8 +492,8 @@ print_operator_summary() {
     fi
     if [[ "${active_hotspot}" != true && ((${iface_count} > 0)) ]]; then
         printf "  config-hotspot --ssid sensos-setup --password '<8-63 character password>' --interface %s --channel 6\n" "${hotspot_iface:-wlan0}"
-        if connection_exists sensosap; then
-            printf '  sudo nmcli connection up sensosap\n'
+        if connection_exists sensos-ap; then
+            printf '  sudo nmcli connection up sensos-ap\n'
         elif connection_exists sensos-hotspot; then
             printf '  sudo systemctl restart sensos-hotspot.service\n'
         fi
@@ -508,7 +520,7 @@ print_verbose_report() {
         run_block "nmcli active connections" nmcli -f NAME,TYPE,DEVICE connection show --active
         run_block "nmcli Wi-Fi connections" nmcli -f NAME,TYPE,DEVICE,AUTOCONNECT,AUTOCONNECT-PRIORITY connection show
         run_block "nmcli visible Wi-Fi scan" nmcli -f IN-USE,SSID,MODE,CHAN,RATE,SIGNAL,SECURITY,DEVICE device wifi list
-        for profile in sensosap sensos-hotspot; do
+        for profile in sensos-ap sensos-hotspot; do
             if connection_exists "${profile}"; then
                 run_block "nmcli connection show ${profile}" \
                     nmcli -f connection.id,connection.interface-name,connection.autoconnect,connection.autoconnect-priority,802-11-wireless.mode,802-11-wireless.ssid,802-11-wireless.band,802-11-wireless.channel,ipv4.method connection show "${profile}"

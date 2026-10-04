@@ -142,6 +142,7 @@ register_option --password password "Wi-Fi password (8-63 chars)" ""
 register_option --power-save power_save "Enable Wi-Fi power management" "false"
 register_option --interface interface "Wireless interface to use" "wlan0"
 register_option --channel channel "2.4 GHz channel (1/6/11 or empty for auto)" "6"
+register_option --allow-single-radio-ap allow_single_radio_ap "Allow the hotspot on the only Wi-Fi radio even when it carries the uplink" "false"
 
 parse_switches "${SCRIPT_NAME}" "$@"
 
@@ -273,6 +274,20 @@ if [[ ${#password} -lt 8 || ${#password} -gt 63 ]]; then
     exit 1
 fi
 
+if [[ "${allow_single_radio_ap}" != "true" ]]; then
+    wifi_radio_count="$(list_wifi_interfaces | wc -l | tr -d ' ')"
+    uplink_con="$(nmcli -t -f GENERAL.CONNECTION device show "${IFACE}" 2>/dev/null | cut -d: -f2 || true)"
+    uplink_mode=""
+    if [[ -n "${uplink_con}" && "${uplink_con}" != "--" ]]; then
+        uplink_mode="$(nmcli -t -f 802-11-wireless.mode connection show "${uplink_con}" 2>/dev/null | cut -d: -f2 || true)"
+    fi
+    if [[ "${wifi_radio_count}" == "1" && -n "${uplink_con}" && "${uplink_con}" != "--" && "${uplink_mode}" != "ap" ]]; then
+        echo "ERROR: ${IFACE} is the only Wi-Fi radio and is carrying the uplink ('${uplink_con}')." >&2
+        echo "A hotspot on it would take the uplink down. Pass --allow-single-radio-ap only if there is no usable uplink." >&2
+        exit 1
+    fi
+fi
+
 mkdir -p "${LOG_DIR}"
 exec 3>>"${LOG_FILE}"
 echo "[$(date -Is)] Applying access point config..." >&3
@@ -318,15 +333,15 @@ if [[ -z "${AP_CON}" ]]; then
 fi
 
 if [[ -z "${AP_CON}" ]]; then
-    AP_CON="sensosap"
+    AP_CON="sensos-ap"
     echo "[$(date -Is)] Creating new AP '${AP_CON}'..." >&3
     sudo nmcli connection add type wifi ifname "${IFACE}" con-name "${AP_CON}" ssid "${SSID}"
 fi
 
-if [[ "${AP_CON}" != "sensosap" ]]; then
-    echo "[$(date -Is)] Renaming AP '${AP_CON}' -> 'sensosap'." >&3
-    sudo nmcli connection modify "${AP_CON}" connection.id sensosap
-    AP_CON="sensosap"
+if [[ "${AP_CON}" != "sensos-ap" ]]; then
+    echo "[$(date -Is)] Renaming AP '${AP_CON}' -> 'sensos-ap'." >&3
+    sudo nmcli connection modify "${AP_CON}" connection.id sensos-ap
+    AP_CON="sensos-ap"
 fi
 
 sudo nmcli connection modify "${AP_CON}" \
@@ -350,7 +365,11 @@ else
     sudo nmcli connection modify "${AP_CON}" 802-11-wireless.channel "" || true
 fi
 
-if ! sudo nmcli connection up "${AP_CON}"; then
+RECONCILE_HOTSPOT="${CLIENT_ROOT}/libexec/reconcile-hotspot.sh"
+"${RECONCILE_HOTSPOT}" set-intent true "${IFACE}" "${AP_CON}" "${SSID}"
+"${RECONCILE_HOTSPOT}" reconcile >/dev/null 2>&1 || true
+
+if ! sudo nmcli -t -f NAME connection show --active | grep -Fxq "${AP_CON}"; then
     echo "[$(date -Is)] ERROR: failed to bring up AP '${AP_CON}'." >&3
     exit 1
 fi
@@ -365,9 +384,7 @@ iw dev "${IFACE}" info >&3 || true
 nmcli -f GENERAL.CONNECTION,IP4.ADDRESS device show "${IFACE}" >&3 || true
 nmcli -f GENERAL,IP4,802-11-wireless connection show "${AP_CON}" >&3 || true
 
-if sudo nmcli -t -f NAME connection show --active | grep -Fxq "sensosap"; then
-    retire_bootstrap_hotspot "${AP_CON}" "${IFACE}"
-fi
+retire_bootstrap_hotspot "${AP_CON}" "${IFACE}"
 
 echo "[$(date -Is)] AP '${AP_CON}' active on ${IFACE} (autoconnect enabled)." >&3
 exec 3>&-
