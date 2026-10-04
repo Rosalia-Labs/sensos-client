@@ -303,8 +303,14 @@ if [[ -n "${current_con}" ]]; then
 fi
 
 if [[ -z "${AP_CON}" ]]; then
-    saved_ap="$(nmcli -t -f NAME,TYPE,802-11-wireless.mode connection show 2>/dev/null \
-        | awk -F: '$2=="wifi" && $3=="ap"{print $1; exit}')"
+    saved_ap=""
+    while IFS= read -r candidate; do
+        candidate_mode="$(nmcli -t -f 802-11-wireless.mode connection show "${candidate}" 2>/dev/null | cut -d: -f2 || true)"
+        if [[ "${candidate_mode}" == "ap" ]]; then
+            saved_ap="${candidate}"
+            break
+        fi
+    done < <(nmcli -t -f NAME,TYPE connection show 2>/dev/null | awk -F: '$2=="wifi"{print $1}')
     if [[ -n "${saved_ap}" ]]; then
         AP_CON="${saved_ap}"
         echo "[$(date -Is)] Reusing saved AP '${AP_CON}'." >&3
