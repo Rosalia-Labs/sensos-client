@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically reconcile the day/night uplink bandwidth cap
+
+[Timer]
+# Short OnBootSec so a boot during the day window gets capped quickly,
+# rather than running uncapped until the next 10-minute tick.
+OnBootSec=2min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target

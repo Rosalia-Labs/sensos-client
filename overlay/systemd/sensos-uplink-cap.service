@@ -1,0 +1,6 @@
+[Unit]
+Description=Apply the scheduled day/night uplink bandwidth cap
+
+[Service]
+Type=oneshot
+ExecStart=/sensos/libexec/apply-uplink-cap.sh

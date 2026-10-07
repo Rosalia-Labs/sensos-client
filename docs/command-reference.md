@@ -815,6 +815,36 @@ Behavior:
 - optionally applies traffic caps with `tc`
 - registers the interface with `vnstat` when available
 
+### `config-uplink-cap`
+
+Schedules a day/night uplink bandwidth cap via `tc`, re-applied every 10
+minutes by `sensos-uplink-cap.timer`. For a shared link (e.g. a field
+station's wifi) where other users need full bandwidth during the day but the
+device can safely drain its upload backlog overnight.
+
+Important flags:
+
+- `--iface` (default: read `UPLINK_INTERFACE` from `wifi.conf`)
+- `--day-start-hour` / `--day-end-hour` (local hour 0-23; both required together)
+- `--day-limit-up-kbit` / `--day-limit-down-kbit`
+- `--night-limit-up-kbit` / `--night-limit-down-kbit`
+- `--disable`
+
+Typical use:
+
+```sh
+config-uplink-cap --day-start-hour 8 --day-end-hour 22 --day-limit-up-kbit 128
+config-uplink-cap --disable
+```
+
+Behavior:
+
+- both the bandwidth numbers and the day/night boundary are site-specific; there is no built-in default, by design -- a guessed cap is either too loose (still interferes) or too tight (useless)
+- any cap left blank (day or night, up or down) means uncapped for that period/direction
+- if `--day-start-hour`/`--day-end-hour` are omitted entirely, the day cap applies at all times (there is no implicit "night" if you never defined a window)
+- applies the resolved cap immediately in addition to scheduling it, so you don't wait for the first timer tick
+- layers on top of `config-wifi`'s one-off `--limit-up-kbit`/`--limit-down-kbit`: once this scheduler is enabled it overwrites those on its next tick, so use `config-wifi`'s flags only for a cap you want to hold regardless of time of day
+
 ### `config-modem`
 
 Creates or updates a cellular modem connection using NetworkManager.
