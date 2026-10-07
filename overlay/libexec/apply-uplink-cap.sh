@@ -66,7 +66,11 @@ in_day_window() {
     fi
 }
 
-hour="$(date +%-H)"
+# The device's system clock is always UTC (config-time forces this), so
+# DAY_START_HOUR/DAY_END_HOUR -- entered as local hours at the site -- are
+# only meaningful once read back through the site's TIMEZONE.
+tz_name="${TIMEZONE:-UTC}"
+hour="$(TZ="${tz_name}" date +%-H)"
 
 use_day_cap=0
 if [[ -n "${DAY_START_HOUR:-}" && -n "${DAY_END_HOUR:-}" ]]; then
@@ -83,11 +87,11 @@ fi
 if [[ "${use_day_cap}" == "1" ]]; then
     up="${DAY_LIMIT_UP_KBIT:-}"
     down="${DAY_LIMIT_DOWN_KBIT:-}"
-    echo "Hour ${hour}: day window; up='${up:-none}' down='${down:-none}'."
+    echo "Hour ${hour} (${tz_name}): day window; up='${up:-none}' down='${down:-none}'."
 else
     up="${NIGHT_LIMIT_UP_KBIT:-}"
     down="${NIGHT_LIMIT_DOWN_KBIT:-}"
-    echo "Hour ${hour}: night window; up='${up:-none}' down='${down:-none}'."
+    echo "Hour ${hour} (${tz_name}): night window; up='${up:-none}' down='${down:-none}'."
 fi
 
 if [[ -z "${up}" && -z "${down}" ]]; then

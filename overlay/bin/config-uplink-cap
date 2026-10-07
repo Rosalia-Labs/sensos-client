@@ -50,8 +50,9 @@ config_path="${CLIENT_ROOT}/etc/uplink-cap.conf"
 mkdir -p "${CLIENT_ROOT}/etc"
 
 register_option --iface iface "Uplink interface to cap (default: read UPLINK_INTERFACE from wifi.conf)" ""
-register_option --day-start-hour day_start_hour "Local hour (0-23) the day/busy cap starts" ""
-register_option --day-end-hour day_end_hour "Local hour (0-23) the day/busy cap ends (night cap applies outside this window)" ""
+register_option --timezone timezone "IANA timezone (e.g. America/Bogota) that --day-start-hour/--day-end-hour are in; the device's system clock is always UTC (see config-time), so this is required to mean local time at the site rather than UTC" "UTC"
+register_option --day-start-hour day_start_hour "Hour (0-23), in --timezone, the day/busy cap starts" ""
+register_option --day-end-hour day_end_hour "Hour (0-23), in --timezone, the day/busy cap ends (night cap applies outside this window)" ""
 register_option --day-limit-up-kbit day_limit_up_kbit "Egress cap during the day window, in kbit/sec (blank=uncapped)" ""
 register_option --day-limit-down-kbit day_limit_down_kbit "Ingress cap during the day window, in kbit/sec (blank=uncapped)" ""
 register_option --night-limit-up-kbit night_limit_up_kbit "Egress cap outside the day window, in kbit/sec (blank=uncapped)" ""
@@ -66,6 +67,15 @@ require_hour() {
     [[ -z "${value}" ]] && return 0
     [[ "${value}" =~ ^[0-9]+$ ]] && ((value >= 0 && value <= 23)) || {
         echo "ERROR: ${option_name} must be an integer hour 0-23, got '${value}'." >&2
+        exit 1
+    }
+}
+
+require_timezone() {
+    local value="$1"
+    [[ "${value}" == "UTC" ]] && return 0
+    [[ -f "/usr/share/zoneinfo/${value}" ]] || {
+        echo "ERROR: unknown --timezone '${value}' (expected an IANA name like America/Bogota; run 'timedatectl list-timezones' on the device to browse)." >&2
         exit 1
     }
 }
@@ -97,6 +107,7 @@ if [[ "${disable}" == "true" ]]; then
     exit 0
 fi
 
+require_timezone "${timezone}"
 require_hour "${day_start_hour}" "--day-start-hour"
 require_hour "${day_end_hour}" "--day-end-hour"
 
@@ -112,6 +123,7 @@ resolved_iface="$(resolve_iface)"
     echo "# Bandwidth numbers and the day/night boundary are site-specific --"
     echo "# re-run config-uplink-cap on this device to change them."
     echo "IFACE=${resolved_iface}"
+    echo "TIMEZONE=${timezone}"
     echo "DAY_START_HOUR=${day_start_hour}"
     echo "DAY_END_HOUR=${day_end_hour}"
     echo "DAY_LIMIT_UP_KBIT=${day_limit_up_kbit}"

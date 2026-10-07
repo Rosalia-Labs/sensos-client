@@ -825,7 +825,8 @@ device can safely drain its upload backlog overnight.
 Important flags:
 
 - `--iface` (default: read `UPLINK_INTERFACE` from `wifi.conf`)
-- `--day-start-hour` / `--day-end-hour` (local hour 0-23; both required together)
+- `--timezone` (IANA name, e.g. `America/Bogota`; default `UTC`)
+- `--day-start-hour` / `--day-end-hour` (hour 0-23 in `--timezone`; both required together)
 - `--day-limit-up-kbit` / `--day-limit-down-kbit`
 - `--night-limit-up-kbit` / `--night-limit-down-kbit`
 - `--disable`
@@ -833,13 +834,14 @@ Important flags:
 Typical use:
 
 ```sh
-config-uplink-cap --day-start-hour 8 --day-end-hour 22 --day-limit-up-kbit 128
+config-uplink-cap --timezone America/Bogota --day-start-hour 8 --day-end-hour 22 --day-limit-up-kbit 128
 config-uplink-cap --disable
 ```
 
 Behavior:
 
-- both the bandwidth numbers and the day/night boundary are site-specific; there is no built-in default, by design -- a guessed cap is either too loose (still interferes) or too tight (useless)
+- both the bandwidth numbers and the day/night boundary are site-specific; there is no built-in default cap, by design -- a guessed cap is either too loose (still interferes) or too tight (useless)
+- the device's system clock is always UTC (`config-time` enforces this), so `--day-start-hour`/`--day-end-hour` are read back through `--timezone` to mean local time at the site; get `--timezone` wrong (or leave it at the `UTC` default on a site that isn't UTC) and the day/night windows silently land at the wrong wall-clock hours
 - any cap left blank (day or night, up or down) means uncapped for that period/direction
 - if `--day-start-hour`/`--day-end-hour` are omitted entirely, the day cap applies at all times (there is no implicit "night" if you never defined a window)
 - applies the resolved cap immediately in addition to scheduling it, so you don't wait for the first timer tick
