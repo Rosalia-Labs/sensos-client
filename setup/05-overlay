@@ -35,6 +35,8 @@ RETIRED_SYSTEMD_UNITS=(
     send-status-update.service
     send-status-update.timer
     thin-data.service
+    sensos-thin-data.service
+    sensos-upload-birdnet-audio.service
     sensos-arecord.service
     senoss-monitor-data-space.service
     senoss-monitor-data-space.timer

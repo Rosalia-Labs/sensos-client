@@ -80,3 +80,13 @@ if [[ "${start_service}" == "true" ]]; then
     echo "Starting sensos-upload-birdnet.service..."
     sudo systemctl start sensos-upload-birdnet.service
 fi
+
+# sensos-manage-birdnet-clips.service is always enabled fleet-wide (it also
+# handles disk-space thinning on devices with no server uploads configured
+# at all) -- it just restarts here, if already running, to pick up this
+# fresh birdnet-uploads.conf right away instead of waiting for its own
+# upload-cadence timer to notice it.
+if sudo systemctl is-active --quiet sensos-manage-birdnet-clips.service; then
+    echo "Restarting sensos-manage-birdnet-clips.service to apply new settings..."
+    sudo systemctl restart sensos-manage-birdnet-clips.service
+fi

@@ -149,12 +149,12 @@ class ApiContractTests(unittest.TestCase):
         worker_names = (
             "sensos-compress-audio",
             "sensos-birdnet",
-            "sensos-thin-data",
+            "sensos-manage-birdnet-clips",
         )
         launcher_names = (
             "compress-queued-audio.py",
             "process-birdnet.py",
-            "thin-data.py",
+            "manage-birdnet-clips.py",
         )
 
         for service_name in worker_names:

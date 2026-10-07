@@ -186,6 +186,15 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE detections ADD COLUMN weighted_score REAL")
     if "weighted_likely_score" not in detection_columns:
         conn.execute("ALTER TABLE detections ADD COLUMN weighted_likely_score REAL")
+    if "audio_sent_to_server" not in detection_columns:
+        # Plain 0/1: has the server received this clip's audio bytes yet?
+        # Separate from sent_to_server because results and audio travel over
+        # different requests and can finish in either order. manage-birdnet-
+        # clips.py is the only reader and writer of this column, so there's
+        # no cross-process race to account for here.
+        conn.execute(
+            "ALTER TABLE detections ADD COLUMN audio_sent_to_server INTEGER NOT NULL DEFAULT 0"
+        )
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_source_files_status
@@ -208,6 +217,12 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_detections_pending_upload
         ON detections (sent_to_server, deleted_at, clip_start_time, id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_detections_pending_audio_upload
+        ON detections (audio_sent_to_server, sent_to_server, deleted_at, clip_start_time, id)
         """
     )
     conn.execute(
@@ -314,6 +329,70 @@ def mark_detections_sent(conn: sqlite3.Connection, detection_ids: list[int]) -> 
         WHERE id IN ({placeholders})
         """,
         tuple(detection_ids),
+    )
+    conn.commit()
+
+
+def select_pending_audio_uploads(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
+    """Only considers detections whose results already reached the server
+    (sent_to_server = 1): the server matches an audio upload to its detection
+    row by (peer, channel, clip_start_time, clip_end_time), so that row has to
+    exist first. clip_path IS NOT NULL and deleted_at IS NULL means the clip
+    file is still on disk -- manage-birdnet-clips.py is the only thing that
+    ever deletes it, in the same process, so there's no race to miss here."""
+    rows = conn.execute(
+        """
+        SELECT d.id,
+               d.channel_index,
+               d.clip_start_time,
+               d.clip_end_time,
+               d.clip_path
+        FROM detections d
+        WHERE d.audio_sent_to_server = 0
+          AND d.sent_to_server = 1
+          AND d.deleted_at IS NULL
+          AND d.clip_path IS NOT NULL
+        ORDER BY d.clip_start_time, d.id
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return rows
+
+
+def mark_audio_sent(conn: sqlite3.Connection, detection_id: int) -> None:
+    conn.execute(
+        "UPDATE detections SET audio_sent_to_server = 1 WHERE id = ?",
+        (detection_id,),
+    )
+    conn.commit()
+
+
+def select_deletable_clip(conn: sqlite3.Connection) -> sqlite3.Row | None:
+    """The oldest clip the server already has a copy of -- deleting it loses
+    nothing. No scoring, no grouping by directory: any already-uploaded clip
+    is equally safe to delete, so the only question worth asking is which to
+    free first, and oldest-first is simplest. Returns None if every retained
+    clip is still waiting to upload, in which case thinning has nothing safe
+    to do this cycle (sensos-monitor-data-space is the backstop against a
+    genuinely full disk, independent of BirdNET entirely)."""
+    return conn.execute(
+        """
+        SELECT id, clip_path
+        FROM detections
+        WHERE deleted_at IS NULL
+          AND clip_path IS NOT NULL
+          AND audio_sent_to_server = 1
+        ORDER BY clip_start_time, id
+        LIMIT 1
+        """
+    ).fetchone()
+
+
+def mark_clip_deleted(conn: sqlite3.Connection, detection_id: int) -> None:
+    conn.execute(
+        "UPDATE detections SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL",
+        (utcnow_text(), detection_id),
     )
     conn.commit()
 

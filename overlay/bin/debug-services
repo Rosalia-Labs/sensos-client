@@ -27,7 +27,7 @@ SENSOS_UNITS=(
     "sensos-read-i2c.service"
     "sensos-send-status-update.service"
     "sensos-send-status-update.timer"
-    "sensos-thin-data.service"
+    "sensos-manage-birdnet-clips.service"
     "sensos-upload-birdnet.service"
     "sensos-upload-birdweather.service"
     "sensos-upload-i2c.service"

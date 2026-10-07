@@ -28,6 +28,8 @@ RETIRED_UNITS=(
     monitor-data-space.service
     send-status-update.service
     thin-data.service
+    sensos-thin-data.service
+    sensos-upload-birdnet-audio.service
     sensos-arecord.service
     senoss-monitor-data-space.timer
     senoss-send-status-update.timer
@@ -49,7 +51,7 @@ OPTIONAL_AUDIO_UNITS=(
 
 ALWAYS_ON_SENSOS_UNITS=(
     sensos-compress-audio.service
-    sensos-thin-data.service
+    sensos-manage-birdnet-clips.service
     sensos-network-watchdog.timer
     sensos-i2c-watchdog.timer
 )
@@ -66,7 +68,7 @@ EVENT_TIMER_UNITS=(
 RESTART_SAFE_SENSOS_UNITS=(
     sensos-record-audio.service
     sensos-compress-audio.service
-    sensos-thin-data.service
+    sensos-manage-birdnet-clips.service
     sensos-birdnet.service
     sensos-upload-birdnet.service
     sensos-upload-birdweather.service

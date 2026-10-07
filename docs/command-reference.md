@@ -366,7 +366,7 @@ Behavior:
 - may ask to stop active recording/compression/thinning services before reconfiguring when run interactively
 - writes recording config and can enable/start the recording pipeline services
 - provisions the recording tree as `sensos-runner:sensos-data` with setgid directories; recording, compression, BirdNET processing, and thinning write with `UMask=0002` and validate writable runtime directories without repairing ownership at service startup
-- `--enable-service` enables `sensos-record-audio.service`, `sensos-compress-audio.service`, and `sensos-thin-data.service` for future boot
+- `--enable-service` enables `sensos-record-audio.service`, `sensos-compress-audio.service`, and `sensos-manage-birdnet-clips.service` for future boot
 - `--start-service` is what starts those services immediately; without it, `config-arecord` leaves them stopped at the end
 - later `./install` and `./upgrade` runs preserve or disable those three audio services as a group based on whether `/sensos/etc/arecord.conf` exists; they do not implicitly start disabled services, but active restart-safe SensOS worker services are restarted during upgrade so new code takes effect
 
@@ -612,6 +612,14 @@ Behavior:
 - with `server-owns`, old uploaded BirdNET metadata and local FLAC clips can be pruned later using `--delete-after-days`
 - enables the upload service for future boot by default
 - leaves the upload service stopped unless `--start-service` is supplied
+- `sensos-manage-birdnet-clips.service` (always enabled fleet-wide; see
+  `config-arecord`) picks up the new config and uploads each detection's
+  labeled FLAC clip to the server once its metadata has landed, matched by
+  peer + channel + clip start/end time; local clips are only deleted when
+  disk space actually runs low, at which point it prefers deleting ones the
+  server already has, and only falls back to label-diversity thinning
+  (keeping at least one example per label) when nothing has been uploaded
+  yet, e.g. no connectivity
 
 ### `config-birdweather`
 

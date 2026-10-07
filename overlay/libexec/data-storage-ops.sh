@@ -10,7 +10,7 @@ DATA_SERVICES=(
     "sensos-upload-i2c.service"
     "sensos-birdnet.service"
     "sensos-gps.service"
-    "sensos-thin-data.service"
+    "sensos-manage-birdnet-clips.service"
 )
 DATA_TIMERS=(
     "sensos-monitor-data-space.timer"
