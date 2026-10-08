@@ -267,7 +267,7 @@ connection_line() {
         return 0
     fi
 
-    printf '  %-24s active=%-3s interface=%-7s mode=%-6s ssid=%s starts-on-boot=%s\n' \
+    printf "  %-24s active=%-3s interface=%-7s mode=%-6s ssid='%s' starts-on-boot=%s\n" \
         "${label}" "${active}" "${iface:---}" "${mode:---}" "${ssid:---}" "${autoconnect:---}"
 }
 
@@ -349,7 +349,7 @@ print_operator_summary() {
     fi
 
     section "Hotspot"
-    printf '  bootstrap hotspot (image default, retired by config-hotspot): enabled=%s interface=%s ssid=%s\n' \
+    printf "  bootstrap hotspot (image default, retired by config-hotspot): enabled=%s interface=%s ssid='%s'\n" \
         "${hotspot_enabled:-unknown}" "${hotspot_iface:-unknown}" "${hotspot_ssid:-unknown}"
     printf '  startup service:          enabled=%s active=%s state=%s\n' \
         "${hotspot_unit_enabled:-unknown}" "${hotspot_unit_active:-unknown}" "${hotspot_unit_sub:-unknown}"
@@ -389,7 +389,7 @@ print_operator_summary() {
             *) ((unknown_count += 1)) ;;
         esac
 
-        printf '  %-7s role=%-8s connection=%-22s ssid=%-20s ip=%s\n' \
+        printf "  %-7s role=%-8s connection=%-22s ssid='%s' ip=%s\n" \
             "${iface}" "${role}" "${connection}" "${ssid:---}" "${ip4:---}"
 
         if [[ "${role}" == "client" ]]; then
