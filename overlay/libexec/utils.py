@@ -427,7 +427,10 @@ def read_kv_config(path):
             if not line or line.startswith("#") or "=" not in line:
                 continue
             key, val = line.split("=", 1)
-            config[key.strip()] = val.strip()
+            val = val.strip()
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
+                val = val[1:-1]
+            config[key.strip()] = val
     return config
 
 
