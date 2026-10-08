@@ -579,6 +579,46 @@ def merge_consecutive_detections(detections: List[Detection]) -> List[Detection]
     return merged
 
 
+def dedupe_overlapping_channel_detections(detections: List[Detection]) -> List[Detection]:
+    """Collapses same-label detections that overlap in time across different
+    channels down to one: an overlapping, same-label run on another channel
+    is almost always the same physical sound picked up by a second
+    microphone, not a separate event, so keeping all of them is mostly
+    redundant clips and redundant upload/storage for one real event. Keeps
+    the highest-scoring (raw score, never weighted -- see
+    merge_consecutive_detections for why) run per overlapping group; the
+    rest are dropped before a clip is ever written for them.
+
+    Implemented as a sort-and-sweep per label rather than an explicit overlap
+    graph: for one-dimensional time intervals the two are equivalent, and
+    sort-and-sweep needs no graph/union-find machinery. All channels in one
+    source file share the same frame clock, so start_frame/end_frame are
+    directly comparable across channels with no conversion.
+
+    A genuine two-individuals-calling-at-once case of the same species from
+    different directions is an accepted, rare loss here -- one of the two
+    gets dropped, same as any other overlap."""
+    by_label: dict[str, list[Detection]] = {}
+    for detection in detections:
+        by_label.setdefault(detection.label, []).append(detection)
+
+    kept: List[Detection] = []
+    for runs in by_label.values():
+        runs.sort(key=lambda d: d.start_frame)
+        group: list[Detection] = []
+        group_end = -1
+        for run in runs:
+            if group and run.start_frame > group_end:
+                kept.append(max(group, key=lambda d: d.score))
+                group = []
+            group.append(run)
+            group_end = max(group_end, run.end_frame)
+        if group:
+            kept.append(max(group, key=lambda d: d.score))
+
+    return kept
+
+
 def write_detection_clips(
     source_path: Path,
     audio: np.ndarray,
@@ -676,6 +716,7 @@ def process_audio(
             for detection in channel_detections
             if passes_detection_filters(detection)
         )
+    detections = dedupe_overlapping_channel_detections(detections)
     written_clips = write_detection_clips(source_path, audio, sample_rate, detections)
 
     conn.executemany(
