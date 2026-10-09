@@ -156,7 +156,25 @@ cleanup() {
     kill "${DIR_WATCH_PID}" 2>/dev/null || true
 }
 
-trap cleanup EXIT INT TERM
+# A deliberate stop (systemctl stop/restart -- including every upgrade that
+# restarts this service via reconcile_restart_safe_sensos_units) sends
+# SIGTERM to the whole cgroup, so arecord below receives it directly and
+# exits however it exits on its own. Without this trap, the script's final
+# `exit $?` would propagate arecord's raw signal-kill exit code, and systemd
+# treats any non-zero/unconfigured exit as a failure -- regardless of
+# whether the stop was intentional. That previously meant every upgrade-
+# triggered restart produced a false service_failure event racing against
+# Restart=always's self-heal, same shape as the boot-order race above but a
+# different trigger (restart, not startup timing). Catching the stop
+# signals and exiting 0 here tells systemd this was requested, not a crash;
+# a genuine arecord failure with no external signal still falls through to
+# the real `exit $?` below and reports normally.
+on_stop() {
+    cleanup
+    exit 0
+}
+trap on_stop INT TERM
+trap cleanup EXIT
 
 wait_for_recording_device
 
