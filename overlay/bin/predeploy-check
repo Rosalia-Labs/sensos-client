@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Rosalia Labs LLC
+
+"""Bench-stage pre-deploy check: run this on a unit that's built but not yet
+deployed in the field. Reports what hardware was observed and what manual
+checks have been confirmed -- it does not pass/fail the unit, since valid
+hardware configurations vary across the fleet. Read the report and judge
+against what this specific unit is supposed to have.
+"""
+
+import importlib.util
+import os
+import sys
+from pathlib import Path
+
+OVERLAY_ROOT = Path(os.environ.get("SENSOS_CLIENT_ROOT", "/sensos"))
+CHECKS_FILE = OVERLAY_ROOT / "libexec" / "predeploy_checks.py"
+
+if not CHECKS_FILE.is_file():
+    raise SystemExit(f"missing dependency: {CHECKS_FILE}")
+
+
+def _load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+PC = _load("sensos_predeploy_checks", CHECKS_FILE)
+
+
+AUTOMATED_CHECKS = [
+    ("audio hardware", "audio_hardware", PC.check_audio_hardware_present),
+    ("I2C bus", "i2c_bus", PC.check_i2c_bus),
+    ("TEROS serial sensor", "teros_serial", PC.check_teros_serial),
+    ("GPS fix", "gps_fix", PC.check_gps_fix),
+    ("uplink Wi-Fi intent", "uplink_intent", PC.check_uplink_intent),
+    ("local AP intent", "hotspot_intent", PC.check_hotspot_intent),
+]
+
+
+def main() -> int:
+    state = PC.load_state()
+
+    for title, name, check_fn in AUTOMATED_CHECKS:
+        print(f"== {title} ==")
+        status, detail = check_fn()
+        entry = PC.record_result(state, name, status, detail)
+        print(PC.report_line(name, entry))
+        print()
+
+    print("== audio listening test ==")
+    status, detail = PC.check_audio_listen(state)
+    entry = PC.record_result(state, "audio_listen", status, detail)
+    print(PC.report_line("audio_listen", entry))
+
+    PC.save_state(state)
+
+    print()
+    print(f"Full state recorded in {PC.STATE_FILE}")
+    print()
+    print("== pre-deploy check summary ==")
+    for name, entry in sorted(state.items()):
+        print(PC.report_line(name, entry))
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
