@@ -3,6 +3,7 @@
 # Copyright (c) 2025 Rosalia Labs LLC
 
 import importlib.util
+import math
 import os
 import re
 import sqlite3
@@ -93,6 +94,26 @@ def read_input_mode(config_path: Path) -> str:
     return mode
 
 
+def read_add_beamformed_channel(config_path: Path) -> bool:
+    config = read_birdnet_config(config_path)
+    return config.get("BIRDNET_ADD_BEAMFORMED_CHANNEL", "0").strip() == "1"
+
+
+def read_mic_distances_m(config_path: Path) -> list[float]:
+    config = read_birdnet_config(config_path)
+    raw = config.get("BIRDNET_MIC_DISTANCES_M", "").strip()
+    if not raw:
+        return []
+    try:
+        return [float(part.strip()) for part in raw.split(",") if part.strip()]
+    except ValueError:
+        print(
+            f"WARNING: invalid BIRDNET_MIC_DISTANCES_M='{raw}' in {config_path}; ignoring.",
+            file=sys.stderr,
+        )
+        return []
+
+
 def read_min_threshold(config_path: Path, key: str) -> float:
     config = read_birdnet_config(config_path)
     raw_value = config.get(key, "0")
@@ -107,6 +128,9 @@ def read_min_threshold(config_path: Path, key: str) -> float:
 
 BACKEND_PREFERENCE = read_backend_preference(BIRDNET_CONFIG)
 INPUT_MODE = read_input_mode(BIRDNET_CONFIG)
+ADD_BEAMFORMED_CHANNEL = read_add_beamformed_channel(BIRDNET_CONFIG)
+MIC_DISTANCES_M = read_mic_distances_m(BIRDNET_CONFIG)
+SPEED_OF_SOUND_MPS = 343.0
 MIN_SCORE = read_min_threshold(BIRDNET_CONFIG, "BIRDNET_MIN_SCORE")
 MIN_LIKELIHOOD = read_min_threshold(BIRDNET_CONFIG, "BIRDNET_MIN_LIKELIHOOD")
 MIN_VOLUME = read_min_threshold(BIRDNET_CONFIG, "BIRDNET_MIN_VOLUME")
@@ -428,6 +452,106 @@ def to_mono(audio: np.ndarray) -> np.ndarray:
     return audio.astype(np.float32).mean(axis=1)
 
 
+def _gcc_phat_delay(signal: np.ndarray, reference: np.ndarray, max_shift: int) -> int:
+    """Estimates the integer-sample delay of `signal` relative to
+    `reference` via GCC-PHAT (Generalized Cross-Correlation with Phase
+    Transform): cross-correlate in the frequency domain, then whiten by
+    dividing out the magnitude so phase (timing) alone drives the
+    correlation peak, rather than whichever channel happens to be louder.
+    Standard technique for time-delay-of-arrival estimation between
+    microphones. A positive return means `signal` lags `reference` (arrived
+    later); shifting it backward by that many samples lines it up."""
+    fft_size = 1
+    while fft_size < len(signal) + len(reference):
+        fft_size *= 2
+
+    sig_fft = np.fft.rfft(signal.astype(np.float64), n=fft_size)
+    ref_fft = np.fft.rfft(reference.astype(np.float64), n=fft_size)
+    cross_spectrum = sig_fft * np.conj(ref_fft)
+    magnitude = np.abs(cross_spectrum)
+    magnitude[magnitude < 1e-12] = 1e-12
+    whitened = cross_spectrum / magnitude
+
+    correlation = np.fft.irfft(whitened, n=fft_size)
+    # correlation[0] is zero lag; the tail end of the array represents
+    # negative lags, so wrap it around to sit contiguously before zero.
+    correlation = np.concatenate((correlation[-max_shift:], correlation[: max_shift + 1]))
+    return int(np.argmax(correlation)) - max_shift
+
+
+def resolve_max_shifts(num_channels: int, max_delay_ms: float) -> list[int]:
+    """One alignment-search bound per non-reference channel. Uses measured
+    mic-to-channel-0 distances (BIRDNET_MIC_DISTANCES_M) when there's exactly
+    one per non-reference channel, converting distance to the physically
+    possible maximum delay (distance / speed of sound); otherwise falls back
+    to a generic bound derived from max_delay_ms for every channel. A
+    mismatched count (geometry measured for the wrong number of channels) is
+    treated as absent rather than guessed at, with a warning."""
+    generic_shift = max(1, int(max_delay_ms / 1000 * SAMPLE_RATE))
+    num_non_reference = num_channels - 1
+
+    if len(MIC_DISTANCES_M) == num_non_reference:
+        return [
+            max(1, math.ceil(distance / SPEED_OF_SOUND_MPS * SAMPLE_RATE))
+            for distance in MIC_DISTANCES_M
+        ]
+
+    if MIC_DISTANCES_M:
+        print(
+            f"WARNING: BIRDNET_MIC_DISTANCES_M has {len(MIC_DISTANCES_M)} value(s) "
+            f"but this recording has {num_non_reference} non-reference channel(s); "
+            "ignoring and using the generic alignment bound instead.",
+            file=sys.stderr,
+        )
+
+    return [generic_shift] * num_non_reference
+
+
+def compute_beamformed_window(
+    channels: list[np.ndarray],
+    start: int,
+    end: int,
+    max_shifts: list[int],
+) -> np.ndarray:
+    """Builds one beamformed 3-second window: every real channel time-aligned
+    to channels[0] via GCC-PHAT estimated from THIS window alone, then
+    averaged. Delay is re-estimated per window, not once per file -- a fixed
+    whole-file delay is only correct for a source that stays in one place,
+    and different calls in the same recording routinely come from different
+    directions, which need different alignment.
+
+    max_shifts has one bound per non-reference channel (parallel to
+    channels[1:]), in samples -- either derived from measured mic geometry
+    (distance to channel 0 / speed of sound, tighter and less prone to
+    locking onto a spurious correlation peak) or a generic fallback bound
+    when geometry isn't known. See resolve_max_shifts.
+
+    Shifted samples are pulled from each channel's full timeline (not just
+    the window slice) so a window near a shift boundary still gets real
+    audio instead of zero-padding; only windows within max_shift samples of
+    the very start or end of the file fall back to zero-padding there."""
+    window_len = end - start
+    reference = channels[0][start:end]
+
+    aligned = [reference.astype(np.float32)]
+    for channel, max_shift in zip(channels[1:], max_shifts):
+        delay = _gcc_phat_delay(channel[start:end], reference, max_shift)
+        src_start, src_end = start + delay, end + delay
+        if src_start >= 0 and src_end <= len(channel):
+            aligned.append(channel[src_start:src_end].astype(np.float32))
+        else:
+            shifted = np.zeros(window_len, dtype=np.float32)
+            clipped_start = max(src_start, 0)
+            clipped_end = min(src_end, len(channel))
+            if clipped_end > clipped_start:
+                shifted[clipped_start - src_start : clipped_end - src_start] = channel[
+                    clipped_start:clipped_end
+                ]
+            aligned.append(shifted)
+
+    return np.mean(np.stack(aligned), axis=0).astype(np.float32)
+
+
 def audio_channels(audio: np.ndarray, input_mode: str) -> list[tuple[int, np.ndarray]]:
     if audio.ndim == 1:
         return [(0, audio.astype(np.float32))]
@@ -453,6 +577,56 @@ def passes_detection_filters(detection: Detection) -> bool:
     return True
 
 
+def _classify_window(
+    channel_index: int,
+    window_index: int,
+    start: int,
+    end: int,
+    inference_audio: np.ndarray,
+    volume: float,
+    model: BirdNETModel,
+    meta_model: BirdNETModel | None,
+    latitude: float | None,
+    longitude: float | None,
+    observed_on: date,
+) -> Detection:
+    """Shared by collect_detections and collect_beamformed_detections: runs
+    BirdNET on one already-assembled WINDOW_FRAMES-length window and builds
+    its Detection. inference_audio and volume are separate parameters (not
+    derived from each other here) because the short-file caller needs
+    inference on zero-padded audio but volume computed on only the real
+    samples -- padding would dilute it."""
+    (
+        label,
+        score,
+        likely_score,
+        weighted_label,
+        weighted_score,
+        weighted_likely_score,
+    ) = invoke_birdnet_top_labels(
+        scale_by_max_value(inference_audio),
+        model,
+        meta_model,
+        latitude,
+        longitude,
+        observed_on,
+    )
+    return Detection(
+        channel_index,
+        window_index,
+        start,
+        end,
+        start,
+        volume,
+        label,
+        score,
+        likely_score,
+        weighted_label,
+        weighted_score,
+        weighted_likely_score,
+    )
+
+
 def collect_detections(
     channel_index: int,
     audio_mono: np.ndarray,
@@ -463,76 +637,74 @@ def collect_detections(
     longitude: float | None,
     observed_on: date,
 ) -> List[Detection]:
-    detections: List[Detection] = []
     if frames < WINDOW_FRAMES:
         padded = np.zeros(WINDOW_FRAMES, dtype=np.float32)
         padded[:frames] = audio_mono[:frames]
         volume = normalized_volume(audio_mono[:frames])
-        (
-            label,
-            score,
-            likely_score,
-            weighted_label,
-            weighted_score,
-            weighted_likely_score,
-        ) = invoke_birdnet_top_labels(
-            scale_by_max_value(padded),
-            model,
-            meta_model,
-            latitude,
-            longitude,
-            observed_on,
-        )
         return [
-            Detection(
-                channel_index,
-                0,
-                0,
-                WINDOW_FRAMES,
-                0,
-                volume,
-                label,
-                score,
-                likely_score,
-                weighted_label,
-                weighted_score,
-                weighted_likely_score,
+            _classify_window(
+                channel_index, 0, 0, WINDOW_FRAMES, padded, volume,
+                model, meta_model, latitude, longitude, observed_on,
             )
         ]
 
+    detections: List[Detection] = []
     window_index = 0
     for start in range(0, frames - WINDOW_FRAMES + 1, STRIDE_FRAMES):
         end = start + WINDOW_FRAMES
         window_audio = audio_mono[start:end]
-        (
-            label,
-            score,
-            likely_score,
-            weighted_label,
-            weighted_score,
-            weighted_likely_score,
-        ) = invoke_birdnet_top_labels(
-            scale_by_max_value(window_audio),
-            model,
-            meta_model,
-            latitude,
-            longitude,
-            observed_on,
-        )
         detections.append(
-            Detection(
-                channel_index,
-                window_index,
-                start,
-                end,
-                start,
+            _classify_window(
+                channel_index, window_index, start, end, window_audio,
                 normalized_volume(window_audio),
-                label,
-                score,
-                likely_score,
-                weighted_label,
-                weighted_score,
-                weighted_likely_score,
+                model, meta_model, latitude, longitude, observed_on,
+            )
+        )
+        window_index += 1
+    return detections
+
+
+def collect_beamformed_detections(
+    channels: list[np.ndarray],
+    frames: int,
+    channel_index: int,
+    model: BirdNETModel,
+    meta_model: BirdNETModel | None,
+    latitude: float | None,
+    longitude: float | None,
+    observed_on: date,
+    max_delay_ms: float = 50.0,
+) -> List[Detection]:
+    """Same sliding-window structure as collect_detections, but each
+    window's audio is freshly beamformed from all real channels (see
+    compute_beamformed_window) instead of sliced from one precomputed
+    channel array -- alignment has to be re-estimated per window, not once
+    for the whole file, since different calls in the same recording can
+    come from different directions."""
+    max_shifts = resolve_max_shifts(len(channels), max_delay_ms)
+
+    if frames < WINDOW_FRAMES:
+        short_window = compute_beamformed_window(channels, 0, frames, max_shifts)
+        padded = np.zeros(WINDOW_FRAMES, dtype=np.float32)
+        padded[:frames] = short_window
+        volume = normalized_volume(short_window)
+        return [
+            _classify_window(
+                channel_index, 0, 0, WINDOW_FRAMES, padded, volume,
+                model, meta_model, latitude, longitude, observed_on,
+            )
+        ]
+
+    detections: List[Detection] = []
+    window_index = 0
+    for start in range(0, frames - WINDOW_FRAMES + 1, STRIDE_FRAMES):
+        end = start + WINDOW_FRAMES
+        window_audio = compute_beamformed_window(channels, start, end, max_shifts)
+        detections.append(
+            _classify_window(
+                channel_index, window_index, start, end, window_audio,
+                normalized_volume(window_audio),
+                model, meta_model, latitude, longitude, observed_on,
             )
         )
         window_index += 1
@@ -698,8 +870,10 @@ def process_audio(
 
     audio, sample_rate = sf.read(source_path, dtype="int32", always_2d=True)
     latitude, longitude = location_coordinates()
+    observed_on = source_observation_date(source_path)
     detections: List[Detection] = []
-    for channel_index, channel_audio in audio_channels(audio, INPUT_MODE):
+    channel_list = audio_channels(audio, INPUT_MODE)
+    for channel_index, channel_audio in channel_list:
         channel_detections = merge_consecutive_detections(
             collect_detections(
                 channel_index,
@@ -709,7 +883,7 @@ def process_audio(
                 meta_model,
                 latitude,
                 longitude,
-                source_observation_date(source_path),
+                observed_on,
             )
         )
         detections.extend(
@@ -717,6 +891,27 @@ def process_audio(
             for detection in channel_detections
             if passes_detection_filters(detection)
         )
+
+    if ADD_BEAMFORMED_CHANNEL and INPUT_MODE == "split-channels" and len(channel_list) >= 2:
+        real_channels = [channel_audio for _idx, channel_audio in channel_list]
+        beamformed_detections = merge_consecutive_detections(
+            collect_beamformed_detections(
+                real_channels,
+                len(real_channels[0]),
+                len(channel_list),
+                model,
+                meta_model,
+                latitude,
+                longitude,
+                observed_on,
+            )
+        )
+        detections.extend(
+            detection
+            for detection in beamformed_detections
+            if passes_detection_filters(detection)
+        )
+
     detections = dedupe_overlapping_channel_detections(detections)
     written_clips = write_detection_clips(source_path, audio, sample_rate, detections)
 

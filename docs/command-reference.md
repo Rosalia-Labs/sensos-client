@@ -1010,6 +1010,7 @@ Important flags:
 - `--min-likelihood`
 - `--min-volume`
 - `--min-scoreXlikelihood`
+- `--add-beamformed-channel` / `--no-add-beamformed-channel`
 
 Typical use:
 
@@ -1018,6 +1019,7 @@ config-birdnet --start-service
 config-birdnet --backend litert --start-service
 config-birdnet --input-mode split-channels --start-service
 config-birdnet --min-score 0.7 --min-likelihood 0.2 --min-volume 0.01 --min-scoreXlikelihood 0.18
+config-birdnet --add-beamformed-channel --start-service
 config-birdnet --disable
 ```
 
@@ -1027,6 +1029,7 @@ Behavior:
 - auto-downloads BirdNET models when required files are missing
 - supports `mono` and `split-channels` multichannel input handling; `split-channels` is the default and preserves a zero-based channel index downstream
 - drops three-second intervals before clip creation and database insertion when any configured score, likelihood, normalized-volume, or score-times-likelihood minimum is missed
+- `--add-beamformed-channel` (experimental, off by default, requires `split-channels` and 2+ real channels): adds one extra synthetic channel at the next channel index, built one 3-second analysis window at a time -- the real channels are freshly time-aligned via GCC-PHAT and averaged for each window independently, not once for the whole file, since different calls in the same recording can come from different directions and need different alignment; flows through the same detection/merge/dedup pipeline as any other channel, so a duplicate detection between it and a real channel is collapsed by the usual cross-channel overlap dedup rather than double-counted
 - enables `sensos-birdnet.service` for future boot by default
 - leaves the BirdNET service stopped unless `--start-service` is supplied
 - controls `sensos-birdnet.service`

@@ -24,6 +24,7 @@ BACKEND_ALIASES = {
 }
 INPUT_MODE_CHOICES = ("mono", "split-channels")
 DEFAULT_MIN_THRESHOLD = 0.0
+DEFAULT_ADD_BEAMFORMED_CHANNEL = False
 
 if not UTILS_FILE.is_file():
     raise RuntimeError(f"Missing utils.py at {UTILS_FILE}")
@@ -34,6 +35,25 @@ assert UTILS_SPEC.loader is not None
 UTILS_SPEC.loader.exec_module(UTILS_MODULE)
 
 ensure_sensos_admin = UTILS_MODULE.ensure_sensos_admin
+
+
+def mic_distances(value: str) -> str:
+    """Comma-separated meters, one per non-reference channel (e.g. '0.3,0.25,0.4'
+    for channels 1,2,3 on a 4-channel array, distance to channel 0). Validated
+    here, stored as the original string -- process-birdnet.py does its own
+    parsing from birdnet.env, so there's no format to keep in sync beyond
+    comma-separated floats."""
+    parts = [p.strip() for p in value.split(",") if p.strip()]
+    if not parts:
+        raise argparse.ArgumentTypeError("must be a comma-separated list of distances in meters")
+    for part in parts:
+        try:
+            distance = float(part)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(f"invalid distance '{part}': not a number") from exc
+        if distance <= 0:
+            raise argparse.ArgumentTypeError(f"invalid distance '{part}': must be positive")
+    return ",".join(parts)
 
 
 def probability(value: str) -> float:
@@ -104,6 +124,31 @@ def parse_args() -> argparse.Namespace:
         type=probability,
         help="Drop intervals whose score multiplied by likelihood is below this value.",
     )
+    parser.add_argument(
+        "--add-beamformed-channel",
+        dest="add_beamformed_channel",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Experimental: add one extra synthetic channel per file, the "
+            "other channels time-aligned (via GCC-PHAT) and averaged -- only "
+            "meaningful with --input-mode split-channels and 2+ real "
+            "channels. Default: preserve existing setting, or off if unset."
+        ),
+    )
+    parser.add_argument(
+        "--mic-distances-m",
+        type=mic_distances,
+        help=(
+            "Measured distance in meters from each non-reference channel to "
+            "channel 0, comma-separated in channel order (e.g. '0.3,0.25,0.4' "
+            "for channels 1,2,3 on a 4-channel array). When set, constrains "
+            "--add-beamformed-channel's alignment search per channel to "
+            "physically possible delays (distance / speed of sound) instead "
+            "of a generic bound -- optional, since array geometry isn't "
+            "always measured. Default: preserve existing setting, or unset."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -134,6 +179,28 @@ def read_existing_input_mode() -> str:
     return DEFAULT_INPUT_MODE
 
 
+def read_existing_add_beamformed_channel() -> bool:
+    if not CONFIG_FILE.exists():
+        return DEFAULT_ADD_BEAMFORMED_CHANNEL
+
+    for line in CONFIG_FILE.read_text(encoding="utf-8").splitlines():
+        if line.startswith("BIRDNET_ADD_BEAMFORMED_CHANNEL="):
+            return line.split("=", 1)[1].strip() == "1"
+
+    return DEFAULT_ADD_BEAMFORMED_CHANNEL
+
+
+def read_existing_mic_distances() -> str:
+    if not CONFIG_FILE.exists():
+        return ""
+
+    for line in CONFIG_FILE.read_text(encoding="utf-8").splitlines():
+        if line.startswith("BIRDNET_MIC_DISTANCES_M="):
+            return line.split("=", 1)[1].strip()
+
+    return ""
+
+
 def read_existing_threshold(key: str) -> float:
     if not CONFIG_FILE.exists():
         return DEFAULT_MIN_THRESHOLD
@@ -159,6 +226,8 @@ def write_config(
     min_likelihood: float,
     min_volume: float,
     min_score_x_likelihood: float,
+    add_beamformed_channel: bool,
+    mic_distances_m: str,
 ) -> None:
     backend = BACKEND_ALIASES[backend]
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -171,6 +240,8 @@ def write_config(
             f"BIRDNET_MIN_LIKELIHOOD={min_likelihood}\n"
             f"BIRDNET_MIN_VOLUME={min_volume}\n"
             f"BIRDNET_MIN_SCORE_X_LIKELIHOOD={min_score_x_likelihood}\n"
+            f"BIRDNET_ADD_BEAMFORMED_CHANNEL={'1' if add_beamformed_channel else '0'}\n"
+            f"BIRDNET_MIC_DISTANCES_M={mic_distances_m}\n"
         ),
         encoding="utf-8",
     )
@@ -222,6 +293,8 @@ def main() -> int:
             read_existing_threshold("BIRDNET_MIN_LIKELIHOOD"),
             read_existing_threshold("BIRDNET_MIN_VOLUME"),
             read_existing_threshold("BIRDNET_MIN_SCORE_X_LIKELIHOOD"),
+            read_existing_add_beamformed_channel(),
+            read_existing_mic_distances(),
         )
         systemctl("disable", "--now", SERVICE_NAME)
         print("BirdNET disabled.")
@@ -249,6 +322,16 @@ def main() -> int:
         if args.min_score_x_likelihood is not None
         else read_existing_threshold("BIRDNET_MIN_SCORE_X_LIKELIHOOD")
     )
+    add_beamformed_channel = (
+        args.add_beamformed_channel
+        if args.add_beamformed_channel is not None
+        else read_existing_add_beamformed_channel()
+    )
+    mic_distances_m = (
+        args.mic_distances_m
+        if args.mic_distances_m is not None
+        else read_existing_mic_distances()
+    )
     write_config(
         True,
         selected_backend,
@@ -257,6 +340,8 @@ def main() -> int:
         min_likelihood,
         min_volume,
         min_score_x_likelihood,
+        add_beamformed_channel,
+        mic_distances_m,
     )
     run_setup_step()
 
@@ -270,7 +355,10 @@ def main() -> int:
         f"Backend: {selected_backend}. Input mode: {args.input_mode}. "
         f"Minimum score: {min_score}. Minimum likelihood: {min_likelihood}. "
         f"Minimum volume: {min_volume}. "
-        f"Minimum score×likelihood: {min_score_x_likelihood}. Service: {SERVICE_NAME}"
+        f"Minimum score×likelihood: {min_score_x_likelihood}. "
+        f"Beamformed channel: {'on' if add_beamformed_channel else 'off'}"
+        f"{f' (mic distances: {mic_distances_m}m)' if mic_distances_m else ''}. "
+        f"Service: {SERVICE_NAME}"
     )
     return 0
 
