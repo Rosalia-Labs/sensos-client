@@ -80,6 +80,7 @@ sudo nmcli connection modify "${CON_NAME}" \
     ipv6.method ignore \
     connection.autoconnect yes \
     connection.autoconnect-priority 90
+record_config_change "${SCRIPT_FILE}"
 
 if [[ "${start_now,,}" == "true" ]]; then
     echo "[$(date -Is)] Bringing up '${CON_NAME}' on ${IFACE}." >&3

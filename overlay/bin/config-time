@@ -27,6 +27,7 @@ UTILS_SPEC.loader.exec_module(UTILS_MODULE)
 
 ensure_sensos_admin = UTILS_MODULE.ensure_sensos_admin
 report_event = UTILS_MODULE.report_event
+record_config_change = UTILS_MODULE.record_config_change
 
 
 def parse_args() -> argparse.Namespace:
@@ -346,6 +347,7 @@ def main() -> int:
             "source": "manual",
         },
     )
+    record_config_change()
 
     print()
     print("Updated device time:")

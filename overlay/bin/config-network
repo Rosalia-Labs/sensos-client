@@ -711,6 +711,7 @@ def main():
             "server_wg_ip": server_wg_ip,
         },
     )
+    record_config_change()
 
     print("✅ Configuration complete. Reboot now and check connectivity.")
 

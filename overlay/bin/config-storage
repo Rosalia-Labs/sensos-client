@@ -554,6 +554,7 @@ main() {
     if [[ -z "${device}" ]]; then
         ensure_data_layout
         echo "✅ SensOS data layout initialized under ${DATA_MOUNT}"
+        record_config_change "${SCRIPT_FILE}"
         exit 0
     fi
 
@@ -588,6 +589,7 @@ main() {
     fi
 
     echo "✅ Storage configured at ${DATA_MOUNT}"
+    record_config_change "${SCRIPT_FILE}"
 }
 
 PARTITION=""

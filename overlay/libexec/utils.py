@@ -58,6 +58,28 @@ def _help_only_invocation(argv: list[str]) -> bool:
     return bool(argv) and all(arg in ("-h", "--help", "help") for arg in argv)
 
 
+CONFIG_INVOCATIONS_DIR = os.path.join(CLIENT_ROOT, "etc", "config-invocations")
+
+
+def record_config_change(script_name=None):
+    """Record that a config-* script actually changed state on this unit
+    (wrote a config file, applied a profile, enabled/disabled a service --
+    not just viewed --help/--list/--status). Call this explicitly at each
+    script's real mutation point, not from the generic sensos-admin gate:
+    every config-* script passes through that gate on *every* invocation,
+    including read-only ones, so recording there would conflate "ran this
+    script" with "changed something" -- the actual question a pre-deploy
+    check needs answered is the latter. Lets a pre-deploy check (or anyone)
+    answer "has config-X's state been changed on this unit, and when"
+    without having to infer it indirectly from config file timestamps.
+    """
+    name = script_name or os.path.basename(sys.argv[0])
+    os.makedirs(CONFIG_INVOCATIONS_DIR, exist_ok=True)
+    timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    with open(os.path.join(CONFIG_INVOCATIONS_DIR, name), "w", encoding="utf-8") as f:
+        f.write(timestamp + "\n")
+
+
 def ensure_sensos_admin(argv: list[str] | None = None) -> None:
     argv = list(sys.argv[1:] if argv is None else argv)
 

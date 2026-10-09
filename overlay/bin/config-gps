@@ -27,6 +27,7 @@ parse_args_with_defaults = UTILS_MODULE.parse_args_with_defaults
 create_dir = UTILS_MODULE.create_dir
 write_file = UTILS_MODULE.write_file
 ensure_sensos_admin = UTILS_MODULE.ensure_sensos_admin
+record_config_change = UTILS_MODULE.record_config_change
 
 CONFIG_PATH = os.path.join(CLIENT_ROOT, "etc", "gps.conf")
 SERVICE_NAME = "sensos-gps.service"
@@ -125,6 +126,7 @@ def main() -> int:
             group="sensos-data",
         )
         systemctl("disable", "--now", SERVICE_NAME)
+        record_config_change()
         print("GPS disabled.")
         return 0
 
@@ -142,6 +144,7 @@ def main() -> int:
         f"GPS_LOCATION_MOVE_THRESHOLD_M={args.location_move_threshold_m}\n"
     )
     write_file(CONFIG_PATH, content, mode=0o664, user="sensos-admin", group="sensos-data")
+    record_config_change()
     print(f"Wrote GPS config to {CONFIG_PATH}")
 
     install_optional_python_dependencies()

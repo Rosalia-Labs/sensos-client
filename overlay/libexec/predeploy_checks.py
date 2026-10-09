@@ -35,6 +35,8 @@ HOTSPOT_CONF = CLIENT_ROOT / "etc" / "hotspot.conf"
 WIFI_CONF = CLIENT_ROOT / "etc" / "wifi.conf"
 GPSD_DEFAULT_FILE = Path("/etc/default/gpsd")
 I2C_DEVICE_NODE = Path("/dev/i2c-1")
+CONFIG_BIN_DIR = CLIENT_ROOT / "bin"
+CONFIG_INVOCATIONS_DIR = CLIENT_ROOT / "etc" / "config-invocations"
 
 
 def utcnow_text() -> str:
@@ -315,6 +317,36 @@ def check_uplink_intent() -> tuple[str, str]:
         return "not_configured", f"no uplink configured ({WIFI_CONF} missing or empty)"
     iface = config.get("UPLINK_INTERFACE", "unknown")
     return "configured", f"ssid={ssid!r}, interface={iface}"
+
+
+def list_config_invocations() -> list[tuple[str, str]]:
+    """Cross-reference every installed config-* script against its last
+    recorded invocation (see record_config_invocation in utils.py /
+    ensure-sensos-admin.sh -- the one choke point every config-* script
+    already passes through). This is a far more complete and honest audit
+    than hand-built per-domain checks: it covers every config-* script,
+    including ones with no dedicated check below, and it answers the actual
+    question -- "was this run, and when" -- rather than inferring it
+    indirectly from config file contents. It deliberately says nothing
+    about whether a script *should* have been run on this unit (e.g.
+    config-location may legitimately be set in the lab before a field move,
+    or only after) -- that judgment is left to the operator, same as every
+    other check here.
+
+    Returns (script_name, status) pairs sorted by name, where status is
+    either an ISO timestamp or "never".
+    """
+    if not CONFIG_BIN_DIR.is_dir():
+        return []
+    scripts = sorted(p.name for p in CONFIG_BIN_DIR.glob("config-*") if p.is_file())
+    results = []
+    for name in scripts:
+        marker = CONFIG_INVOCATIONS_DIR / name
+        if marker.is_file():
+            results.append((name, marker.read_text(encoding="utf-8").strip() or "never"))
+        else:
+            results.append((name, "never"))
+    return results
 
 
 def check_hotspot_intent() -> tuple[str, str]:

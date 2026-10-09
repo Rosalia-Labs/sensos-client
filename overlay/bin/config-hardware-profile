@@ -41,6 +41,7 @@ assert UTILS_SPEC.loader is not None
 UTILS_SPEC.loader.exec_module(UTILS_MODULE)
 
 ensure_sensos_admin = UTILS_MODULE.ensure_sensos_admin
+record_config_change = UTILS_MODULE.record_config_change
 
 
 def parse_args() -> argparse.Namespace:
@@ -190,6 +191,7 @@ def cmd_apply(name: str) -> int:
         return 0
 
     update_state_applied(name, True)
+    record_config_change()
     print(f"applied hardware profile: {name}")
     return 0
 
@@ -201,9 +203,11 @@ def cmd_unapply(name: str) -> int:
     if not unapplied_any:
         print(f"profile {name} has no reversible settings yet")
         update_state_applied(name, False)
+        record_config_change()
         return 0
 
     update_state_applied(name, False)
+    record_config_change()
     print(f"unapplied hardware profile: {name}")
     return 0
 

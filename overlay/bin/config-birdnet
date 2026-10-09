@@ -35,6 +35,7 @@ assert UTILS_SPEC.loader is not None
 UTILS_SPEC.loader.exec_module(UTILS_MODULE)
 
 ensure_sensos_admin = UTILS_MODULE.ensure_sensos_admin
+record_config_change = UTILS_MODULE.record_config_change
 
 
 def mic_distances(value: str) -> str:
@@ -297,6 +298,7 @@ def main() -> int:
             read_existing_mic_distances(),
         )
         systemctl("disable", "--now", SERVICE_NAME)
+        record_config_change()
         print("BirdNET disabled.")
         return 0
 
@@ -343,6 +345,7 @@ def main() -> int:
         add_beamformed_channel,
         mic_distances_m,
     )
+    record_config_change()
     run_setup_step()
 
     if args.enable_service:

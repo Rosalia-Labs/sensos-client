@@ -19,6 +19,21 @@ sensos_admin_should_skip_reexec_for_help() {
     return 0
 }
 
+# Records that a config-* script actually changed state on this unit (wrote
+# a config file, applied a profile, enabled/disabled a service -- not just
+# viewed --help/--list/--status). Call this explicitly at each script's real
+# mutation point, not from ensure_sensos_admin_user itself: that gate runs on
+# *every* invocation, including read-only ones, so recording there would
+# conflate "ran this script" with "changed something". Mirrors
+# record_config_change() in utils.py (the Python equivalent).
+record_config_change() {
+    local script_name
+    script_name="$(basename "$1")"
+    local dir="${CLIENT_ROOT:-/sensos}/etc/config-invocations"
+    mkdir -p "${dir}"
+    date -u +%Y-%m-%dT%H:%M:%SZ >"${dir}/${script_name}"
+}
+
 ensure_sensos_admin_user() {
     local script_path="$1"
     shift

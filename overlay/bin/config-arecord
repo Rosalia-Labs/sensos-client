@@ -542,6 +542,7 @@ main() {
 
     test_configuration
     write_config
+    record_config_change "${SCRIPT_FILE}"
     apply_service_state
     warn_clock_and_location
 }

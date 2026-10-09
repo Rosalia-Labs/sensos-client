@@ -373,6 +373,7 @@ if ! sudo nmcli -t -f NAME connection show --active | grep -Fxq "${AP_CON}"; the
     echo "[$(date -Is)] ERROR: failed to bring up AP '${AP_CON}'." >&3
     exit 1
 fi
+record_config_change "${SCRIPT_FILE}"
 
 if [[ "${power_save,,}" == "true" ]]; then
     sudo iw dev "${IFACE}" set power_save on || true

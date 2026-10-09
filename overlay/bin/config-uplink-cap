@@ -103,6 +103,7 @@ if [[ "${disable}" == "true" ]]; then
     rm -f "${config_path}"
     sudo systemctl disable --now sensos-uplink-cap.timer 2>/dev/null || true
     clear_tc_limits "${resolved_iface}"
+    record_config_change "${SCRIPT_FILE}"
     echo "Done."
     exit 0
 fi
@@ -134,6 +135,7 @@ resolved_iface="$(resolve_iface)"
 
 echo "Wrote config to ${config_path}:"
 cat "${config_path}"
+record_config_change "${SCRIPT_FILE}"
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now sensos-uplink-cap.timer

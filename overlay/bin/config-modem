@@ -333,6 +333,7 @@ sudo nmcli con mod "${NM_CON_NAME}" gsm.home-only no || true
 sudo nmcli con mod "${NM_CON_NAME}" connection.autoconnect yes
 sudo nmcli con mod "${NM_CON_NAME}" connection.autoconnect-retries 0 || true
 echo "Autoconnect enabled (unlimited retries)."
+record_config_change "${SCRIPT_FILE}"
 
 caps_pending=false
 if [[ -z "${limit_up_kbit}" && -z "${limit_down_kbit}" ]]; then

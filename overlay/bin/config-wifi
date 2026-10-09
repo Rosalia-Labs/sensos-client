@@ -325,6 +325,7 @@ EOF
 }
 
 write_wifi_config
+record_config_change "${SCRIPT_FILE}"
 
 if [[ -z "${limit_up_kbit}" && -z "${limit_down_kbit}" ]]; then
     echo "No traffic caps requested; clearing any existing traffic caps on ${iface}"

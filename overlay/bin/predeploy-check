@@ -66,6 +66,14 @@ def main() -> int:
     for name, entry in sorted(state.items()):
         print(PC.report_line(name, entry))
 
+    print()
+    print("== config-* invocation history ==")
+    print("When each config-* script on this unit was last run, regardless of")
+    print("whether it has a dedicated check above -- 'never' doesn't mean wrong,")
+    print("just that the operator should confirm it's intentional for this unit.")
+    for name, status in PC.list_config_invocations():
+        print(f"{name}: {status}")
+
     return 0
 
 

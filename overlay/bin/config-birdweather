@@ -98,6 +98,7 @@ fi
 
 echo "Wrote config to ${config_path}:"
 cat "${config_path}"
+record_config_change "${SCRIPT_FILE}"
 
 if [[ -n "$station_token" ]]; then
     sudo install -D -m 0600 /dev/null "${token_path}"

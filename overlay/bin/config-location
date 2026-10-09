@@ -49,6 +49,7 @@ def write_local_location_conf(latitude, longitude):
     create_dir(os.path.dirname(LOCATION_CONF), owner="sensos-admin", group="sensos-data", mode=0o2775)
     content = f"LATITUDE={latitude}\nLONGITUDE={longitude}\n"
     write_file(LOCATION_CONF, content, mode=0o664, user="sensos-admin", group="sensos-data")
+    record_config_change()
     print(f"✅ Location written to {LOCATION_CONF}")
     report_event(
         "location_changed",

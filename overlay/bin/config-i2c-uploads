@@ -49,6 +49,7 @@ parse_switches "$script_name" "$@"
 
 echo "Wrote config to ${config_path}:"
 cat "${config_path}"
+record_config_change "${SCRIPT_FILE}"
 
 output_dir="${CLIENT_ROOT}/data/microenv"
 sudo install -d -m 2775 -o sensos-runner -g sensos-data "${output_dir}"
