@@ -586,8 +586,9 @@ def dedupe_overlapping_channel_detections(detections: List[Detection]) -> List[D
     microphone, not a separate event, so keeping all of them is mostly
     redundant clips and redundant upload/storage for one real event. Keeps
     the highest-scoring (raw score, never weighted -- see
-    merge_consecutive_detections for why) run per overlapping group; the
-    rest are dropped before a clip is ever written for them.
+    merge_consecutive_detections for why) run per overlapping group, ties
+    broken by the longer of the tied runs; the rest are dropped before a
+    clip is ever written for them.
 
     Implemented as a sort-and-sweep per label rather than an explicit overlap
     graph: for one-dimensional time intervals the two are equivalent, and
@@ -609,12 +610,12 @@ def dedupe_overlapping_channel_detections(detections: List[Detection]) -> List[D
         group_end = -1
         for run in runs:
             if group and run.start_frame > group_end:
-                kept.append(max(group, key=lambda d: d.score))
+                kept.append(max(group, key=lambda d: (d.score, d.end_frame - d.start_frame)))
                 group = []
             group.append(run)
             group_end = max(group_end, run.end_frame)
         if group:
-            kept.append(max(group, key=lambda d: d.score))
+            kept.append(max(group, key=lambda d: (d.score, d.end_frame - d.start_frame)))
 
     return kept
 
