@@ -4,6 +4,10 @@ Description=Periodically pull and apply the configured Ansible playbook
 [Timer]
 OnBootSec=2min
 OnUnitActiveSec=1800
+# Desyncs from other local timers with coincidentally identical schedules
+# (and from the rest of the fleet after a shared power event re-syncs
+# every device's boot-relative timers at once).
+RandomizedDelaySec=60
 
 [Install]
 WantedBy=timers.target

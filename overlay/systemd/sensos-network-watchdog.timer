@@ -4,6 +4,10 @@ Description=Check WireGuard tunnel reachability every 10 minutes
 [Timer]
 OnBootSec=10min
 OnUnitActiveSec=10min
+# Desyncs from other local timers with coincidentally identical schedules
+# (and from the rest of the fleet after a shared power event re-syncs
+# every device's boot-relative timers at once).
+RandomizedDelaySec=60
 
 [Install]
 WantedBy=timers.target

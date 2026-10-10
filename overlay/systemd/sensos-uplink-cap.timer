@@ -6,6 +6,10 @@ Description=Periodically reconcile the day/night uplink bandwidth cap
 # rather than running uncapped until the next 10-minute tick.
 OnBootSec=2min
 OnUnitActiveSec=10min
+# Desyncs from other local timers with coincidentally identical schedules
+# (and from the rest of the fleet after a shared power event re-syncs
+# every device's boot-relative timers at once).
+RandomizedDelaySec=60
 
 [Install]
 WantedBy=timers.target
