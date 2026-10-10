@@ -156,7 +156,11 @@ show_usage() {
                 hint=" (boolean flag)"
             fi
         fi
-        printf "  %-24s %-50s %s\n" "$usage" "$help$hint" "(default: $default)"
+        if [[ -n "$default" ]]; then
+            printf "  %-24s %-50s %s\n" "$usage" "$help$hint" "(default: $default)"
+        else
+            printf "  %-24s %s\n" "$usage" "$help$hint"
+        fi
     done
 
     echo "  --help                  Show this help message"
