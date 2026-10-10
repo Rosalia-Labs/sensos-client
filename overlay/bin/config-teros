@@ -79,12 +79,23 @@ cat "$config_path"
 record_config_change "${SCRIPT_FILE}"
 
 if [[ -n "$resolved_device" ]]; then
-    teros_rules_src="${OVERLAY_ROOT}/etc/99-sensos-teros.rules"
-    if [[ -f "${teros_rules_src}" ]]; then
-        echo "Installing TEROS udev rule..."
-        sudo install -m 0644 "${teros_rules_src}" /etc/udev/rules.d/99-sensos-teros.rules
-        sudo udevadm control --reload-rules
-    fi
+    echo "Installing TEROS udev rule..."
+    teros_rules_tmp="$(mktemp)"
+    cat >"${teros_rules_tmp}" <<'EOF'
+# SensOS: TEROS 12 USB node (Arduino Nano clone, CH340 USB-serial, 1a86:7523).
+#
+# 1) Pin the node to a stable name so config never depends on ttyUSB order.
+# 2) Restart the TEROS reader when the node is plugged in, so it re-runs
+#    discovery and registers the probes without anyone touching the Pi.
+#
+# For more than one node on a Pi, key each rule on the physical port instead
+# (KERNELS=="1-1.2") and give each its own SYMLINK (teros-node-1, ...).
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="teros-node-0", GROUP="dialout", MODE="0660"
+ACTION=="add", SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", RUN+="/bin/systemctl restart sensos-read-teros.service"
+EOF
+    sudo install -m 0644 "${teros_rules_tmp}" /etc/udev/rules.d/99-sensos-teros.rules
+    rm -f "${teros_rules_tmp}"
+    sudo udevadm control --reload-rules
 fi
 
 output_dir="${CLIENT_ROOT}/data/microenv"
