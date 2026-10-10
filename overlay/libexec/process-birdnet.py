@@ -171,6 +171,7 @@ class BirdNETModel:
     input_details: list
     output_details: list
     labels: List[str]
+    human_label_mask: np.ndarray
 
 
 @dataclass
@@ -187,6 +188,7 @@ class Detection:
     weighted_label: str
     weighted_score: float
     weighted_likely_score: float | None
+    human_vocal_score: float
 
 def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -206,6 +208,7 @@ def load_birdnet_model(model_path: Path, labels_path: Path) -> BirdNETModel:
         input_details=interpreter.get_input_details(),
         output_details=interpreter.get_output_details(),
         labels=labels,
+        human_label_mask=np.array([is_human_label(label) for label in labels], dtype=bool),
     )
 
 
@@ -236,13 +239,26 @@ def invoke_birdnet_top_labels(
     latitude: float | None,
     longitude: float | None,
     observed_on: date,
-) -> tuple[str, float, float | None, str, float, float | None]:
+) -> tuple[str, float, float | None, str, float, float | None, float]:
     input_data = np.expand_dims(audio, axis=0).astype(np.float32)
     model.interpreter.set_tensor(model.input_details[0]["index"], input_data)
     model.interpreter.invoke()
     scores = model.interpreter.get_tensor(model.output_details[0]["index"])
     scores_flat = flat_sigmoid(scores.flatten())
     raw_top_index = int(np.argmax(scores_flat))
+    # Raw per-class score, not normalized against the rest of the label
+    # space -- BirdNET's output is independent per-class sigmoids (no
+    # softmax), so there's no well-defined "rest" to compare against
+    # without real calibration data. Carried through purely as information
+    # (see is_human_label/write_detection_clips for the existing top-label
+    # suppression this is deliberately NOT replacing): a bird detection can
+    # still win the window even when there's audible human speech
+    # underneath it, and this is how much of that leaked in.
+    human_vocal_score = (
+        float(np.max(scores_flat[model.human_label_mask]))
+        if model.human_label_mask.any()
+        else 0.0
+    )
     likely_scores = None
     if (
         meta_model is not None
@@ -276,6 +292,7 @@ def invoke_birdnet_top_labels(
         model.labels[weighted_top_index],
         float(scores_flat[weighted_top_index]),
         weighted_likely_score,
+        human_vocal_score,
     )
 
 
@@ -569,9 +586,14 @@ def passes_detection_filters(detection: Detection) -> bool:
         detection.likely_score is None or detection.likely_score < MIN_LIKELIHOOD
     ):
         return False
+    # Checks weighted_score * weighted_likely_score, not score * likely_score:
+    # weighted_label was itself chosen by maximizing exactly that product over
+    # every candidate species, so it's always >= the raw label's product.
+    # Checking the raw product instead would be a strictly harsher (and
+    # mismatched-to-the-name) filter than intended.
     if MIN_SCORE_X_LIKELIHOOD > 0 and (
-        detection.likely_score is None
-        or detection.score * detection.likely_score < MIN_SCORE_X_LIKELIHOOD
+        detection.weighted_likely_score is None
+        or detection.weighted_score * detection.weighted_likely_score < MIN_SCORE_X_LIKELIHOOD
     ):
         return False
     return True
@@ -603,6 +625,7 @@ def _classify_window(
         weighted_label,
         weighted_score,
         weighted_likely_score,
+        human_vocal_score,
     ) = invoke_birdnet_top_labels(
         scale_by_max_value(inference_audio),
         model,
@@ -624,6 +647,7 @@ def _classify_window(
         weighted_label,
         weighted_score,
         weighted_likely_score,
+        human_vocal_score,
     )
 
 
@@ -738,6 +762,12 @@ def merge_consecutive_detections(detections: List[Detection]) -> List[Detection]
                 weighted_label=peak.weighted_label,
                 weighted_score=peak.weighted_score,
                 weighted_likely_score=peak.weighted_likely_score,
+                # Unlike the other fields, this deliberately isn't the peak
+                # window's value: human speech leaking into a bird detection
+                # can land on any window in the run, not necessarily the one
+                # with the loudest/most-confident bird score, and the whole
+                # point is to not miss that.
+                human_vocal_score=max(d.human_vocal_score for d in run),
             )
         )
 
@@ -918,8 +948,8 @@ def process_audio(
     conn.executemany(
         """
         INSERT INTO detections (
-            source_file_id, channel_index, window_index, max_score_start_frame, label, score, likely_score, weighted_label, weighted_score, weighted_likely_score, volume, clip_start_time, clip_end_time, clip_path, clip_size_bytes, deleted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            source_file_id, channel_index, window_index, max_score_start_frame, label, score, likely_score, weighted_label, weighted_score, weighted_likely_score, human_vocal_score, volume, clip_start_time, clip_end_time, clip_path, clip_size_bytes, deleted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
@@ -933,6 +963,7 @@ def process_audio(
                 d.weighted_label,
                 d.weighted_score,
                 d.weighted_likely_score,
+                d.human_vocal_score,
                 d.volume,
                 iso_utc_text(source_start_dt + timedelta(seconds=(d.start_frame / sample_rate))),
                 iso_utc_text(source_start_dt + timedelta(seconds=(d.end_frame / sample_rate))),

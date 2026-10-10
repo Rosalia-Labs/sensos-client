@@ -123,7 +123,7 @@ def parse_args() -> argparse.Namespace:
         "--min-scorexlikelihood",
         dest="min_score_x_likelihood",
         type=probability,
-        help="Drop intervals whose score multiplied by likelihood is below this value.",
+        help="Drop intervals whose weighted (score x likelihood) label's own score multiplied by its own likelihood is below this value.",
     )
     parser.add_argument(
         "--add-beamformed-channel",

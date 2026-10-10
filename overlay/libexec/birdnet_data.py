@@ -87,6 +87,7 @@ def migrate_legacy_flat_detections(conn: sqlite3.Connection) -> None:
             weighted_label TEXT,
             weighted_score REAL,
             weighted_likely_score REAL,
+            human_vocal_score REAL,
             volume REAL,
             clip_start_time TEXT NOT NULL,
             clip_end_time TEXT NOT NULL,
@@ -107,6 +108,7 @@ def migrate_legacy_flat_detections(conn: sqlite3.Connection) -> None:
         "weighted_likely_score",
         likely_score,
     )
+    human_vocal_score = legacy_column_expr(columns, "human_vocal_score", "NULL")
     volume = legacy_column_expr(columns, "volume", "NULL")
     clip_path = legacy_column_expr(columns, "clip_path", "NULL")
     clip_size_bytes = legacy_column_expr(columns, "clip_size_bytes", "NULL")
@@ -117,13 +119,13 @@ def migrate_legacy_flat_detections(conn: sqlite3.Connection) -> None:
         INSERT INTO detections_new (
             id, source_file_id, channel_index, window_index, max_score_start_frame,
             label, score, likely_score, weighted_label, weighted_score,
-            weighted_likely_score, volume, clip_start_time, clip_end_time, clip_path,
-            clip_size_bytes, sent_to_server, deleted_at
+            weighted_likely_score, human_vocal_score, volume, clip_start_time,
+            clip_end_time, clip_path, clip_size_bytes, sent_to_server, deleted_at
         )
         SELECT d.id, s.id, d.channel_index, d.window_index, d.max_score_start_frame,
                d.label, d.score, {likely_score}, {weighted_label}, {weighted_score},
-               {weighted_likely_score}, {volume}, d.clip_start_time, d.clip_end_time,
-               {clip_path}, {clip_size_bytes}, {sent_to_server}, {deleted_at}
+               {weighted_likely_score}, {human_vocal_score}, {volume}, d.clip_start_time,
+               d.clip_end_time, {clip_path}, {clip_size_bytes}, {sent_to_server}, {deleted_at}
         FROM detections d
         JOIN source_files s ON s.source_path = d.source_path
         """
@@ -161,6 +163,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
                 weighted_label TEXT,
                 weighted_score REAL,
                 weighted_likely_score REAL,
+                human_vocal_score REAL,
                 volume REAL,
                 clip_start_time TEXT NOT NULL,
                 clip_end_time TEXT NOT NULL,
@@ -186,6 +189,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE detections ADD COLUMN weighted_score REAL")
     if "weighted_likely_score" not in detection_columns:
         conn.execute("ALTER TABLE detections ADD COLUMN weighted_likely_score REAL")
+    if "human_vocal_score" not in detection_columns:
+        conn.execute("ALTER TABLE detections ADD COLUMN human_vocal_score REAL")
     if "audio_sent_to_server" not in detection_columns:
         # Plain 0/1: has the server received this clip's audio bytes yet?
         # Separate from sent_to_server because results and audio travel over
@@ -301,6 +306,7 @@ def select_pending_detections(conn: sqlite3.Connection, limit: int) -> list[sqli
                d.weighted_label,
                d.weighted_score,
                d.weighted_likely_score,
+               d.human_vocal_score,
                d.volume,
                d.clip_start_time,
                d.clip_end_time,
@@ -414,6 +420,12 @@ def mark_low_score_detections_skipped(
     threshold is naturally a no-op; likelihood-based checks only apply when
     their threshold is > 0, since likely_score is not always populated and a
     0.0 default must not reject detections that simply lack one).
+
+    min_score_x_likelihood checks weighted_score * weighted_likely_score,
+    not score * likely_score: weighted_label was itself chosen by maximizing
+    exactly that product over every candidate species, so it's always >= the
+    raw label's product. Checking the raw product instead would be a
+    strictly harsher (and mismatched-to-the-name) filter than intended.
     """
     if not any([min_score, min_likelihood, min_volume, min_score_x_likelihood]):
         return 0
@@ -427,7 +439,7 @@ def mark_low_score_detections_skipped(
               score < ?
               OR volume < ?
               OR (? > 0 AND (likely_score IS NULL OR likely_score < ?))
-              OR (? > 0 AND (likely_score IS NULL OR score * likely_score < ?))
+              OR (? > 0 AND (weighted_likely_score IS NULL OR weighted_score * weighted_likely_score < ?))
           )
         """,
         (

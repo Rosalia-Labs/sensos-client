@@ -77,11 +77,11 @@ class BirdNETChannelTests(unittest.TestCase):
             np.testing.assert_array_equal(channel_audio, audio[:, channel_index])
 
     def test_short_window_metadata_covers_padded_three_seconds(self):
-        model = self.module.BirdNETModel(None, [], [], [])
+        model = self.module.BirdNETModel(None, [], [], [], np.array([], dtype=bool))
         with patch.object(
             self.module,
             "invoke_birdnet_top_labels",
-            return_value=("Test bird", 0.9, None, "Test bird", 0.9, None),
+            return_value=("Test bird", 0.9, None, "Test bird", 0.9, None, 0.0),
         ):
             detections = self.module.collect_detections(
                 2,
@@ -114,6 +114,7 @@ class BirdNETChannelTests(unittest.TestCase):
             weighted_label="Test bird",
             weighted_score=0.9,
             weighted_likely_score=None,
+            human_vocal_score=0.0,
         )
         written_audio = []
 
@@ -147,6 +148,7 @@ class BirdNETChannelTests(unittest.TestCase):
             weighted_label="Test bird",
             weighted_score=0.8,
             weighted_likely_score=0.5,
+            human_vocal_score=0.0,
         )
         with patch.multiple(
             self.module,
@@ -179,6 +181,7 @@ class BirdNETChannelTests(unittest.TestCase):
             weighted_label="Test bird",
             weighted_score=0.9,
             weighted_likely_score=None,
+            human_vocal_score=0.0,
         )
         with patch.object(self.module, "MIN_LIKELIHOOD", 0.1):
             self.assertFalse(self.module.passes_detection_filters(detection))

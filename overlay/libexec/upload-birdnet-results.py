@@ -118,6 +118,11 @@ def detections_to_payload(rows) -> list[dict]:
                 if row["weighted_likely_score"] is not None
                 else None
             ),
+            "human_vocal_score": (
+                float(row["human_vocal_score"])
+                if row["human_vocal_score"] is not None
+                else None
+            ),
             "volume": float(row["volume"]) if row["volume"] is not None else None,
             "clip_start_time": row["clip_start_time"],
             "clip_end_time": row["clip_end_time"],
