@@ -1,0 +1,6 @@
+[Unit]
+Description=Pull and apply the configured Ansible playbook
+
+[Service]
+Type=oneshot
+ExecStart=/sensos/libexec/apply-ansible-pull.sh

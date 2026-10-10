@@ -847,6 +847,37 @@ Behavior:
 - applies the resolved cap immediately in addition to scheduling it, so you don't wait for the first timer tick
 - layers on top of `config-wifi`'s one-off `--limit-up-kbit`/`--limit-down-kbit`: once this scheduler is enabled it overwrites those on its next tick, so use `config-wifi`'s flags only for a cap you want to hold regardless of time of day
 
+### `config-ansible`
+
+Schedules `ansible-pull` (via `sensos-ansible-pull.timer` + `apply-ansible-pull.sh`)
+to periodically pull and apply a playbook from a git repo, re-applied every
+tick (default 30 minutes) rather than only on repo changes -- the playbook
+is expected to be idempotent, so this also corrects drift from anything
+else touching the system.
+
+Important flags:
+
+- `--repo-url` (required; ssh or https git URL)
+- `--branch` (default: repo's default branch)
+- `--playbook` (default `local.yml`)
+- `--inventory` (default: localhost only)
+- `--interval-sec` (default `1800`; minimum `60`)
+- `--disable`
+
+Typical use:
+
+```sh
+config-ansible --repo-url git@github.com:example/sensos-playbooks.git --playbook site.yml
+config-ansible --disable
+```
+
+Behavior:
+
+- runs as root (the standard way to run `ansible-pull`, since playbooks usually need to manage system state directly)
+- authenticates to the git host using the sensos-admin SSH key -- the same keypair `config-network` registers with sensos-server, so there's one key to add as a deploy key and rotate, not two. If that key doesn't exist yet, this generates it and prints the public half for you to paste into your git host (e.g. GitHub repo -> Settings -> Deploy keys)
+- `GIT_SSH_COMMAND` is only consulted by git for an `ssh://`/`git@host:path` URL; an `https://` repo URL ignores it
+- `--interval-sec` is applied via a systemd timer drop-in (same technique `config-events` uses for `--flush`), not a fixed value in the shipped unit
+
 ### `config-modem`
 
 Creates or updates a cellular modem connection using NetworkManager.

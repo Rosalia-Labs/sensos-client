@@ -1,5 +1,6 @@
 build-essential
 alsa-utils
+ansible-core
 chrony
 curl
 gpiod|libgpiod-tools
