@@ -236,6 +236,14 @@ def parse_nmea_fix(lines: list[str], source_label: str) -> dict[str, object] | N
     longitude = getattr(last_rmc, "longitude", None) or getattr(last_gga, "longitude", None)
     if latitude in (None, "") or longitude in (None, ""):
         return None
+    # Same defensive check as GpsdClient.read_fix(): a structurally valid,
+    # checksum-passing NMEA sentence can still carry a degraded 0.0 in one
+    # field (seen in practice on the gpsd/serial path; not yet confirmed
+    # here, but the failure mode -- "fix accepted" flag true, one field
+    # wrong -- isn't backend-specific). Null island is nowhere near any
+    # real site this fleet uses.
+    if float(latitude) == 0.0 or float(longitude) == 0.0:
+        return None
 
     altitude = getattr(last_gga, "altitude", None)
     gps_time = None
@@ -343,6 +351,20 @@ class GpsdClient:
             lat = report.get("lat")
             lon = report.get("lon")
             if lat is None or lon is None:
+                continue
+            # gpsd has been observed reporting mode>=2 (claiming a valid
+            # fix) with lat present and sane but lon degraded to exactly
+            # 0.0 -- not missing (None), just wrong. "Null island" is
+            # nowhere near any real deployment site this fleet uses, so
+            # treat it the same as a missing fix rather than letting a
+            # near-certainly-corrupt value through: acquire_initial_fix()
+            # averages multiple samples with a plain mean on the
+            # assumption that ordinary GPS noise is at most a couple
+            # hundred meters, which doesn't hold for a value that's off
+            # by thousands of km -- a single polluted sample like this can
+            # drag the average (and the location it gets recorded as) far
+            # from the device's real location.
+            if lat == 0.0 or lon == 0.0:
                 continue
             gps_time = None
             time_str = report.get("time")
