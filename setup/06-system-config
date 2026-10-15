@@ -211,9 +211,30 @@ configure_initramfs_modules() {
 }
 
 configure_journald() {
+    local desired="Storage=persistent"
+    local current=""
+    [[ -f "${JOURNALD_CONF_FILE}" ]] && current="$(cat "${JOURNALD_CONF_FILE}")"
+
+    if [[ "${current}" == "${desired}" ]]; then
+        log "journald already configured for persistent storage"
+        return 0
+    fi
+
     install -D -m 0644 /dev/null "${JOURNALD_CONF_FILE}"
-    printf 'Storage=persistent\n' >"${JOURNALD_CONF_FILE}"
+    printf '%s\n' "${desired}" >"${JOURNALD_CONF_FILE}"
     log "configured persistent journald storage"
+
+    # Writing the config file alone does nothing for an already-running
+    # journald -- like chronyd above, it only reads journald.conf at its
+    # own startup. Without this, Storage=persistent silently has no effect
+    # until the next full reboot, so a device that crashes before then
+    # still loses everything from before the crash even though the "fix"
+    # is already on disk -- exactly what motivated this check in the first
+    # place (a hard-to-diagnose field crash with no retained logs).
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl restart systemd-journald
+        log "restarted systemd-journald to apply persistent storage immediately"
+    fi
 }
 
 configure_chrony() {
