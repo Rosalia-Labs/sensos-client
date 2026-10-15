@@ -108,6 +108,7 @@ register_option --hidden hidden "Mark SSID as hidden" "false"
 register_option --limit-up-kbit limit_up_kbit "Optional egress cap in kbit" ""
 register_option --limit-down-kbit limit_down_kbit "Optional ingress cap in kbit" ""
 register_option --replace-hotspot replace_hotspot "Allow Wi-Fi client mode to replace hotspot mode on the same interface" "false"
+register_option --move-interface move_interface "Allow moving an existing same-SSID connection from its current interface to --iface" "false"
 
 parse_switches "${SCRIPT_NAME}" "$@"
 
@@ -281,6 +282,36 @@ fi
 
 NM_CON_NAME="sensos-wifi-${ssid}"
 
+EXISTING_IFACE=""
+if nmcli -t -f NAME con show | grep -Fxq "${NM_CON_NAME}"; then
+    EXISTING_IFACE="$(nmcli -g connection.interface-name con show "${NM_CON_NAME}" 2>/dev/null)"
+fi
+
+# A connection name is derived only from the SSID, so the same name is reused
+# whenever the same SSID is configured again -- including on a *different*
+# interface. Without this guard, that silently rebinds an existing, possibly
+# currently-working connection away from the interface actually using it
+# (confirmed as a real incident, not theoretical: this moved a live uplink
+# connection off its working radio onto an unverified one, leaving the
+# device with no working path once the old radio was separately disabled).
+if [[ -n "${EXISTING_IFACE}" && "${EXISTING_IFACE}" != "--" && "${EXISTING_IFACE}" != "${iface}" && "${move_interface}" != "true" ]]; then
+    cat >&2 <<EOF
+A Wi-Fi connection named '${NM_CON_NAME}' already exists and is bound to
+interface '${EXISTING_IFACE}', not '${iface}'. Continuing will move that
+connection onto '${iface}', which can drop '${EXISTING_IFACE}' off the
+network if it's currently relying on this same profile to stay connected.
+EOF
+    if is_interactive; then
+        if ! confirm_yes_no "Move '${NM_CON_NAME}' from ${EXISTING_IFACE} to ${iface} now?" false; then
+            echo "Aborted. Re-run with --iface ${EXISTING_IFACE} to manage the existing connection instead." >&2
+            exit 1
+        fi
+    else
+        echo "ERROR: refusing to move an existing Wi-Fi connection between interfaces non-interactively. Re-run with --move-interface to make this explicit." >&2
+        exit 1
+    fi
+fi
+
 if nmcli -t -f NAME con show | grep -Fxq "${NM_CON_NAME}"; then
     echo "Updating Wi-Fi connection '${NM_CON_NAME}' on iface '${iface}'..."
 else
@@ -308,7 +339,44 @@ sudo nmcli con mod "${NM_CON_NAME}" connection.autoconnect yes
 sudo nmcli con mod "${NM_CON_NAME}" connection.autoconnect-priority 50 || true
 echo "Autoconnect enabled."
 
-disable_hotspot_reclaim_on_next_boot "${iface}"
+iface_has_default_route() {
+    local check_iface="$1"
+    ip -4 route show dev "${check_iface}" 2>/dev/null | grep -q '^default'
+}
+
+CONNECTION_VERIFIED=false
+if [[ "${start_now}" == "true" ]]; then
+    echo "Bringing up Wi-Fi connection '${NM_CON_NAME}' on '${iface}'..."
+    if sudo nmcli -w 45 con up "${NM_CON_NAME}" ifname "${iface}"; then
+        sleep 3   # give DHCP a moment to settle before checking for a route
+        if iface_has_default_route "${iface}"; then
+            CONNECTION_VERIFIED=true
+            echo "Connection verified: ${iface} has a default route."
+        else
+            echo "WARNING: '${NM_CON_NAME}' associated on ${iface} but did not get a default route." >&2
+        fi
+    else
+        echo "WARNING: failed to start Wi-Fi connection '${NM_CON_NAME}' (ifname=${iface})." >&2
+    fi
+fi
+
+# Only retire the hotspot once the replacement is confirmed to actually work.
+# Retiring it unconditionally and up front (the previous behavior) could
+# leave a device with neither a working hotspot nor a working uplink if the
+# new connection associates at the link layer but never completes DHCP --
+# confirmed as a real incident, not theoretical: this is exactly what
+# stranded a field device's remote access until its own watchdog's periodic
+# NetworkManager restart had a chance to recover it.
+if [[ "${iface}" == "${HOTSPOT_INTERFACE_VALUE}" ]]; then
+    if [[ "${start_now}" != "true" ]]; then
+        echo "Not retiring the hotspot on ${iface} yet: re-run with --start once ready. Retirement happens only after the new connection is verified working."
+    elif [[ "${CONNECTION_VERIFIED}" == "true" ]]; then
+        disable_hotspot_reclaim_on_next_boot "${iface}"
+    else
+        echo "ERROR: not retiring the hotspot on ${iface} -- the new connection to '${ssid}' was not verified working. The hotspot remains active; fix the connection and re-run with --start." >&2
+        exit 1
+    fi
+fi
 
 write_wifi_config() {
     local config_file="${OVERLAY_ROOT}/etc/wifi.conf"
@@ -358,13 +426,6 @@ if command -v vnstat >/dev/null 2>&1; then
     fi
 else
     echo "WARNING: vnstat not installed; cannot track usage on ${iface}." >&2
-fi
-
-if [[ "${start_now}" == "true" ]]; then
-    echo "Bringing up Wi-Fi connection '${NM_CON_NAME}' on '${iface}'..."
-    if ! sudo nmcli -w 45 con up "${NM_CON_NAME}" ifname "${iface}"; then
-        echo "WARNING: failed to start Wi-Fi connection '${NM_CON_NAME}' (ifname=${iface})." >&2
-    fi
 fi
 
 echo "Done."
