@@ -17,6 +17,7 @@ BOOT_CONFIG_FILE="/boot/firmware/config.txt"
 MODULES_FILE="/etc/modules"
 INITRAMFS_CONF_FILE="/etc/initramfs-tools/initramfs.conf"
 JOURNALD_CONF_FILE="/etc/systemd/journald.conf"
+SYSTEMD_SYSTEM_CONF_FILE="/etc/systemd/system.conf"
 CHRONY_CONF_FILE="/etc/chrony/chrony.conf"
 NFTABLES_CONF_FILE="/etc/nftables.conf"
 TIMEZONE_NAME="Etc/UTC"
@@ -169,6 +170,56 @@ configure_pi_hardware() {
     write_system_config_state "${reboot_required}"
 }
 
+configure_hardware_watchdog() {
+    # A mysterious field hang (2026-10) -- device unresponsive, required a
+    # physical unplug/replug, no retained logs to diagnose from -- exposed
+    # that this fleet had no defense against a true kernel-level hang: the
+    # existing i2c-watchdog/network-watchdog timers only catch specific
+    # symptom conditions and depend on the system being responsive enough
+    # to run a systemd timer in the first place. This closes that gap one
+    # level down, extending the same "must self-heal without physical
+    # recovery" principle already applied to the network layer.
+    #
+    # bcm2835_wdt's hardware counter is a 20-bit register (see the kernel
+    # driver source), giving an absolute maximum of ~16s regardless of what
+    # gets requested -- systemd silently adopts whatever the driver clamps
+    # to as its own internal timeout rather than erroring on a longer
+    # request, so asking for anything longer here would be quietly
+    # ineffective, not a safety margin. 15s is the hardware's real ceiling,
+    # not a conservative choice -- and a good fit regardless: the trigger
+    # condition is "has PID1's own event loop stopped responding", not "is
+    # the CPU busy", so ordinary load (BirdNET inference, audio recording)
+    # doesn't risk a false-positive reset the way a load-based heuristic
+    # would.
+    if ! is_raspberry_pi_host; then
+        log "host does not appear to be Raspberry Pi hardware; skipping hardware watchdog configuration"
+        return
+    fi
+
+    log "configuring Raspberry Pi hardware watchdog"
+
+    ensure_line_present "${BOOT_CONFIG_FILE}" "dtparam=watchdog=on"
+    load_module_if_needed "bcm2835_wdt" || true
+
+    if [[ ! -e /dev/watchdog ]]; then
+        log "hardware watchdog device /dev/watchdog not present yet; will appear after a reboot applies dtparam=watchdog=on"
+    fi
+
+    ensure_line_present "${SYSTEMD_SYSTEM_CONF_FILE}" "RuntimeWatchdogSec=15"
+
+    # Same reasoning as configure_journald(): writing the config alone does
+    # nothing for the already-running PID1 until something tells it to
+    # re-read it. daemon-reexec picks up RuntimeWatchdogSec immediately on
+    # a device that already has the dtparam from a prior run; on a device
+    # enabling this for the first time, /dev/watchdog won't exist until the
+    # reboot that applies the device tree change anyway, so this is a
+    # best-effort "as soon as possible", not a substitute for that reboot.
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reexec
+        log "re-executed systemd to apply RuntimeWatchdogSec immediately where possible"
+    fi
+}
+
 configure_initramfs_modules() {
     # Confirmed field incident (biosense-1-11, 2026-09-29/30): a plain kernel
     # upgrade on Pi 5/Bookworm can leave dpkg half-configured --
@@ -306,6 +357,7 @@ main() {
     require_inputs
     run_preflight
     configure_pi_hardware
+    configure_hardware_watchdog
     configure_initramfs_modules
     configure_journald
     configure_chrony

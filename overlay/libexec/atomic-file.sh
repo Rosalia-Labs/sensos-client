@@ -26,7 +26,16 @@ ensure_line_present() {
     local wanted_line="$2"
     local dir_path tmp_file
 
-    install -D -m 0644 /dev/null "${file_path}"
+    # Only create the file (and parent dirs) if it's missing -- `install`
+    # copies its source's content to the destination unconditionally, so
+    # calling this on a file that already exists would silently truncate
+    # it to empty (the /dev/null source) before the check below ever runs,
+    # discarding every line any earlier call (or anything else) had
+    # written. Confirmed as a real bug, not a theoretical one: callers that
+    # ensure multiple different lines in the same file (e.g.
+    # configure_pi_hardware's i2c/w1-gpio/spi entries in /etc/modules and
+    # config.txt) would end up with only the last line surviving.
+    [[ -f "${file_path}" ]] || install -D -m 0644 /dev/null "${file_path}"
     file_contains_line "${file_path}" "${wanted_line}" && return 0
 
     dir_path="$(dirname "${file_path}")"
