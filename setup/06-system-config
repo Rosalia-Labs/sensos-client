@@ -200,12 +200,14 @@ configure_hardware_watchdog() {
     # taking over. No stated model restriction (unlike the separate
     # EEPROM-level BOOT_WATCHDOG_TIMEOUT, which is Pi 4/5 only) -- this is
     # the plain OS-level setting, expected to work across the lineup.
-    # Also per the same docs: on Bookworm specifically, RuntimeWatchdogSec
-    # must already be configured in system.conf before the firmware
-    # watchdog can be used at all -- that's written below in the same
-    # function run, satisfying the prerequisite regardless of file-write
-    # order within this function, since neither config takes effect until
-    # the next boot anyway.
+    # Also per the same docs: the firmware watchdog needs RuntimeWatchdogSec
+    # already configured in system.conf before it can be used at all --
+    # true at least as of the current docs, not something tied to a
+    # specific Debian release this fleet is pinned to (pi-gen always pulls
+    # whatever Raspberry Pi OS is current). That line is written below in
+    # the same function run, satisfying the prerequisite regardless of
+    # file-write order within this function, since neither config takes
+    # effect until the next boot anyway.
     if ! is_raspberry_pi_host; then
         log "host does not appear to be Raspberry Pi hardware; skipping hardware watchdog configuration"
         return
