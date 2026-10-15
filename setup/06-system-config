@@ -191,6 +191,21 @@ configure_hardware_watchdog() {
     # the CPU busy", so ordinary load (BirdNET inference, audio recording)
     # doesn't risk a false-positive reset the way a load-based heuristic
     # would.
+    #
+    # kernel_watchdog_timeout (config.txt), not dtparam=watchdog=on: per
+    # Raspberry Pi's own current documentation, dtparam=watchdog is
+    # superseded -- kernel_watchdog_timeout explicitly sets systemd's
+    # watchdog.open_timeout, which is what actually keeps the watchdog
+    # alive during the boot window between firmware arming it and systemd
+    # taking over. No stated model restriction (unlike the separate
+    # EEPROM-level BOOT_WATCHDOG_TIMEOUT, which is Pi 4/5 only) -- this is
+    # the plain OS-level setting, expected to work across the lineup.
+    # Also per the same docs: on Bookworm specifically, RuntimeWatchdogSec
+    # must already be configured in system.conf before the firmware
+    # watchdog can be used at all -- that's written below in the same
+    # function run, satisfying the prerequisite regardless of file-write
+    # order within this function, since neither config takes effect until
+    # the next boot anyway.
     if ! is_raspberry_pi_host; then
         log "host does not appear to be Raspberry Pi hardware; skipping hardware watchdog configuration"
         return
@@ -198,11 +213,11 @@ configure_hardware_watchdog() {
 
     log "configuring Raspberry Pi hardware watchdog"
 
-    ensure_line_present "${BOOT_CONFIG_FILE}" "dtparam=watchdog=on"
+    ensure_line_present "${BOOT_CONFIG_FILE}" "kernel_watchdog_timeout=15"
     load_module_if_needed "bcm2835_wdt" || true
 
     if [[ ! -e /dev/watchdog ]]; then
-        log "hardware watchdog device /dev/watchdog not present yet; will appear after a reboot applies dtparam=watchdog=on"
+        log "hardware watchdog device /dev/watchdog not present yet; will appear after a reboot applies kernel_watchdog_timeout"
     fi
 
     ensure_line_present "${SYSTEMD_SYSTEM_CONF_FILE}" "RuntimeWatchdogSec=15"
@@ -210,10 +225,11 @@ configure_hardware_watchdog() {
     # Same reasoning as configure_journald(): writing the config alone does
     # nothing for the already-running PID1 until something tells it to
     # re-read it. daemon-reexec picks up RuntimeWatchdogSec immediately on
-    # a device that already has the dtparam from a prior run; on a device
-    # enabling this for the first time, /dev/watchdog won't exist until the
-    # reboot that applies the device tree change anyway, so this is a
-    # best-effort "as soon as possible", not a substitute for that reboot.
+    # a device that already has kernel_watchdog_timeout from a prior run;
+    # on a device enabling this for the first time, /dev/watchdog won't
+    # exist until the reboot that applies the config.txt change anyway, so
+    # this is a best-effort "as soon as possible", not a substitute for
+    # that reboot.
     if command -v systemctl >/dev/null 2>&1; then
         systemctl daemon-reexec
         log "re-executed systemd to apply RuntimeWatchdogSec immediately where possible"
