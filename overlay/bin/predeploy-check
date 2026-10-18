@@ -99,7 +99,10 @@ def main() -> int:
     print()
     print("=" * 60)
     print("REMINDER: listen to this unit's audio before deployment.")
-    print("See the 'audio listening reminder' command printed above.")
+    print()
+    listen_lines, _ = PC.build_audio_listen_commands()
+    for line in listen_lines:
+        print(line)
     print("=" * 60)
 
     return 0

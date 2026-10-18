@@ -191,6 +191,50 @@ def check_audio_hardware_present() -> tuple[str, str]:
     return "not_detected", f"device {device} did not respond: {result.stderr.strip()[:200]}"
 
 
+def build_audio_listen_commands() -> tuple[list[str], str]:
+    """Build (not print) the macOS/Linux listen commands for this unit, so
+    the caller can show them both inline (the per-check section) and again
+    at the very end next to the deployment reminder -- without the
+    operator having to scroll back to find them.
+
+    Prints both a macOS (sox's `play`) and Linux (`aplay`) variant: the
+    laptop used for on-site/bench work is routinely macOS, which has no
+    aplay (that's ALSA, Linux-only) -- confirmed by the user actually
+    hitting this and using `play` from sox instead.
+
+    Returns (command lines, one-line summary for the check's own detail).
+    """
+    config = read_kv_config(ARECORD_CONF)
+    device = config.get("DEVICE", "<DEVICE from arecord.conf>")
+    fmt = config.get("FORMAT", "S16_LE")
+    channels = config.get("CHANNELS", "1")
+    rate = config.get("RATE", "48000")
+
+    recent_file = most_recent_queued_audio_file() if record_audio_service_active() else None
+    if recent_file is not None:
+        # The live device is held exclusively by sensos-record-audio.service
+        # right now -- a fresh `arecord` here would just fail with "Device
+        # or resource busy" (same conflict as check_audio_hardware_present()
+        # above). Play back its own most recent output instead: same signal
+        # chain, same gain settings, and it doesn't contend with the device.
+        lines = [
+            f"{RECORD_AUDIO_UNIT} is actively recording, so listen to its most recent output instead:",
+            "",
+            f'  macOS (sox):   ssh <user>@<pi-host> "cat {recent_file}" | play -',
+            f'  Linux (alsa):  ssh <user>@<pi-host> "cat {recent_file}" | aplay -',
+        ]
+        detail = f"most recent file: {recent_file.name}"
+    else:
+        lines = [
+            f'  macOS (sox):   ssh <user>@<pi-host> "arecord -D {device} -f {fmt} -c {channels} -r {rate} -d 10" '
+            f"| play -t raw -r {rate} -e signed -b 16 -c {channels} -",
+            f'  Linux (alsa):  ssh <user>@<pi-host> "arecord -D {device} -f {fmt} -c {channels} -r {rate} -d 10" '
+            f"| aplay -f {fmt} -c {channels} -r {rate} -",
+        ]
+        detail = f"device={device}"
+    return lines, detail
+
+
 def check_audio_listen() -> tuple[str, str]:
     """Print the command for manually listening to this unit's audio for
     abnormal noise (e.g. the periodic 'put-put-put' interference found on
@@ -202,47 +246,15 @@ def check_audio_listen() -> tuple[str, str]:
     box itself, so the command streams audio to whatever machine the
     operator is already SSH'd in from, rather than requiring new hardware
     on the client.
-
-    Prints both a macOS (sox's `play`) and Linux (`aplay`) variant: the
-    laptop used for on-site/bench work is routinely macOS, which has no
-    aplay (that's ALSA, Linux-only) -- confirmed by the user actually
-    hitting this and using `play` from sox instead.
     """
-    config = read_kv_config(ARECORD_CONF)
-    device = config.get("DEVICE", "<DEVICE from arecord.conf>")
-    fmt = config.get("FORMAT", "S16_LE")
-    channels = config.get("CHANNELS", "1")
-    rate = config.get("RATE", "48000")
-
     print("Listen for abnormal noise (e.g. clicking, buzzing, periodic artifacts).")
     print("Run one of these from your laptop, substituting your actual SSH target, and")
     print("use headphones (a laptop speaker in the room can mask the exact noise and")
     print("lab background noise can cause false negatives):")
     print()
-
-    recent_file = most_recent_queued_audio_file() if record_audio_service_active() else None
-    if recent_file is not None:
-        # The live device is held exclusively by sensos-record-audio.service
-        # right now -- a fresh `arecord` here would just fail with "Device
-        # or resource busy" (same conflict as check_audio_hardware_present()
-        # above). Play back its own most recent output instead: same signal
-        # chain, same gain settings, and it doesn't contend with the device.
-        print(f"{RECORD_AUDIO_UNIT} is actively recording, so listen to its most recent output instead:")
-        print()
-        print(f'  macOS (sox):   ssh <user>@<pi-host> "cat {recent_file}" | play -')
-        print(f'  Linux (alsa):  ssh <user>@<pi-host> "cat {recent_file}" | aplay -')
-        detail = f"instructions printed above; most recent file: {recent_file.name}"
-    else:
-        print(
-            f'  macOS (sox):   ssh <user>@<pi-host> "arecord -D {device} -f {fmt} -c {channels} -r {rate} -d 10" '
-            f"| play -t raw -r {rate} -e signed -b 16 -c {channels} -"
-        )
-        print(
-            f'  Linux (alsa):  ssh <user>@<pi-host> "arecord -D {device} -f {fmt} -c {channels} -r {rate} -d 10" '
-            f"| aplay -f {fmt} -c {channels} -r {rate} -"
-        )
-        detail = "instructions printed above"
-
+    lines, detail = build_audio_listen_commands()
+    for line in lines:
+        print(line)
     return "reminder", detail
 
 
@@ -384,18 +396,80 @@ def read_shadow_hash(username: str) -> str | None:
     return None
 
 
+def recompute_crypt_hash(candidate: str, existing_hash: str) -> str | None:
+    """Recompute `candidate`'s hash using the same algorithm/salt/params
+    already embedded in `existing_hash` (crypt(3)'s own "pass the existing
+    hash in as the salt" convention -- it parses out whatever it needs,
+    including a yescrypt salt's embedded cost parameters). Returns None if
+    nothing available on this system could compute it.
+
+    Confirmed on real hardware (2026-10-18) that this needed fixing: Debian
+    13 defaults /etc/shadow to yescrypt ($y$), which `openssl passwd` has
+    never supported at all (it's implemented via libxcrypt, not OpenSSL --
+    not a version gap, a different library entirely). Tries, in order:
+
+    1. Python's `crypt` module -- delegates straight to the host's own
+       libc/libxcrypt, so it transparently supports whatever that specific
+       host supports, yescrypt included. Removed in Python 3.13, so this
+       fleet (not pinned to a Python version) may eventually lose it.
+    2. `mkpasswd` (the `whois` package) -- an external wrapper around the
+       same libxcrypt, for when `crypt` is gone.
+    3. `openssl passwd` -- last resort, only covers md5/sha-256/sha-512/
+       apr1, never yescrypt, but better than nothing if neither of the
+       above exists.
+    """
+    try:
+        import crypt as crypt_module
+
+        return crypt_module.crypt(candidate, existing_hash)
+    except ImportError:
+        pass
+    except (ValueError, OSError):
+        return None
+
+    parts = existing_hash.split("$")
+    if len(parts) < 4 or parts[0] != "":
+        return None
+    algo_id, salt = parts[1], parts[2]
+
+    mkpasswd_method = {"1": "md5", "5": "sha-256", "6": "sha-512", "y": "yescrypt"}.get(algo_id)
+    if mkpasswd_method:
+        try:
+            result = subprocess.run(
+                ["mkpasswd", "--method", mkpasswd_method, "--salt", salt, candidate],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except FileNotFoundError:
+            pass
+
+    openssl_flag = {"1": "-1", "5": "-5", "6": "-6", "apr1": "-apr1"}.get(algo_id)
+    if openssl_flag:
+        try:
+            result = subprocess.run(
+                ["openssl", "passwd", openssl_flag, "-salt", salt, candidate],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except FileNotFoundError:
+            pass
+
+    return None
+
+
 def check_bootstrap_user_password() -> tuple[str, str]:
     """Report whether the bootstrap user's password still matches this
     fleet's documented default. There's no way to recover the actual
     password from its hash, but a known *candidate* password can be
-    re-hashed with the same algorithm and salt already stored in
-    /etc/shadow and compared for an exact match -- the same check the
-    system itself performs on login, just run against one specific guess
-    instead of whatever the operator typed. Deliberately avoids Python's
-    `crypt` module, which was removed in 3.13 -- this fleet isn't pinned to
-    a Debian/Python version (see pi-gen notes), so a future image could
-    land on a Python without it; shelling out to `openssl passwd` with the
-    existing hash's own algorithm id and salt has no such expiry.
+    re-hashed the same way and compared for an exact match -- the same
+    check the system itself performs on login, just run against one
+    specific guess instead of whatever the operator typed.
     """
     stored_hash = read_shadow_hash(BOOTSTRAP_USER)
     if stored_hash is None:
@@ -407,27 +481,15 @@ def check_bootstrap_user_password() -> tuple[str, str]:
     if stored_hash in ("", "!", "*", "!!") or stored_hash.startswith(("!", "*")):
         return "locked_or_unset", f"user {BOOTSTRAP_USER!r} has no usable password hash (locked/disabled)"
 
-    parts = stored_hash.split("$")
-    if len(parts) < 4 or parts[0] != "":
-        return "not_checked", f"unrecognized password hash format for {BOOTSTRAP_USER!r}"
-    algo_id, salt = parts[1], parts[2]
-    algo_flag = {"1": "-1", "5": "-5", "6": "-6", "apr1": "-apr1"}.get(algo_id)
-    if algo_flag is None:
-        return "not_checked", f"unsupported hash algorithm '${algo_id}$' for {BOOTSTRAP_USER!r}"
-
-    try:
-        result = subprocess.run(
-            ["openssl", "passwd", algo_flag, "-salt", salt, DEFAULT_BOOTSTRAP_USER_PASSWORD],
-            capture_output=True,
-            text=True,
-            timeout=10,
+    computed_hash = recompute_crypt_hash(DEFAULT_BOOTSTRAP_USER_PASSWORD, stored_hash)
+    if computed_hash is None:
+        return (
+            "not_checked",
+            f"could not recompute {BOOTSTRAP_USER!r}'s hash on this system "
+            "(needs Python's crypt module, mkpasswd, or openssl passwd supporting this algorithm)",
         )
-    except FileNotFoundError:
-        return "not_checked", "openssl not found on this system"
-    if result.returncode != 0:
-        return "not_checked", f"openssl passwd failed: {result.stderr.strip()[:200]}"
 
-    if result.stdout.strip() == stored_hash:
+    if computed_hash == stored_hash:
         return (
             "default_password",
             f"user {BOOTSTRAP_USER!r}'s password still matches this fleet's documented default",
