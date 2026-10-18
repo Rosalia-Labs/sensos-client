@@ -33,8 +33,12 @@ source "${SENSOS_ADMIN_HELPER_LIB}"
 
 ensure_sensos_admin_user "${SCRIPT_FILE}" "$@"
 
-STATE_DIR="/sensos/log"
 STATE_FILE="${DATA_ARCHIVE_MODE_STATE_FILE}"
+# Derived from STATE_FILE itself, not a second hardcoded "/sensos/log" --
+# STATE_FILE is already overridable via SENSOS_DATA_ARCHIVE_MODE_STATE_FILE
+# (see data-storage-ops.sh), and a hardcoded STATE_DIR would silently
+# create the wrong directory if that override ever pointed somewhere else.
+STATE_DIR="$(dirname "${STATE_FILE}")"
 
 usage() {
     cat <<EOF
@@ -51,18 +55,25 @@ EOF
 }
 
 write_state_marker() {
+    local -n active_ref=$1
+    local -n enabled_ref=$2
     local unit_name
 
     sudo install -d -m 2775 "${STATE_DIR}"
     sudo sh -c "cat >'${STATE_FILE}'" <<EOF
 ARCHIVE_MODE_ACTIVE=1
 ARCHIVE_MODE_ENTERED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-ARCHIVE_MODE_FORMAT=2
+ARCHIVE_MODE_FORMAT=3
 EOF
 
-    for unit_name in "$@"; do
+    for unit_name in "${active_ref[@]}"; do
         sudo sh -c 'printf "%s\n" "$1" >>"$2"' -- \
             "ARCHIVE_MODE_ACTIVE_UNIT=${unit_name}" "${STATE_FILE}"
+    done
+
+    for unit_name in "${enabled_ref[@]}"; do
+        sudo sh -c 'printf "%s\n" "$1" >>"$2"' -- \
+            "ARCHIVE_MODE_ENABLED_UNIT=${unit_name}" "${STATE_FILE}"
     done
 }
 
@@ -82,14 +93,24 @@ load_state_marker() {
     local line legacy_active_units
     local legacy_units_pattern='^[-[:alnum:]@%_./:+=,\\ ]+$'
     local -n output_units_ref=$1
+    local -n output_enabled_ref=$2
 
     output_units_ref=()
+    output_enabled_ref=()
     legacy_active_units=""
 
+    # A state file written before ARCHIVE_MODE_ENABLED_UNIT existed (format
+    # < 3) simply has none of those lines, so output_enabled_ref stays
+    # empty -- correct degradation: an archive-mode session already in
+    # progress across an upgrade never disabled anything, so --exit
+    # shouldn't try to enable anything either.
     while IFS= read -r line; do
         case "${line}" in
             ARCHIVE_MODE_ACTIVE_UNIT=*)
                 output_units_ref+=("${line#ARCHIVE_MODE_ACTIVE_UNIT=}")
+                ;;
+            ARCHIVE_MODE_ENABLED_UNIT=*)
+                output_enabled_ref+=("${line#ARCHIVE_MODE_ENABLED_UNIT=}")
                 ;;
             ARCHIVE_MODE_ACTIVE_UNITS=*)
                 legacy_active_units="${line#ARCHIVE_MODE_ACTIVE_UNITS=}"
@@ -179,6 +200,16 @@ main() {
         echo "data_mount=${mount_state}"
         echo "data_writers=${writers_state}"
         echo "state_file=${STATE_FILE}"
+
+        if [[ "${archive_state}" == "active" && "${writers_state}" == "active" ]]; then
+            echo "WARNING: archive_mode is active but a data writer is also active -- this" >&2
+            echo "should not happen if quiescing held. Likely cause: a reboot since --enter" >&2
+            echo "brought services back (older archive-mode sessions only stopped units," >&2
+            echo "didn't disable them, so a reboot silently undid the quiescing -- fixed" >&2
+            echo "going forward, but a session already in progress from before this fix" >&2
+            echo "won't retroactively gain it). Run 'sudo lsof +D ${DATA_MOUNT}' before" >&2
+            echo "assuming the mount is actually safe to unmount or wipe." >&2
+        fi
         return 0
     fi
 
@@ -205,15 +236,43 @@ main() {
             exit 1
         fi
         echo "Entering archive mode for ${DATA_MOUNT}..."
+        local -a enabled_units=()
         while IFS= read -r unit_name; do
             [[ -n "${unit_name}" ]] || continue
             active_units+=("${unit_name}")
         done < <(data_ops_list_active_units)
+        while IFS= read -r unit_name; do
+            [[ -n "${unit_name}" ]] || continue
+            enabled_units+=("${unit_name}")
+        done < <(data_ops_list_enabled_units)
 
         data_ops_stop_data_units
+        # Disabled, not just stopped, so this survives a reboot -- see the
+        # comment on data_ops_disable_unit_if_present in data-storage-ops.sh
+        # for the real incident this fixes.
+        data_ops_disable_data_units
+
+        # Verify the stop actually took before claiming success. Every stop
+        # call above is `|| true` (best-effort, so one stuck unit doesn't
+        # abort the others) -- which means a unit that failed to stop would
+        # otherwise go completely unnoticed: archive-mode would still write
+        # the "active" state marker and report success, leaving a real
+        # incident (confirmed, not theoretical -- a device reported
+        # archive_mode=active with data_writers=active simultaneously,
+        # which should be impossible if every stop had actually worked).
+        if data_ops_any_data_writer_active; then
+            echo "ERROR: a data writer is still active after attempting to stop it." >&2
+            echo "Archive mode was NOT entered. Check which unit didn't stop:" >&2
+            for unit_name in "${DATA_SERVICES[@]}"; do
+                data_ops_unit_is_active "${unit_name}" && echo "  still active: ${unit_name}" >&2
+            done
+            echo "Investigate (systemctl status <unit>), then retry." >&2
+            exit 1
+        fi
+
         data_ops_checkpoint_sqlite_dbs
         data_ops_sync_storage
-        write_state_marker "${active_units[@]}"
+        write_state_marker active_units enabled_units
         report_client_event archive_enter notice
         echo "Archive mode active."
         echo "Data under ${DATA_MOUNT} is now quiesced and ready for copy or media swap."
@@ -245,9 +304,13 @@ main() {
     fi
 
     active_units=()
-    load_state_marker active_units
+    local -a enabled_units=()
+    load_state_marker active_units enabled_units
 
     data_ops_sync_storage
+    if [[ ${#enabled_units[@]} -gt 0 ]]; then
+        data_ops_enable_selected_units "${enabled_units[@]}"
+    fi
     if [[ ${#active_units[@]} -gt 0 ]]; then
         data_ops_start_selected_units "${active_units[@]}"
     fi

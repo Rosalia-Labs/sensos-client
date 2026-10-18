@@ -3,17 +3,36 @@
 # Copyright (c) 2025 Rosalia Labs LLC
 
 DATA_MOUNT="${SENSOS_DATA_MOUNT:-/sensos/data}"
+# The real criterion for belonging here is "reads or writes under
+# DATA_MOUNT", not "sounds data-related" -- confirmed one-by-one against
+# each script's actual path constants (e.g. birdnet_data.py's
+# DB_PATH=.../data/birdnet/birdnet.db, events_data.py's
+# DB_PATH=.../data/microenv/events.db). The upload services were a real,
+# confirmed gap until 2026-10-18: none of the three were in this list, so
+# archive mode never stopped them and never counted them as active writers
+# either -- they could keep reading/uploading from (and in this incident,
+# uploading *stale* content from a newly-swapped, previously-used disk)
+# straight through a supposedly-quiesced archive-mode window. Deliberately
+# excludes report-boot/report-failure@ (one-shot, trigger-bound to boot/
+# failure events this fleet wants visible even during archive mode, not a
+# continuous writer worth quiescing) and sensos-send-status-update /
+# sensos-network-capture (don't touch DATA_MOUNT at all).
 DATA_SERVICES=(
     "sensos-record-audio.service"
     "sensos-compress-audio.service"
     "sensos-read-i2c.service"
+    "sensos-read-teros.service"
     "sensos-upload-i2c.service"
+    "sensos-upload-birdnet.service"
+    "sensos-upload-birdweather.service"
+    "sensos-upload-events.service"
     "sensos-birdnet.service"
     "sensos-gps.service"
     "sensos-manage-birdnet-clips.service"
 )
 DATA_TIMERS=(
     "sensos-monitor-data-space.timer"
+    "sensos-upload-events.timer"
 )
 DATA_ARCHIVE_MODE_STATE_FILE="${SENSOS_DATA_ARCHIVE_MODE_STATE_FILE:-/sensos/log/archive-mode.state}"
 DATA_LAYOUT_TOP_LEVEL_DIRS=(
@@ -66,6 +85,11 @@ data_ops_unit_is_active() {
     data_ops_unit_exists "${unit_name}" && systemctl is-active --quiet "${unit_name}"
 }
 
+data_ops_unit_is_enabled() {
+    local unit_name="$1"
+    data_ops_unit_exists "${unit_name}" && systemctl is-enabled --quiet "${unit_name}" 2>/dev/null
+}
+
 data_ops_stop_unit_if_present() {
     local unit_name="$1"
 
@@ -84,6 +108,30 @@ data_ops_start_unit_if_present() {
     fi
 }
 
+# disable/enable (as distinct from stop/start) exist specifically so archive
+# mode survives a reboot. `stop` alone does not persist across a reboot --
+# a normally-enabled unit comes right back on the next boot regardless of
+# an earlier `systemctl stop`, silently undoing the quiescing while the
+# archive-mode state file (just a marker on disk) has no way to know that
+# happened. Confirmed as a real incident, not theoretical: a device's
+# `archive-mode --status` reported archive_mode=active with data_writers
+# also active, which should be impossible if quiescing actually held.
+data_ops_disable_unit_if_present() {
+    local unit_name="$1"
+
+    if data_ops_unit_exists "${unit_name}"; then
+        data_ops_run_systemctl disable "${unit_name}" >/dev/null 2>&1 || true
+    fi
+}
+
+data_ops_enable_unit_if_present() {
+    local unit_name="$1"
+
+    if data_ops_unit_exists "${unit_name}"; then
+        data_ops_run_systemctl enable "${unit_name}" >/dev/null 2>&1 || true
+    fi
+}
+
 data_ops_stop_data_units() {
     local unit_name
 
@@ -96,11 +144,31 @@ data_ops_stop_data_units() {
     done
 }
 
+data_ops_disable_data_units() {
+    local unit_name
+
+    for unit_name in "${DATA_TIMERS[@]}"; do
+        data_ops_disable_unit_if_present "${unit_name}"
+    done
+
+    for unit_name in "${DATA_SERVICES[@]}"; do
+        data_ops_disable_unit_if_present "${unit_name}"
+    done
+}
+
 data_ops_start_selected_units() {
     local unit_name
 
     for unit_name in "$@"; do
         data_ops_start_unit_if_present "${unit_name}"
+    done
+}
+
+data_ops_enable_selected_units() {
+    local unit_name
+
+    for unit_name in "$@"; do
+        data_ops_enable_unit_if_present "${unit_name}"
     done
 }
 
@@ -115,6 +183,26 @@ data_ops_list_active_units() {
 
     for unit_name in "${DATA_TIMERS[@]}"; do
         if data_ops_unit_is_active "${unit_name}"; then
+            printf '%s\n' "${unit_name}"
+        fi
+    done
+}
+
+# Tracked separately from data_ops_list_active_units(): "was running" and
+# "was enabled" are different facts (a unit can be enabled but crashed/not
+# yet started, or started once without being enabled), so --exit restores
+# each independently rather than assuming one implies the other.
+data_ops_list_enabled_units() {
+    local unit_name
+
+    for unit_name in "${DATA_SERVICES[@]}"; do
+        if data_ops_unit_is_enabled "${unit_name}"; then
+            printf '%s\n' "${unit_name}"
+        fi
+    done
+
+    for unit_name in "${DATA_TIMERS[@]}"; do
+        if data_ops_unit_is_enabled "${unit_name}"; then
             printf '%s\n' "${unit_name}"
         fi
     done
