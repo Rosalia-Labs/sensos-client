@@ -42,6 +42,7 @@ AUTOMATED_CHECKS = [
     ("GPS fix", "gps_fix", PC.check_gps_fix),
     ("uplink Wi-Fi intent", "uplink_intent", PC.check_uplink_intent),
     ("local AP intent", "hotspot_intent", PC.check_hotspot_intent),
+    ("audio listening reminder", "audio_listen", PC.check_audio_listen),
 ]
 
 
@@ -54,11 +55,6 @@ def main() -> int:
         entry = PC.record_result(state, name, status, detail)
         print(PC.report_line(name, entry))
         print()
-
-    print("== audio listening test ==")
-    status, detail = PC.check_audio_listen(state)
-    entry = PC.record_result(state, "audio_listen", status, detail)
-    print(PC.report_line("audio_listen", entry))
 
     PC.save_state(state)
 
@@ -99,6 +95,12 @@ def main() -> int:
                 print(f"  {line}")
         else:
             print("  (empty)")
+
+    print()
+    print("=" * 60)
+    print("REMINDER: listen to this unit's audio before deployment.")
+    print("See the 'audio listening reminder' command printed above.")
+    print("=" * 60)
 
     return 0
 

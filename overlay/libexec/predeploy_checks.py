@@ -10,9 +10,10 @@ so only the operator running the check knows whether a given status is fine
 for this box. The tool's job is to make the full state visible and recorded,
 not to judge it.
 
-Manual checks (ones that need a human to do something physical, like
-listening for noise) persist their result with a timestamp so a later run
-can show what was already confirmed instead of silently re-asking.
+Fully automated, no interactive prompts -- a prior version blocked on
+confirm()/input() for the audio-listen check specifically, which made
+running this across many units painful; it now just prints instructions and
+leaves a reminder for the operator to act on separately.
 """
 
 from __future__ import annotations
@@ -23,7 +24,6 @@ import os
 import re
 import socket
 import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -100,30 +100,6 @@ def report_line(name: str, entry: dict) -> str:
     return f"[{status}] {name}{suffix} ({checked_at})"
 
 
-def stdin_is_interactive() -> bool:
-    try:
-        return sys.stdin.isatty()
-    except (AttributeError, ValueError):
-        return False
-
-
-def confirm(prompt: str, default: bool = False) -> bool | None:
-    """Ask a yes/no question. Returns None if stdin isn't interactive."""
-    if not stdin_is_interactive():
-        return None
-    suffix = "[Y/n]" if default else "[y/N]"
-    answer = input(f"{prompt} {suffix}: ").strip().lower()
-    if not answer:
-        return default
-    return answer in ("y", "yes")
-
-
-def ask_text(prompt: str) -> str:
-    if not stdin_is_interactive():
-        return ""
-    return input(f"{prompt}: ").strip()
-
-
 def read_kv_config(path: Path) -> dict:
     values: dict[str, str] = {}
     if not path.is_file():
@@ -138,33 +114,6 @@ def read_kv_config(path: Path) -> dict:
             val = val[1:-1]
         values[key.strip()] = val
     return values
-
-
-def already_done(state: dict, name: str) -> dict | None:
-    entry = state.get(name)
-    if entry and entry.get("status") not in (None, "not_verified"):
-        return entry
-    return None
-
-
-def maybe_skip_manual_check(state: dict, name: str) -> dict | None:
-    """If this manual check has a prior result, ask whether to redo it.
-
-    Returns the prior entry if the operator chooses to keep it (or if stdin
-    isn't interactive, in which case the prior result is kept automatically
-    and nothing is asked), or None if the check should run again.
-    """
-    prior = already_done(state, name)
-    if prior is None:
-        return None
-    redo = confirm(
-        f"'{name}' was already checked on {prior['checked_at']} "
-        f"({prior['status']}: {prior.get('detail', '')}). Redo it?",
-        default=False,
-    )
-    if redo is None or redo is False:
-        return prior
-    return None
 
 
 def record_audio_service_active() -> bool:
@@ -242,30 +191,33 @@ def check_audio_hardware_present() -> tuple[str, str]:
     return "not_detected", f"device {device} did not respond: {result.stderr.strip()[:200]}"
 
 
-def check_audio_listen(state: dict) -> tuple[str, str]:
-    """Manual check: play a short recording back over SSH so a human can
-    listen for abnormal noise (e.g. the periodic 'put-put-put' interference
-    found on one field unit). There's no speaker on the box itself, so this
-    streams audio to whatever machine the operator is already SSH'd in
-    from (the same laptop link used for on-site configuration) rather than
-    requiring any new hardware on the client.
-    """
-    name = "audio_listen"
-    prior = maybe_skip_manual_check(state, name)
-    if prior is not None:
-        return prior["status"], prior["detail"]
+def check_audio_listen() -> tuple[str, str]:
+    """Print the command for manually listening to this unit's audio for
+    abnormal noise (e.g. the periodic 'put-put-put' interference found on
+    one field unit) -- deliberately a reminder, not a blocking prompt. An
+    earlier version used confirm()/input() to ask "have you listened yet?"
+    and "did you hear anything abnormal?" interactively, which held up the
+    whole otherwise-automated run on every single invocation and made
+    running this across many lab units painful. There's no speaker on the
+    box itself, so the command streams audio to whatever machine the
+    operator is already SSH'd in from, rather than requiring new hardware
+    on the client.
 
+    Prints both a macOS (sox's `play`) and Linux (`aplay`) variant: the
+    laptop used for on-site/bench work is routinely macOS, which has no
+    aplay (that's ALSA, Linux-only) -- confirmed by the user actually
+    hitting this and using `play` from sox instead.
+    """
     config = read_kv_config(ARECORD_CONF)
     device = config.get("DEVICE", "<DEVICE from arecord.conf>")
     fmt = config.get("FORMAT", "S16_LE")
     channels = config.get("CHANNELS", "1")
     rate = config.get("RATE", "48000")
 
-    print()
-    print("Manual check: listen for abnormal noise (e.g. clicking, buzzing, periodic artifacts).")
-    print("Run this from your laptop, substituting your actual SSH target, and use")
-    print("headphones (a laptop speaker in the room can mask the exact noise and lab")
-    print("background noise can cause false negatives):")
+    print("Listen for abnormal noise (e.g. clicking, buzzing, periodic artifacts).")
+    print("Run one of these from your laptop, substituting your actual SSH target, and")
+    print("use headphones (a laptop speaker in the room can mask the exact noise and")
+    print("lab background noise can cause false negatives):")
     print()
 
     recent_file = most_recent_queued_audio_file() if record_audio_service_active() else None
@@ -277,23 +229,21 @@ def check_audio_listen(state: dict) -> tuple[str, str]:
         # chain, same gain settings, and it doesn't contend with the device.
         print(f"{RECORD_AUDIO_UNIT} is actively recording, so listen to its most recent output instead:")
         print()
-        print(f'  ssh <user>@<pi-host> "cat {recent_file}" | aplay -')
+        print(f'  macOS (sox):   ssh <user>@<pi-host> "cat {recent_file}" | play -')
+        print(f'  Linux (alsa):  ssh <user>@<pi-host> "cat {recent_file}" | aplay -')
+        detail = f"instructions printed above; most recent file: {recent_file.name}"
     else:
         print(
-            f'  ssh <user>@<pi-host> "arecord -D {device} -f {fmt} -c {channels} -r {rate} -d 10" '
+            f'  macOS (sox):   ssh <user>@<pi-host> "arecord -D {device} -f {fmt} -c {channels} -r {rate} -d 10" '
+            f"| play -t raw -r {rate} -e signed -b 16 -c {channels} -"
+        )
+        print(
+            f'  Linux (alsa):  ssh <user>@<pi-host> "arecord -D {device} -f {fmt} -c {channels} -r {rate} -d 10" '
             f"| aplay -f {fmt} -c {channels} -r {rate} -"
         )
-    print()
+        detail = "instructions printed above"
 
-    listened = confirm("Press Enter once ready -- have you listened?", default=True)
-    if listened is None:
-        return "not_verified", "skipped: not an interactive session"
-
-    abnormal = confirm("Did you hear anything abnormal?", default=False)
-    if abnormal:
-        note = ask_text("Briefly describe what you heard")
-        return "done", f"abnormal noise reported: {note}" if note else "abnormal noise reported"
-    return "done", "no abnormal noise heard"
+    return "reminder", detail
 
 
 def check_i2c_bus() -> tuple[str, str]:
