@@ -30,6 +30,8 @@ from pathlib import Path
 CLIENT_ROOT = Path(os.environ.get("SENSOS_CLIENT_ROOT", "/sensos"))
 STATE_FILE = CLIENT_ROOT / "etc" / "predeploy-check-state.json"
 ARECORD_CONF = CLIENT_ROOT / "etc" / "arecord.conf"
+AUDIO_QUEUED_ROOT = CLIENT_ROOT / "data" / "audio_recordings" / "queued"
+RECORD_AUDIO_UNIT = "sensos-record-audio.service"
 TEROS_CONF = CLIENT_ROOT / "etc" / "teros.conf"
 HOTSPOT_CONF = CLIENT_ROOT / "etc" / "hotspot.conf"
 WIFI_CONF = CLIENT_ROOT / "etc" / "wifi.conf"
@@ -140,13 +142,66 @@ def maybe_skip_manual_check(state: dict, name: str) -> dict | None:
     return None
 
 
+def record_audio_service_active() -> bool:
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", "--quiet", RECORD_AUDIO_UNIT],
+            timeout=10,
+        )
+    except FileNotFoundError:
+        return False
+    return result.returncode == 0
+
+
+def most_recent_queued_audio_file(max_age_seconds: float = 600.0) -> Path | None:
+    if not AUDIO_QUEUED_ROOT.is_dir():
+        return None
+    newest: tuple[float, Path] | None = None
+    for path in AUDIO_QUEUED_ROOT.rglob("*.wav"):
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if newest is None or mtime > newest[0]:
+            newest = (mtime, path)
+    if newest is None:
+        return None
+    if time.time() - newest[0] > max_age_seconds:
+        return None
+    return newest[1]
+
+
 def check_audio_hardware_present() -> tuple[str, str]:
-    """Probe each configured recording device with a cheap hw-params dump."""
+    """Probe the configured recording device with a cheap hw-params dump --
+    but only when sensos-record-audio.service isn't already using it. ALSA
+    capture devices are exclusive-access, so probing directly while the
+    service holds the device open always fails with "Device or resource
+    busy" (confirmed as a real, recurring case: it happens every time this
+    runs right after `archive-mode --exit` restarts the service). When the
+    service is active, its own fresh recorded output is a stronger signal
+    the hardware works than a synthetic probe would be anyway -- same
+    reasoning as check_gps_fix() going through gpsd instead of the raw
+    serial device, to avoid contending with that device's real owner.
+    """
     config = read_kv_config(ARECORD_CONF)
     device = config.get("DEVICE")
     fmt = config.get("FORMAT", "S16_LE")
     if not device:
         return "not_detected", f"no DEVICE set in {ARECORD_CONF}"
+
+    if record_audio_service_active():
+        recent_file = most_recent_queued_audio_file()
+        if recent_file is not None:
+            return (
+                "detected",
+                f"{RECORD_AUDIO_UNIT} is active and recently wrote {recent_file.name}; "
+                f"not probing {device} directly to avoid a device-busy conflict",
+            )
+        return (
+            "not_detected",
+            f"{RECORD_AUDIO_UNIT} is active but no recent output found under {AUDIO_QUEUED_ROOT} "
+            "-- it may be running but stuck",
+        )
 
     try:
         result = subprocess.run(
@@ -187,10 +242,22 @@ def check_audio_listen(state: dict) -> tuple[str, str]:
     print("headphones (a laptop speaker in the room can mask the exact noise and lab")
     print("background noise can cause false negatives):")
     print()
-    print(
-        f'  ssh <user>@<pi-host> "arecord -D {device} -f {fmt} -c {channels} -r {rate} -d 10" '
-        f"| aplay -f {fmt} -c {channels} -r {rate} -"
-    )
+
+    recent_file = most_recent_queued_audio_file() if record_audio_service_active() else None
+    if recent_file is not None:
+        # The live device is held exclusively by sensos-record-audio.service
+        # right now -- a fresh `arecord` here would just fail with "Device
+        # or resource busy" (same conflict as check_audio_hardware_present()
+        # above). Play back its own most recent output instead: same signal
+        # chain, same gain settings, and it doesn't contend with the device.
+        print(f"{RECORD_AUDIO_UNIT} is actively recording, so listen to its most recent output instead:")
+        print()
+        print(f'  ssh <user>@<pi-host> "cat {recent_file}" | aplay -')
+    else:
+        print(
+            f'  ssh <user>@<pi-host> "arecord -D {device} -f {fmt} -c {channels} -r {rate} -d 10" '
+            f"| aplay -f {fmt} -c {channels} -r {rate} -"
+        )
     print()
 
     listened = confirm("Press Enter once ready -- have you listened?", default=True)
