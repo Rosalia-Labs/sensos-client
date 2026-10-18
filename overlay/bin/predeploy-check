@@ -74,6 +74,10 @@ def main() -> int:
     print("When each config-* script on this unit was last run, regardless of")
     print("whether it has a dedicated check above -- 'never' doesn't mean wrong,")
     print("just that the operator should confirm it's intentional for this unit.")
+    print("Also: on a unit provisioned before this tracking existed, 'never' can")
+    print("mean 'ran before anything recorded it', not 'never run at all' -- check")
+    print("the stored config state below, which reflects actual values regardless")
+    print("of when they were set.")
     for name, status in PC.list_config_invocations():
         print(f"{name}: {status}")
 
@@ -82,13 +86,19 @@ def main() -> int:
     print("What's actually on disk right now, independent of the invocation")
     print("history above -- a script can run without setting a value, or a")
     print("file can be edited outside any config-* script entirely.")
-    for filename, values in PC.list_stored_config_state():
+    for filename, values, raw_text in PC.list_stored_config_state():
         print(f"-- {filename} --")
         if values:
             for key, value in sorted(values.items()):
                 print(f"  {key}={value}")
+        elif raw_text.strip():
+            # Not this project's own key=value format (e.g. chrony.conf,
+            # nftables.conf have their own directive syntax) -- show the
+            # real content rather than report it as empty.
+            for line in raw_text.splitlines():
+                print(f"  {line}")
         else:
-            print("  (empty or unparsed)")
+            print("  (empty)")
 
     return 0
 

@@ -57,7 +57,13 @@ DEFAULT_BOOTSTRAP_AP_PASSWORD = "sensossensos"
 # nothing else.
 CONFIG_BIN_DIR = Path(os.environ.get("SENSOS_HOST_BIN_DIR", "/usr/local/bin"))
 CONFIG_INVOCATIONS_DIR = CLIENT_ROOT / "etc" / "config-invocations"
-ETC_CONF_GLOB = "*.conf"
+# config-birdnet writes birdnet.env (BIRDNET_MIN_SCORE and friends -- the
+# detection-filtering thresholds) in the same plain key=value shape as every
+# *.conf file here; *.json files (e.g. hardware-profile-state.json) are
+# deliberately excluded -- that's machine-written applied-state in real
+# JSON, already has its own display via config-hardware-profile --status,
+# and read_kv_config() can't parse it meaningfully anyway.
+ETC_CONF_GLOBS = ("*.conf", "*.env")
 
 
 def utcnow_text() -> str:
@@ -596,27 +602,44 @@ def list_config_invocations() -> list[tuple[str, str]]:
     return results
 
 
-def list_stored_config_state() -> list[tuple[str, dict]]:
-    """Show the actual current key=value contents of every *.conf file
-    under /sensos/etc, alongside the invocation-timestamp history above.
-    "Was config-wifi run, and when" doesn't say what it actually left
-    behind -- a script can run and still leave a value unset, or a file
-    can be hand-edited outside any config-* script entirely. This reads
-    whatever is really on disk right now, no inference. Confirmed none of
-    these files hold a secret directly (API/Wi-Fi passwords are kept out of
+def list_stored_config_state() -> list[tuple[str, dict, str]]:
+    """Show the actual current contents of every *.conf file under
+    /sensos/etc, alongside the invocation-timestamp history above. "Was
+    config-wifi run, and when" doesn't say what it actually left behind --
+    a script can run and still leave a value unset, or a file can be
+    hand-edited outside any config-* script entirely. This reads whatever
+    is really on disk right now, no inference. Confirmed none of these
+    files hold a secret directly (API/Wi-Fi passwords are kept out of
     /sensos/etc on purpose -- see config-network/config-wifi), so showing
     their full contents here is safe.
 
-    Returns (filename, parsed key=value dict) pairs sorted by filename.
+    Not every *.conf file here is this project's own simple key=value
+    format -- chrony.conf and nftables.conf are genuine third-party daemon
+    configs with their own directive syntax (e.g. "pool ... iburst",
+    "refclock SHM ..."), which read_kv_config() correctly finds nothing to
+    parse in. Reporting that as empty would be actively misleading (it
+    looks like the file has no content, when it almost certainly does), so
+    the raw text is returned alongside the parsed dict for the caller to
+    fall back on when the dict comes back empty but the file isn't.
+
+    Returns (filename, parsed key=value dict, raw text) tuples sorted by
+    filename.
     """
     etc_dir = CLIENT_ROOT / "etc"
     if not etc_dir.is_dir():
         return []
+    paths: set[Path] = set()
+    for pattern in ETC_CONF_GLOBS:
+        paths.update(etc_dir.glob(pattern))
     results = []
-    for path in sorted(etc_dir.glob(ETC_CONF_GLOB)):
+    for path in sorted(paths):
         if not path.is_file():
             continue
-        results.append((path.name, read_kv_config(path)))
+        try:
+            raw_text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            raw_text = ""
+        results.append((path.name, read_kv_config(path), raw_text))
     return results
 
 
