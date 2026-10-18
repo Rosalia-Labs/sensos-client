@@ -35,10 +35,29 @@ RECORD_AUDIO_UNIT = "sensos-record-audio.service"
 TEROS_CONF = CLIENT_ROOT / "etc" / "teros.conf"
 HOTSPOT_CONF = CLIENT_ROOT / "etc" / "hotspot.conf"
 WIFI_CONF = CLIENT_ROOT / "etc" / "wifi.conf"
+NETWORK_CONF = CLIENT_ROOT / "etc" / "network.conf"
 GPSD_DEFAULT_FILE = Path("/etc/default/gpsd")
 I2C_DEVICE_NODE = Path("/dev/i2c-1")
-CONFIG_BIN_DIR = CLIENT_ROOT / "bin"
+SHADOW_FILE = Path("/etc/shadow")
+# This fleet's own documented bootstrap convention (image build time, not a
+# general Raspberry Pi OS default) -- adjust here if a future image build
+# changes it.
+BOOTSTRAP_USER = "sensos"
+DEFAULT_BOOTSTRAP_USER_PASSWORD = "sensos"
+HOTSPOT_ENV_FILE = Path("/etc/default/sensos-hotspot")
+BOOTSTRAP_HOTSPOT_UNIT = "sensos-hotspot.service"
+DEFAULT_BOOTSTRAP_AP_SSID = "sensos"
+DEFAULT_BOOTSTRAP_AP_PASSWORD = "sensossensos"
+# NOT CLIENT_ROOT / "bin": setup/05-overlay installs every overlay/bin/*
+# script (all config-* scripts included) to /usr/local/bin, and explicitly
+# deletes the legacy /sensos/bin path (retire_legacy_deploy_dir) on every
+# install. Pointing this at /sensos/bin meant list_config_invocations()
+# silently returned an empty list on every real device -- confirmed, not
+# theoretical: the invocation history section printed its header and
+# nothing else.
+CONFIG_BIN_DIR = Path(os.environ.get("SENSOS_HOST_BIN_DIR", "/usr/local/bin"))
 CONFIG_INVOCATIONS_DIR = CLIENT_ROOT / "etc" / "config-invocations"
+ETC_CONF_GLOB = "*.conf"
 
 
 def utcnow_text() -> str:
@@ -376,6 +395,167 @@ def check_gps_fix(collect_seconds: float = 5.0) -> tuple[str, str]:
     return "no_fix", f"connected to gpsd on {configured_device}, mode={mode}"
 
 
+def read_shadow_hash(username: str) -> str | None:
+    """Return the password hash field for `username` from /etc/shadow, or
+    None if it can't be read. Tries a direct read first (works if this
+    process is already root), then falls back to a non-interactive `sudo
+    -n` (never prompts -- only succeeds if a sudo credential is already
+    cached) rather than forcing a surprise password prompt in the middle of
+    an otherwise-automated check.
+    """
+    try:
+        text = SHADOW_FILE.read_text(encoding="utf-8")
+    except PermissionError:
+        try:
+            result = subprocess.run(
+                ["sudo", "-n", "cat", str(SHADOW_FILE)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except FileNotFoundError:
+            return None
+        if result.returncode != 0:
+            return None
+        text = result.stdout
+    except OSError:
+        return None
+
+    for line in text.splitlines():
+        fields = line.split(":")
+        if fields and fields[0] == username:
+            return fields[1] if len(fields) > 1 else None
+    return None
+
+
+def check_bootstrap_user_password() -> tuple[str, str]:
+    """Report whether the bootstrap user's password still matches this
+    fleet's documented default. There's no way to recover the actual
+    password from its hash, but a known *candidate* password can be
+    re-hashed with the same algorithm and salt already stored in
+    /etc/shadow and compared for an exact match -- the same check the
+    system itself performs on login, just run against one specific guess
+    instead of whatever the operator typed. Deliberately avoids Python's
+    `crypt` module, which was removed in 3.13 -- this fleet isn't pinned to
+    a Debian/Python version (see pi-gen notes), so a future image could
+    land on a Python without it; shelling out to `openssl passwd` with the
+    existing hash's own algorithm id and salt has no such expiry.
+    """
+    stored_hash = read_shadow_hash(BOOTSTRAP_USER)
+    if stored_hash is None:
+        return (
+            "not_checked",
+            f"could not read a password hash for {BOOTSTRAP_USER!r} from {SHADOW_FILE} "
+            "(needs root, or a cached sudo credential)",
+        )
+    if stored_hash in ("", "!", "*", "!!") or stored_hash.startswith(("!", "*")):
+        return "locked_or_unset", f"user {BOOTSTRAP_USER!r} has no usable password hash (locked/disabled)"
+
+    parts = stored_hash.split("$")
+    if len(parts) < 4 or parts[0] != "":
+        return "not_checked", f"unrecognized password hash format for {BOOTSTRAP_USER!r}"
+    algo_id, salt = parts[1], parts[2]
+    algo_flag = {"1": "-1", "5": "-5", "6": "-6", "apr1": "-apr1"}.get(algo_id)
+    if algo_flag is None:
+        return "not_checked", f"unsupported hash algorithm '${algo_id}$' for {BOOTSTRAP_USER!r}"
+
+    try:
+        result = subprocess.run(
+            ["openssl", "passwd", algo_flag, "-salt", salt, DEFAULT_BOOTSTRAP_USER_PASSWORD],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except FileNotFoundError:
+        return "not_checked", "openssl not found on this system"
+    if result.returncode != 0:
+        return "not_checked", f"openssl passwd failed: {result.stderr.strip()[:200]}"
+
+    if result.stdout.strip() == stored_hash:
+        return (
+            "default_password",
+            f"user {BOOTSTRAP_USER!r}'s password still matches this fleet's documented default",
+        )
+    return "changed", f"user {BOOTSTRAP_USER!r}'s password does not match the documented default"
+
+
+def check_bootstrap_hotspot_default() -> tuple[str, str]:
+    """Report whether the image-default bootstrap hotspot (baked in at
+    image-build time, not managed by this repo -- see HOTSPOT_ENV_FILE's
+    use in debug-wifi) still has its documented default SSID/password, and
+    whether sensos-hotspot.service is actually active to broadcast it.
+    Credentials present but inactive is reported separately from actively
+    broadcasting the default: the former is a config leftover, the latter
+    is a live exposure right now.
+    """
+    if not HOTSPOT_ENV_FILE.is_file():
+        return "not_found", f"{HOTSPOT_ENV_FILE} not present -- nothing to check"
+
+    config = read_kv_config(HOTSPOT_ENV_FILE)
+    ssid = config.get("HOTSPOT_SSID")
+    password = config.get("HOTSPOT_PASSWORD")
+    is_default = ssid == DEFAULT_BOOTSTRAP_AP_SSID and password == DEFAULT_BOOTSTRAP_AP_PASSWORD
+
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", "--quiet", BOOTSTRAP_HOTSPOT_UNIT],
+            timeout=10,
+        )
+        unit_active = result.returncode == 0
+    except FileNotFoundError:
+        unit_active = False
+
+    if not is_default:
+        return (
+            "changed",
+            f"bootstrap hotspot SSID/password differ from the documented default "
+            f"({DEFAULT_BOOTSTRAP_AP_SSID!r}/{DEFAULT_BOOTSTRAP_AP_PASSWORD!r})",
+        )
+    if unit_active:
+        return (
+            "default_active",
+            f"bootstrap hotspot still has the documented default (ssid={DEFAULT_BOOTSTRAP_AP_SSID!r}) "
+            f"and {BOOTSTRAP_HOTSPOT_UNIT} is active -- broadcasting it right now",
+        )
+    return (
+        "default_present_but_inactive",
+        f"bootstrap hotspot config still has the documented default (ssid={DEFAULT_BOOTSTRAP_AP_SSID!r}), "
+        f"but {BOOTSTRAP_HOTSPOT_UNIT} is not active",
+    )
+
+
+def check_network_config() -> tuple[str, str]:
+    """Report whether config-network has been run, and if so whether the
+    WireGuard tunnel it set up is currently active. config-network is the
+    device's registration with the server -- without it there's no path
+    back to sensos-server at all -- so this is reported on its own rather
+    than left to surface only in the generic config-* invocation list
+    below, the same way uplink/hotspot intent get their own checks instead
+    of relying on that list. A down tunnel isn't flagged as wrong: a bench
+    unit may simply have no real uplink network available yet, same
+    "status, not verdict" stance as the rest of this module.
+    """
+    config = read_kv_config(NETWORK_CONF)
+    network_name = config.get("NETWORK_NAME")
+    server_wg_ip = config.get("SERVER_WG_IP")
+    if not network_name or not server_wg_ip:
+        return "not_configured", f"no NETWORK_NAME/SERVER_WG_IP in {NETWORK_CONF} -- config-network has not been run"
+
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", "--quiet", f"wg-quick@{network_name}"],
+            timeout=10,
+        )
+        wg_active = result.returncode == 0
+    except FileNotFoundError:
+        wg_active = False
+
+    detail = f"network={network_name!r}, server_wg_ip={server_wg_ip}"
+    if wg_active:
+        return "configured", f"{detail}, wg-quick@{network_name} is active"
+    return "configured_but_down", f"{detail}, wg-quick@{network_name} is not active"
+
+
 def check_uplink_intent() -> tuple[str, str]:
     """Report the uplink Wi-Fi intent file written by config-wifi, if any."""
     config = read_kv_config(WIFI_CONF)
@@ -413,6 +593,30 @@ def list_config_invocations() -> list[tuple[str, str]]:
             results.append((name, marker.read_text(encoding="utf-8").strip() or "never"))
         else:
             results.append((name, "never"))
+    return results
+
+
+def list_stored_config_state() -> list[tuple[str, dict]]:
+    """Show the actual current key=value contents of every *.conf file
+    under /sensos/etc, alongside the invocation-timestamp history above.
+    "Was config-wifi run, and when" doesn't say what it actually left
+    behind -- a script can run and still leave a value unset, or a file
+    can be hand-edited outside any config-* script entirely. This reads
+    whatever is really on disk right now, no inference. Confirmed none of
+    these files hold a secret directly (API/Wi-Fi passwords are kept out of
+    /sensos/etc on purpose -- see config-network/config-wifi), so showing
+    their full contents here is safe.
+
+    Returns (filename, parsed key=value dict) pairs sorted by filename.
+    """
+    etc_dir = CLIENT_ROOT / "etc"
+    if not etc_dir.is_dir():
+        return []
+    results = []
+    for path in sorted(etc_dir.glob(ETC_CONF_GLOB)):
+        if not path.is_file():
+            continue
+        results.append((path.name, read_kv_config(path)))
     return results
 
 

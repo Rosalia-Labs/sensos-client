@@ -33,6 +33,9 @@ PC = _load("sensos_predeploy_checks", CHECKS_FILE)
 
 
 AUTOMATED_CHECKS = [
+    ("bootstrap user password", "bootstrap_user_password", PC.check_bootstrap_user_password),
+    ("bootstrap hotspot default", "bootstrap_hotspot_default", PC.check_bootstrap_hotspot_default),
+    ("network registration", "network_config", PC.check_network_config),
     ("audio hardware", "audio_hardware", PC.check_audio_hardware_present),
     ("I2C bus", "i2c_bus", PC.check_i2c_bus),
     ("TEROS serial sensor", "teros_serial", PC.check_teros_serial),
@@ -73,6 +76,19 @@ def main() -> int:
     print("just that the operator should confirm it's intentional for this unit.")
     for name, status in PC.list_config_invocations():
         print(f"{name}: {status}")
+
+    print()
+    print("== stored config state (/sensos/etc/*.conf) ==")
+    print("What's actually on disk right now, independent of the invocation")
+    print("history above -- a script can run without setting a value, or a")
+    print("file can be edited outside any config-* script entirely.")
+    for filename, values in PC.list_stored_config_state():
+        print(f"-- {filename} --")
+        if values:
+            for key, value in sorted(values.items()):
+                print(f"  {key}={value}")
+        else:
+            print("  (empty or unparsed)")
 
     return 0
 

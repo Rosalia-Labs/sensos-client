@@ -7,6 +7,7 @@ import json
 import shlex
 import shutil
 import base64
+import getpass
 import tempfile
 import subprocess
 import configparser
@@ -598,7 +599,7 @@ def get_api_password(config_server, port, network_name=None):
                         f"server response ({validation['reason']}).",
                         file=sys.stderr,
                     )
-        api_password = input("🔑 Enter setup API password: ").strip()
+        api_password = getpass.getpass("🔑 Enter setup API password: ").strip()
         validation = validate_api_password(
             config_server,
             port,
