@@ -11,6 +11,9 @@ against what this specific unit is supposed to have.
 
 import importlib.util
 import os
+import shlex
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -44,6 +47,37 @@ AUTOMATED_CHECKS = [
     ("local AP intent", "hotspot_intent", PC.check_hotspot_intent),
     ("audio listening reminder", "audio_listen", PC.check_audio_listen),
 ]
+
+
+def run_paged(func):
+    """Run `func` with stdout redirected through a pager -- this report is
+    long enough that the start scrolls off before the end prints. Only
+    kicks in when stdout is actually a terminal: piping into a file or
+    another command (`predeploy-check > report.txt`) must see the same
+    plain output as before, which `isatty()` already distinguishes.
+    Respects $PAGER if set, otherwise `less -FRX` (quit automatically if
+    the output fits on one screen, don't clear the screen on exit so the
+    report stays in scrollback afterward).
+    """
+    if not sys.stdout.isatty():
+        return func()
+
+    pager_cmd = shlex.split(os.environ.get("PAGER") or "less -FRX")
+    if not shutil.which(pager_cmd[0]):
+        return func()
+
+    pager = subprocess.Popen(pager_cmd, stdin=subprocess.PIPE, text=True)
+    original_stdout = sys.stdout
+    try:
+        sys.stdout = pager.stdin
+        return func()
+    finally:
+        sys.stdout = original_stdout
+        try:
+            pager.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+        pager.wait()
 
 
 def main() -> int:
@@ -99,14 +133,22 @@ def main() -> int:
     print()
     print("=" * 60)
     print("REMINDER: listen to this unit's audio before deployment.")
+    print("See the 'audio listening reminder' output above.")
     print()
-    listen_lines, _ = PC.build_audio_listen_commands()
-    for line in listen_lines:
-        print(line)
+    # This prints regardless of what the bootstrap_user_password check
+    # above concluded -- including when it's not_checked (no tool on this
+    # system could verify it). That check depends on external tools being
+    # present and correct, confirmed twice already to be fallible in ways
+    # that weren't obvious beforehand; a standing reminder that doesn't
+    # assert any specific current state is never wrong to print, where a
+    # confident claim based on an unreliable check could be.
+    print("REMINDER: confirm the bootstrap user's password has been changed")
+    print("from this fleet's documented default before deployment, regardless")
+    print("of what the 'bootstrap user password' check above found.")
     print("=" * 60)
 
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run_paged(main))

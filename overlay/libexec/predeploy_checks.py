@@ -215,13 +215,27 @@ def build_audio_listen_commands() -> tuple[list[str], str]:
         # The live device is held exclusively by sensos-record-audio.service
         # right now -- a fresh `arecord` here would just fail with "Device
         # or resource busy" (same conflict as check_audio_hardware_present()
-        # above). Play back its own most recent output instead: same signal
-        # chain, same gain settings, and it doesn't contend with the device.
+        # above). Default to playing back its own most recent output
+        # instead: same signal chain, same gain settings, and it doesn't
+        # contend with the device. Also offer the alternative of stopping
+        # the service to listen live -- the recorded-file approach can miss
+        # something happening right now (e.g. diagnosing a live
+        # interference source), which a stale recent file can't show.
         lines = [
             f"{RECORD_AUDIO_UNIT} is actively recording, so listen to its most recent output instead:",
             "",
             f'  macOS (sox):   ssh <user>@<pi-host> "cat {recent_file}" | play -',
             f'  Linux (alsa):  ssh <user>@<pi-host> "cat {recent_file}" | aplay -',
+            "",
+            "To listen live instead (e.g. to diagnose something happening right now),",
+            f"stop the service first, then restart it when done:",
+            "",
+            f"  ssh <user>@<pi-host> sudo systemctl stop {RECORD_AUDIO_UNIT}",
+            f'  macOS (sox):   ssh <user>@<pi-host> "arecord -D {device} -f {fmt} -c {channels} -r {rate} -d 10" '
+            f"| play -t raw -r {rate} -e signed -b 16 -c {channels} -",
+            f'  Linux (alsa):  ssh <user>@<pi-host> "arecord -D {device} -f {fmt} -c {channels} -r {rate} -d 10" '
+            f"| aplay -f {fmt} -c {channels} -r {rate} -",
+            f"  ssh <user>@<pi-host> sudo systemctl start {RECORD_AUDIO_UNIT}",
         ]
         detail = f"most recent file: {recent_file.name}"
     else:
@@ -430,13 +444,25 @@ def recompute_crypt_hash(candidate: str, existing_hash: str) -> str | None:
     parts = existing_hash.split("$")
     if len(parts) < 4 or parts[0] != "":
         return None
-    algo_id, salt = parts[1], parts[2]
+    algo_id = parts[1]
+
+    # The field between the algorithm id and the final hash isn't always
+    # "just the salt" -- confirmed as a real false negative, not
+    # theoretical: yescrypt's format is $y$<params>$<salt>$<hash> (5
+    # fields), one more than the simpler $id$salt$hash algorithms (4
+    # fields). Grabbing parts[2] alone (correct for those) gets yescrypt's
+    # cost-parameter segment instead of the real salt, so mkpasswd would
+    # synthesize a hash with the wrong salt -- guaranteed mismatch even for
+    # the correct password. Joining every middle field generalizes
+    # correctly to both shapes (and to SHA-256/512's own optional
+    # "rounds=N$salt" encoding) without hardcoding a field count.
+    mkpasswd_salt = "$".join(parts[2:-1])
 
     mkpasswd_method = {"1": "md5", "5": "sha-256", "6": "sha-512", "y": "yescrypt"}.get(algo_id)
     if mkpasswd_method:
         try:
             result = subprocess.run(
-                ["mkpasswd", "--method", mkpasswd_method, "--salt", salt, candidate],
+                ["mkpasswd", "--method", mkpasswd_method, "--salt", mkpasswd_salt, candidate],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -446,11 +472,15 @@ def recompute_crypt_hash(candidate: str, existing_hash: str) -> str | None:
         except FileNotFoundError:
             pass
 
+    # openssl passwd's -salt never supports the rounds/param-encoded form
+    # above -- it wants the bare salt only -- but that's fine here since it
+    # only ever handles the plain 4-field algorithms (never yescrypt, see
+    # openssl_flag below), where parts[2] alone is already the bare salt.
     openssl_flag = {"1": "-1", "5": "-5", "6": "-6", "apr1": "-apr1"}.get(algo_id)
     if openssl_flag:
         try:
             result = subprocess.run(
-                ["openssl", "passwd", openssl_flag, "-salt", salt, candidate],
+                ["openssl", "passwd", openssl_flag, "-salt", parts[2], candidate],
                 capture_output=True,
                 text=True,
                 timeout=10,

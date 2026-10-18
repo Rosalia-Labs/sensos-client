@@ -280,6 +280,81 @@ require_device_or_prompt() {
     die "Missing required value: --device. Run interactively to choose a device, or pass --device <path>."
 }
 
+matching_partition_for_data_mount() {
+    local target_device="$1"
+    local existing_source=""
+    local candidate=""
+
+    existing_source="$(mount_source_for_path "${DATA_MOUNT}")"
+    [[ -n "${existing_source}" ]] || return 0
+
+    # Ask lsblk what this device's actual partitions are rather than
+    # guessing a naming convention (sdXN vs nvme0n1pN vs mmcblkNpN vs
+    # whatever shows up on hardware not yet seen) -- compare the real
+    # current mount source against the real partition list directly.
+    while IFS= read -r candidate; do
+        [[ -n "${candidate}" ]] || continue
+        if [[ "${candidate}" == "${existing_source}" ]]; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    done < <(sudo lsblk -nrpo NAME "${target_device}" 2>/dev/null)
+}
+
+# If the device the operator named is already the live backing store for
+# ${DATA_MOUNT}, a full reformat (destroy + recreate partition table and
+# filesystem) is overkill for "I just want a clean slate" -- clearing the
+# existing filesystem in place via archive-mode is lighter-weight and
+# doesn't risk the partition layout. Explains the choice in plain terms
+# rather than just offering raw commands, and exits immediately if chosen
+# (the rest of main()'s destructive flow never runs).
+offer_clear_in_place_if_already_mounted() {
+    local matched_partition=""
+    matched_partition="$(matching_partition_for_data_mount "${device}")"
+    [[ -n "${matched_partition}" ]] || return 0
+
+    echo
+    echo "ℹ️  ${device} is already your active storage at ${DATA_MOUNT}"
+    echo "    (currently mounted from ${matched_partition})."
+    echo
+    echo "Since this disk is already set up and in use, a full reformat isn't"
+    echo "necessary just to start with a clean slate. Clearing in place pauses"
+    echo "data collection, wipes the contents of ${DATA_MOUNT}, and resumes --"
+    echo "same partition and filesystem, no risk to the partition layout."
+    echo "A full reformat (destroying and recreating the partition table and"
+    echo "filesystem) is only worth it if you suspect filesystem corruption or"
+    echo "want to change the filesystem type."
+    echo
+
+    if [[ "${yes}" == "true" ]] || is_interactive; then
+        if confirm_yes_no "Clear ${DATA_MOUNT} in place instead of a full reformat?" true; then
+            run_clear_in_place
+            exit 0
+        fi
+        echo "ℹ️  Proceeding with full reformat."
+    fi
+}
+
+run_clear_in_place() {
+    local archive_mode_path=""
+    archive_mode_path="$(command -v archive-mode 2>/dev/null || true)"
+    [[ -n "${archive_mode_path}" && -x "${archive_mode_path}" ]] || die "archive-mode helper not found in PATH"
+
+    if data_ops_archive_mode_is_active; then
+        echo "ℹ️  Archive mode is already active; skipping straight to clearing."
+    else
+        echo "🔧 Entering archive mode (stopping data-writing services)..."
+        "${archive_mode_path}" --enter || die "Failed to enter archive mode."
+    fi
+
+    echo "🧹 Clearing ${DATA_MOUNT} and resuming normal operation..."
+    "${archive_mode_path}" --exit --clear-data || die "Failed to clear data and exit archive mode."
+
+    report_client_event storage_clear_in_place notice "device=${device}" "mount=${DATA_MOUNT}"
+    echo "✅ ${DATA_MOUNT} cleared in place; services resumed."
+    record_config_change "${SCRIPT_FILE}"
+}
+
 validate_target_device() {
     [[ -b "${device}" ]] || die "${device} is not a block device."
 
@@ -562,6 +637,7 @@ main() {
 
     validate_target_device
     show_device_summary "${device}"
+    offer_clear_in_place_if_already_mounted
 
     if [[ "${wipe}" != "true" && "${yes}" == "true" ]]; then
         die "--yes requires an explicit action. Re-run with --wipe for destructive provisioning."
